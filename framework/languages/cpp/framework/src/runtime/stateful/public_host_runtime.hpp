@@ -705,6 +705,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       std::shared_ptr<stateful::aggregate_authority_port_t> aggregate_authority = {},
       stateful::relocation_limits_t limits = {},
       stateful::maintenance_runtime_t::observer_t relocation_observer = {});
+    task_t<void> await_relocation_publication (const authority_snapshot_t &authority,
+                                               std::chrono::steady_clock::time_point deadline);
     stateful::maintenance_runtime_t *maintenance () noexcept;
     stateful::host_maintenance_runtime_t *termination () noexcept;
     /* Target-side relocation instruments, wired by the host service that
@@ -1219,18 +1221,10 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                     live_location_reader_t &sources) const;
     struct relocation_target_attempt_t;
     task_t<bool> try_finalize_relocation_target (relocation_attempt_key_t key);
-    task_t<void> complete_relocation_target_when_delivered (
-      relocation_attempt_key_t key,
-      std::shared_ptr<task_completion_source_t<void>> *before_actor_join_completion = nullptr);
-    void record_relocation_reply_delivered (
-      relocation_attempt_key_t key,
-      const std::shared_ptr<task_completion_source_t<void>> &delivery);
     enum class relocation_target_phase_t
     {
         waiting_cutover,
-        cutover_received,
-        dispatch_open,
-        releasing_publication
+        cutover_received
     };
     /* 28/52: command 44 (session_relocation_route) is submitted one-way
      * exactly once per route after the target CAS commits (S2) -- there is
@@ -1251,9 +1245,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     {
         committed,
         retry,
-        discard
+        discard,
+        reply_batch_rejected
     };
-    bool submit_relocation_target_authority (relocation_target_attempt_t &attempt) noexcept;
+    relocation_target_settlement_t
+    submit_relocation_target_authority (relocation_target_attempt_t &attempt) noexcept;
     relocation_target_settlement_t
     commit_relocation_target_authority (relocation_target_attempt_t &attempt) noexcept;
     static stateful::relocation_authority_fence_t
@@ -1284,6 +1280,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         };
         protocol::relocation_prepare_t prepare;
         std::shared_ptr<const pending_relocation_assembly_t> pending;
+        std::shared_ptr<std::vector<store_put_t>> replies;
         stateful::relocation_restore_identity_t restore_identity;
         std::vector<stateful::object_ref_t> sources;
         std::vector<stateful::object_ref_t> targets;
@@ -1332,6 +1329,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     };
     struct relocation_assembly_staging_t
     {
+        std::shared_ptr<std::vector<store_put_t>> replies =
+          std::make_shared<std::vector<store_put_t>> ();
         std::vector<stateful::frozen_object_state_t> frozen;
         std::vector<stateful::object_ref_t> sources;
         std::vector<stateful::object_ref_t> targets;
@@ -1388,7 +1387,15 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                            std::uint64_t participant_id);
     task_t<bool> stage_relocation_record (const stateful::object_ref_t &target,
                                           const protocol::relocation_data_t &data,
-                                          std::uint64_t participant_id);
+                                          std::uint64_t participant_id,
+                                          const location_owner_token_t &writer,
+                                          std::vector<store_put_t> &accepted);
+    relocation_completion::repository_t &relocation_replies () const;
+    bool
+    register_relocation_completion (relocation_completion::row_t identity,
+                                    const protocol::request_source_fence_t &source,
+                                    protocol::reply_relay_t relay,
+                                    const std::optional<protocol::application_payload_t> &reply);
     task_t<void> poll_relocation_target_attempts ();
     static bool relocation_target_wire_ready (const relocation_target_attempt_t &attempt) noexcept;
     static bool relocation_target_terminal (const relocation_target_attempt_t &attempt);

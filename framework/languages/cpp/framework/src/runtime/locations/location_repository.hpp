@@ -7,6 +7,7 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <zlink/framework/contracts/locations/diagnostics.hpp>
 #include <zlink/framework/contracts/locations/values.hpp>
+#include <zlink/framework/contracts/locations/stores.hpp>
 #include <zlink/framework/contracts/locations/options.hpp>
 #include <runtime/locations/location_records.hpp>
 #include <runtime/locations/location_repository_values.hpp>
@@ -32,6 +33,11 @@
 #include <utility>
 #include <variant>
 #include <vector>
+
+namespace zlink::framework::runtime::relocation_completion
+{
+class repository_t;
+}
 
 namespace zlink::framework
 {
@@ -248,6 +254,7 @@ struct authority_retarget_t
     std::vector<std::byte> payload;
     object_creation_target_t target;
     std::optional<std::shared_ptr<const authority_aggregate_t>> replace_aggregate{};
+    std::vector<store_put_t> relocation_replies;
 };
 struct authority_restore_t
 {
@@ -280,10 +287,15 @@ struct authority_conflict_t
 struct authority_generation_exhausted_t
 {
 };
+struct relocation_reply_batch_rejected_t
+{
+};
+
 using authority_compare_exchange_result_t = std::variant<authority_stored_t,
                                                          authority_deleted_t,
                                                          authority_conflict_t,
-                                                         authority_generation_exhausted_t>;
+                                                         authority_generation_exhausted_t,
+                                                         relocation_reply_batch_rejected_t>;
 
 struct object_creation_key_t
 {
@@ -550,6 +562,7 @@ struct aggregate_fence_t
     std::uint64_t aggregate_generation = 0;
     // Carries the manifest digest across private aggregate retries.
     std::optional<inventory_digest_t> inventory_digest;
+    std::vector<store_put_t> relocation_replies;
 };
 struct aggregate_prepared_t
 {
@@ -576,7 +589,8 @@ enum class aggregate_commit_result_t : std::uint8_t
     committed = 1,
     already_committed = 2,
     stale = 3,
-    generation_exhausted = 4
+    generation_exhausted = 4,
+    relocation_reply_batch_rejected
 };
 enum class aggregate_abort_result_t : std::uint8_t
 {
@@ -631,6 +645,10 @@ class location_repository_t
         std::atomic_store (&_access, std::move (access));
     }
     virtual ~location_repository_t () = default;
+    virtual runtime::relocation_completion::repository_t *relocation_replies () noexcept
+    {
+        return nullptr;
+    }
 
     void configure_reclaim_margin (std::chrono::milliseconds margin)
     {
@@ -1012,6 +1030,8 @@ class location_repository_t
 class relocation_repository_t
 {
   public:
+    static constexpr auto default_retention = std::chrono::hours (24);
+
     virtual ~relocation_repository_t () = default;
     virtual task_t<relocation_stored_t>
     put_relocation (std::vector<std::byte> payload,

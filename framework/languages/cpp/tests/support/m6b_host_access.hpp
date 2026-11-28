@@ -30,7 +30,8 @@ struct public_host_runtime_test_access_t
                                const protocol::relocation_prepare_t &prepare,
                                std::vector<stateful::frozen_object_state_t> frozen,
                                std::vector<stateful::object_ref_t> targets,
-                               const stateful::relocation_restore_identity_t &identity);
+                               const stateful::relocation_restore_identity_t &identity,
+                               location_store_t &store);
 
     static bool complete_saved (public_host_runtime_t &host,
                                 const stateful::object_ref_t &owner,

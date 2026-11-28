@@ -61,9 +61,7 @@ task_t<void> admit_remote_actor_task (spot_node_runtime_t runtime,
       .accepted = result.value ().accepted,
       .payload = result.value ().reply
                    ? detail::message_to_raw (*result.value ().reply, *serializers).to_bytes ()
-                   : std::vector<std::uint8_t>{},
-      .completion_root_reference = {},
-      .completion_root_checksum = 0};
+                   : std::vector<std::uint8_t>{}};
     completion (result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
       serializers->get<spot_actor_admission_route_reply_t> ().serialize (reply))));
 }
@@ -503,12 +501,6 @@ task_t<void> spot_route_internal_dispatcher_t::dispatch_actor_commit_request_asy
                 co_return;
             }
             actor_gateway = std::move (bound.value ());
-        }
-        if (!request.completion_root_reference.empty () || request.completion_root_checksum != 0) {
-            complete (result_t<zlink::message_t>::failure (
-              framework_error_kind_t::protocol_error,
-              "remote Actor Join completion roots are process-local"));
-            co_return;
         }
         std::vector<handoff_packet_t> handoff_backlog;
         handoff_backlog.reserve (request.handoff_backlog.size ());

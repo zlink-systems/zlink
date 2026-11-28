@@ -10,6 +10,7 @@
 #include "../support/stateful_object_sync.hpp"
 
 #include <bit>
+#include <set>
 #include <filesystem>
 #include <fstream>
 
@@ -89,7 +90,16 @@ TEST (AuthorityAggregateRelocation, SharedRecordsRoundTripAndMalformedRecordsFai
     for (const auto &item : golden.at ("cases")) {
         SCOPED_TRACE (item.at ("name").get<std::string> ());
         const auto &aggregate = item.at ("aggregate");
-        if (item.at ("expect") == "reject") {
+        if (aggregate.contains ("relocation")
+            && aggregate.at ("relocation").contains ("completion")) {
+            try {
+                (void) authority_aggregate_codec::read (aggregate);
+                ADD_FAILURE () << "Retired completion metadata was accepted";
+            }
+            catch (const framework_exception_t &failure) {
+                EXPECT_EQ (failure.kind (), framework_error_kind_t::data_lost);
+            }
+        } else if (item.at ("expect") == "reject") {
             EXPECT_THROW ((void) authority_aggregate_codec::read (aggregate),
                           std::invalid_argument);
         } else {
@@ -101,6 +111,24 @@ TEST (AuthorityAggregateRelocation, SharedRecordsRoundTripAndMalformedRecordsFai
                 EXPECT_EQ (rewritten->encoded.dump (), aggregate.dump ());
             }
         }
+    }
+}
+
+TEST (AuthorityAggregateRelocation, UnknownRelocationFieldIsDataLost)
+{
+    const auto golden = golden_records ();
+    const auto &cases = golden.at ("cases");
+    const auto prepared = std::ranges::find_if (
+      cases, [] (const auto &item) { return item.at ("name") == "relocation-only-prepared"; });
+    ASSERT_NE (prepared, cases.end ());
+    auto value = prepared->at ("aggregate");
+    value["relocation"]["unknown"] = "unknown";
+    try {
+        (void) authority_aggregate_codec::read (std::move (value));
+        ADD_FAILURE () << "Unknown relocation field was accepted";
+    }
+    catch (const framework_exception_t &failure) {
+        EXPECT_EQ (failure.kind (), framework_error_kind_t::data_lost);
     }
 }
 
@@ -198,6 +226,7 @@ TEST (AuthorityAggregateRelocation, ForeignCommittedRecordFencesItsTargetAttempt
     public_authority_store_adapter_t adapter (repository);
     const store_key_t key{std::string{"authority\0actor\0golden-actor", 28}};
     auto aggregate = committed->at ("aggregate");
+    aggregate["relocation"].erase ("completion");
     // The storage codec accepts a full-range record token. The repository's
     // live owner lease counter is bounded, so use a live counter value here.
     aggregate["relocation"]["target"]["ownerLeaseGeneration"] = "8";
@@ -247,6 +276,97 @@ TEST (AuthorityAggregateRelocation, ForeignCommittedRecordFencesItsTargetAttempt
     ++fence.relocation.low;
     EXPECT_EQ (adapter.observe_relocation (fence), relocation_authority_t::source_preserved);
 }
+
+constexpr std::string_view reply_prefix = "$zlink/relocation-reply/";
+
+template <typename Predicate>
+std::size_t count_rows (location_store_t &provider, const std::string &prefix, Predicate matches)
+{
+    std::size_t count = 0;
+    std::optional<store_scan_cursor_t> cursor;
+    do {
+        const auto page =
+          std::get<store_scan_page_t> (provider.scan ({prefix, cursor, 100}).result ().value ());
+        count += std::ranges::count_if (page.items, matches);
+        cursor = page.next_cursor;
+    } while (cursor);
+    return count;
+}
+
+// Passes every access through to the shared store and records the write that
+// commits an aggregate, so tests can see what that one batch carried.
+class observed_commit_store_t final : public location_store_t
+{
+  public:
+    explicit observed_commit_store_t (location_store_t &store) : inner (store) {}
+
+    std::size_t commit_keys = 0;
+    std::size_t commit_participant_puts = 0;
+    std::vector<std::size_t> commit_reply_puts;
+    unsigned rejected_commits = 0;
+    std::size_t rows_after_rejection = 0;
+    bool conflict_next_commit = false;
+
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        return inner.read (std::move (key));
+    }
+
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        const auto aggregate_prefix = provider_location_repository_t::key_aggregate ("").value;
+        const store_put_t *aggregate = nullptr;
+        for (const auto &mutation : request.mutations) {
+            const auto *put = std::get_if<store_put_t> (&mutation);
+            if (put && put->key.value.starts_with (aggregate_prefix)
+                && nlohmann::json::parse (put->bytes).at ("state") == "committed")
+                aggregate = put;
+        }
+        if (aggregate) {
+            std::set<std::string> keys;
+            for (const auto &condition : request.conditions)
+                for_each_condition_key (condition,
+                                        [&] (const auto &key) { keys.insert (key.value); });
+            std::size_t reply_puts = 0;
+            commit_participant_puts = 0;
+            for (const auto &mutation : request.mutations) {
+                std::visit ([&] (const auto &item) { keys.insert (item.key.value); }, mutation);
+                const auto *put = std::get_if<store_put_t> (&mutation);
+                if (put && put->key.value.starts_with (reply_prefix))
+                    ++reply_puts;
+                if (put && put->key.value.starts_with (std::string_view{"authority\0", 10}))
+                    ++commit_participant_puts;
+            }
+            commit_reply_puts.push_back (reply_puts);
+            commit_keys = keys.size ();
+            if (std::exchange (conflict_next_commit, false)) {
+                // A concurrent writer moves the aggregate row's version first.
+                const auto current = co_await inner.read (aggregate->key);
+                store_write_request_t bump{
+                  {},
+                  {store_put_t{aggregate->key, std::get<store_found_t> (current).value.bytes,
+                               std::nullopt}}};
+                const auto moved = co_await inner.write (std::move (bump));
+                EXPECT_TRUE (std::holds_alternative<store_write_applied_t> (moved));
+            }
+        }
+        const auto committing = aggregate != nullptr;
+        auto written = co_await inner.write (std::move (request));
+        if (committing && std::holds_alternative<store_write_conflict_t> (written)) {
+            ++rejected_commits;
+            rows_after_rejection =
+              count_rows (inner, std::string (reply_prefix), [] (const auto &) { return true; });
+        }
+        co_return written;
+    }
+
+    location_store_t &inner;
+};
 
 class ActorAuthorityRelocation : public ::testing::Test
 {
@@ -302,6 +422,7 @@ class ActorAuthorityRelocation : public ::testing::Test
 
     void SetUp () override
     {
+        ASSERT_TRUE (repository.ensure_store_format ({}).result ());
         source = host ("s", 3);
         target = host ("t", 4);
         object_reserve_request_t request;
@@ -393,13 +514,80 @@ class ActorAuthorityRelocation : public ::testing::Test
     }
 
     authority_publish_result_t
-    publish (const zlink::framework::runtime::protocol::relocation_prepare_t &attempt)
+    publish (const zlink::framework::runtime::protocol::relocation_prepare_t &attempt,
+             std::span<const store_put_t> accepted = {},
+             public_authority_store_adapter_t *through = nullptr)
     {
         auto placed = actor;
         placed.node_id = "t";
-        return authority->publish (actor, placed, target.owner, target, "direct-test", 0, {},
-                                   payload_for (target), original.store_version, attempt.relocation,
-                                   source.owner, &attempt);
+        return (through ? *through : *authority)
+          .publish (actor, placed, target.owner, target, "direct-test", 0, {}, payload_for (target),
+                    original.store_version, attempt.relocation, source.owner, &attempt, accepted);
+    }
+
+    std::vector<store_put_t>
+    accepted_rows (const zlink::framework::runtime::protocol::relocation_prepare_t &attempt,
+                   std::size_t count)
+    {
+        std::vector<store_put_t> rows;
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto id = static_cast<std::uint64_t> (index + 1);
+            auto operation = authority_aggregate_codec::wire_uuid (0, id);
+            std::erase (operation, '-');
+            rows.push_back (relocation_completion::accepted (
+              {authority_aggregate_codec::wire_uuid (attempt.relocation.high,
+                                                     attempt.relocation.low),
+               key.value,
+               {source.owner.owner_id, static_cast<std::uint64_t> (source.owner.lease_generation),
+                "73", 3},
+               operation,
+               id,
+               target.owner}));
+        }
+        return rows;
+    }
+
+    // Leaves the durable Prepared record a foreign coordinator writes before cutover.
+    void seed_prepared_relocation ()
+    {
+        const auto golden = golden_records ();
+        const auto &cases = golden.at ("cases");
+        const auto match = std::find_if (cases.begin (), cases.end (), [] (const auto &item) {
+            return item.at ("name") == "relocation-only-prepared";
+        });
+        ASSERT_NE (match, cases.end ());
+        auto aggregate = match->at ("aggregate");
+        auto &record = aggregate.at ("relocation");
+        record["relocationId"] = authority_aggregate_codec::wire_uuid (1, 2);
+        record["source"] = {
+          {"nodeRid", "73"},
+          {"nodeGeneration", "3"},
+          {"ownerId", source.owner.owner_id},
+          {"ownerLeaseGeneration", std::to_string (source.owner.lease_generation)}};
+        record["coordinator"] = record.at ("source");
+        record["coordinator"]["expectedStoreVersion"] = original.store_version;
+        record["target"] = {
+          {"nodeRid", "74"},
+          {"nodeGeneration", "4"},
+          {"ownerId", target.owner.owner_id},
+          {"ownerLeaseGeneration", std::to_string (target.owner.lease_generation)},
+          {"attemptGeneration", "1"}};
+        authority_put_t put{original.payload};
+        put.replace_aggregate = authority_aggregate_codec::read (std::move (aggregate));
+        const auto exchanged =
+          repository.compare_exchange_authority (key, original.store_version, std::move (put))
+            .result ()
+            .value ();
+        ASSERT_TRUE (std::holds_alternative<authority_stored_t> (exchanged));
+    }
+
+    std::size_t
+    stored_rows (const zlink::framework::runtime::protocol::relocation_prepare_t &attempt)
+    {
+        const auto id =
+          authority_aggregate_codec::wire_uuid (attempt.relocation.high, attempt.relocation.low);
+        return count_rows (provider, relocation_completion::prefix (id),
+                           [] (const auto &) { return true; });
     }
 
     void capture_until (bool fail)
@@ -573,11 +761,33 @@ class SpotWideAuthorityRelocation : public ActorAuthorityRelocation
         ASSERT_FALSE (read ().aggregate);
     }
 
-    aggregate_publish_result_t prepare_aggregate ()
+    aggregate_publish_result_t prepare_aggregate (std::span<const store_put_t> replies = {})
     {
         public_aggregate_authority_adapter_t adapter (repository);
         return adapter.prepare ({actor, spot}, "t", target.owner, "direct:1:2:1", 0, {},
-                                relocation_authority_fence_t::from_prepare (spot, prepare));
+                                relocation_authority_fence_t::from_prepare (spot, prepare),
+                                replies);
+    }
+
+    // Commits with `count` accepted rows while another writer moves the aggregate
+    // row once, so the first commit batch is rejected and the retry applies.
+    void commit_with_reply_rows (std::size_t count)
+    {
+        ASSERT_TRUE (authority->record_target_prepared (spot, prepare).result ().value ());
+        const auto rows = accepted_rows (prepare, count);
+        const auto result = prepare_aggregate (rows);
+        ASSERT_EQ (result.status, aggregate_publish_status_t::prepared);
+        EXPECT_EQ (stored_rows (prepare), 0u);
+        observed_commit_store_t observed (provider);
+        observed.conflict_next_commit = true;
+        provider_location_repository_t committing (observed);
+        public_aggregate_authority_adapter_t adapter (committing);
+        EXPECT_EQ (adapter.commit (result.fence).status, aggregate_publish_status_t::committed);
+        EXPECT_EQ (observed.rejected_commits, 1u);
+        EXPECT_EQ (observed.commit_reply_puts, (std::vector<std::size_t>{count, count}));
+        EXPECT_EQ (observed.rows_after_rejection, 0u);
+        EXPECT_EQ (stored_rows (prepare), count);
+        EXPECT_EQ (read ().owner.owner_id, target.owner.owner_id);
     }
 };
 
@@ -590,6 +800,21 @@ TEST_F (SpotWideAuthorityRelocation, AcceptsForeignRepresentativeCaptureWithStea
     EXPECT_EQ (adapter.commit (result.fence).status, aggregate_publish_status_t::committed);
     EXPECT_EQ (read ().owner.owner_id, target.owner.owner_id);
     EXPECT_NE (read ().store_version, original.store_version);
+}
+
+TEST_F (SpotWideAuthorityRelocation, AggregateCommitWritesNoReplyRowsForNoCapturedRequests)
+{
+    commit_with_reply_rows (0);
+}
+
+TEST_F (SpotWideAuthorityRelocation, AggregateCommitWritesOneReplyRowInItsBatch)
+{
+    commit_with_reply_rows (1);
+}
+
+TEST_F (SpotWideAuthorityRelocation, AggregateCommitWritesAllReplyRowsInItsBatch)
+{
+    commit_with_reply_rows (5);
 }
 
 TEST_F (SpotWideAuthorityRelocation, RejectsMemberWithOnlyStoreVersionChanged)
@@ -771,6 +996,9 @@ TEST_F (ActorAuthorityRelocation, PreparedTargetFenceControlsCommit)
     const auto committed = read ();
     ASSERT_TRUE (committed.aggregate && committed.aggregate->relocation);
     EXPECT_EQ (committed.aggregate->relocation->phase, "committed");
+    const auto &relocation = committed.aggregate->encoded.at ("relocation");
+    EXPECT_FALSE (relocation.contains ("completion"));
+    EXPECT_EQ (stored_rows (prepare), 0u);
     EXPECT_EQ (committed.owner.owner_id, target.owner.owner_id);
     EXPECT_EQ (committed.object_generation, original.object_generation);
     EXPECT_GT (committed.authority_owner_generation, original.authority_owner_generation);
@@ -811,36 +1039,175 @@ TEST_F (ActorAuthorityRelocation, FailedReadyPreservesPreparedSource)
 
 TEST_F (ActorAuthorityRelocation, ForeignPreparedTargetCanCommit)
 {
-    const auto golden = golden_records ();
-    const auto &cases = golden.at ("cases");
-    const auto match = std::find_if (cases.begin (), cases.end (), [] (const auto &item) {
-        return item.at ("name") == "relocation-only-prepared";
-    });
-    ASSERT_NE (match, cases.end ());
-    auto aggregate = match->at ("aggregate");
-    auto &record = aggregate.at ("relocation");
-    record["relocationId"] = authority_aggregate_codec::wire_uuid (1, 2);
-    record["source"] = {{"nodeRid", "73"},
-                        {"nodeGeneration", "3"},
-                        {"ownerId", source.owner.owner_id},
-                        {"ownerLeaseGeneration", std::to_string (source.owner.lease_generation)}};
-    record["coordinator"] = record.at ("source");
-    record["coordinator"]["expectedStoreVersion"] = original.store_version;
-    record["target"] = {{"nodeRid", "74"},
-                        {"nodeGeneration", "4"},
-                        {"ownerId", target.owner.owner_id},
-                        {"ownerLeaseGeneration", std::to_string (target.owner.lease_generation)},
-                        {"attemptGeneration", "1"}};
-    authority_put_t put{original.payload};
-    put.replace_aggregate = authority_aggregate_codec::read (std::move (aggregate));
-    const auto exchanged =
-      repository.compare_exchange_authority (key, original.store_version, std::move (put))
-        .result ()
-        .value ();
-    ASSERT_TRUE (std::holds_alternative<authority_stored_t> (exchanged));
+    seed_prepared_relocation ();
+    if (HasFatalFailure ())
+        return;
     auto context = wire ();
     context.application_version = 42;
-    EXPECT_EQ (publish (target_prepare (context)).status, authority_publish_status_t::published);
+    const auto prepare = target_prepare (context);
+    const auto rows = accepted_rows (prepare, 1);
+    EXPECT_EQ (publish (prepare, rows).status, authority_publish_status_t::published);
+    const auto committed = read ();
+    ASSERT_TRUE (committed.aggregate && committed.aggregate->relocation);
+    EXPECT_EQ (stored_rows (prepare), 1u);
+    const auto before_release =
+      std::get<store_found_t> (provider.read (rows.front ().key).result ().value ());
+    const auto &encoded = before_release.value.bytes;
+    const auto value = nlohmann::json::parse (
+      std::string_view{reinterpret_cast<const char *> (encoded.data ()), encoded.size ()});
+    EXPECT_EQ (value.at ("state"), "accepted");
+    EXPECT_EQ (value.at ("writer").at ("ownerId"), target.owner.owner_id);
+    EXPECT_FALSE (value.contains ("reply"));
+    auto placed = actor;
+    placed.node_id = "t";
+    placed.authority_owner_generation = committed.authority_owner_generation;
+    EXPECT_TRUE (authority->finish_relocation (placed, prepare));
+    EXPECT_FALSE (read ().aggregate);
+    EXPECT_EQ (stored_rows (prepare), 1u);
+}
+
+TEST_F (ActorAuthorityRelocation, FullCommitBatchRejectsBeforeOwnershipMoves)
+{
+    capture_until (false);
+    auto context = wire ();
+    const auto prepare = target_prepare (context);
+    context.prepare_target = [&] (const auto &,
+                                  const auto &) -> task_t<stateful_relocation_reason_t> {
+        EXPECT_TRUE (co_await authority->record_target_prepared (actor, prepare));
+        co_return stateful_relocation_reason_t::none;
+    };
+    context.send_cutover = [&] (const auto &) -> task_t<bool> {
+        const auto excessive = accepted_rows (prepare, location_store_limits::write_keys);
+        EXPECT_EQ (publish (prepare, excessive).status,
+                   authority_publish_status_t::reply_batch_rejected);
+        EXPECT_EQ (read ().owner.owner_id, source.owner.owner_id);
+        EXPECT_EQ (stored_rows (prepare), 0u);
+
+        auto too_large = accepted_rows (prepare, 4);
+        for (auto &item : too_large)
+            item.bytes.resize (location_store_limits::value_bytes);
+        EXPECT_EQ (publish (prepare, too_large).status,
+                   authority_publish_status_t::reply_batch_rejected);
+        EXPECT_EQ (read ().owner.owner_id, source.owner.owner_id);
+        EXPECT_EQ (stored_rows (prepare), 0u);
+
+        const auto rows = accepted_rows (prepare, 3);
+        EXPECT_EQ (publish (prepare, rows).status, authority_publish_status_t::published);
+        EXPECT_EQ (stored_rows (prepare), 3u);
+        co_return true;
+    };
+    context.restore_deadline = {};
+    const auto result =
+      runtime.relocate (actor, "t", target.owner, 1024, {}, context).result ().value ();
+    EXPECT_EQ (result.terminal, relocation_terminal_t::completed);
+}
+
+
+struct retarget_observation_t
+{
+    authority_publish_status_t status = authority_publish_status_t::conflict;
+    unsigned commit_writes = 0;
+    std::size_t commit_keys = 0;
+    std::size_t participant_puts = 0;
+    std::size_t rows = 0;
+    std::size_t aborted_aggregates = 0;
+    std::string owner_id;
+    std::string seeded_owner_id;
+    std::string store_version;
+    std::string seeded_store_version;
+};
+
+// A fresh store per trial: a rejected attempt leaves its aborted aggregate behind.
+class RetargetTrial final : public ActorAuthorityRelocation
+{
+  public:
+    void TestBody () override {}
+
+    void run (std::size_t count, retarget_observation_t &seen)
+    {
+        SetUp ();
+        if (HasFatalFailure ())
+            return;
+        seed_prepared_relocation ();
+        if (HasFatalFailure ())
+            return;
+        seen.seeded_owner_id = read ().owner.owner_id;
+        seen.seeded_store_version = read ().store_version;
+        observed_commit_store_t observed (provider);
+        provider_location_repository_t through (observed);
+        public_authority_store_adapter_t adapter (through);
+        auto context = wire ();
+        context.application_version = 42;
+        const auto prepare = target_prepare (context);
+        seen.status = publish (prepare, accepted_rows (prepare, count), &adapter).status;
+        seen.commit_writes = observed.commit_reply_puts.size ();
+        seen.commit_keys = observed.commit_keys;
+        seen.participant_puts = observed.commit_participant_puts;
+        seen.rows = stored_rows (prepare);
+        seen.owner_id = read ().owner.owner_id;
+        seen.store_version = read ().store_version;
+        seen.aborted_aggregates =
+          count_rows (provider, provider_location_repository_t::key_aggregate ("").value,
+                      [] (const auto &item) {
+                          return nlohmann::json::parse (item.value.bytes).at ("state") == "aborted";
+                      });
+    }
+};
+
+TEST (RetargetReplyBatchLimit, OverLimitCommitAbortsBeforeOwnershipMoves)
+{
+    constexpr std::size_t probe_replies = 1;
+    retarget_observation_t probe;
+    RetargetTrial{}.run (probe_replies, probe);
+    ASSERT_EQ (probe.status, authority_publish_status_t::published);
+    ASSERT_EQ (probe.commit_writes, 1u);
+    ASSERT_EQ (probe.participant_puts, 1u);
+    ASSERT_GT (probe.commit_keys, probe.participant_puts + probe_replies);
+    const auto other_keys = probe.commit_keys - probe.participant_puts - probe_replies;
+    const auto largest = location_store_limits::write_keys - other_keys - probe.participant_puts;
+
+    retarget_observation_t fits;
+    RetargetTrial{}.run (largest, fits);
+    EXPECT_EQ (fits.status, authority_publish_status_t::published);
+    EXPECT_EQ (fits.commit_writes, 1u);
+    EXPECT_EQ (fits.participant_puts, probe.participant_puts);
+    EXPECT_EQ (fits.commit_keys, location_store_limits::write_keys);
+    EXPECT_EQ (fits.rows, largest);
+    EXPECT_EQ (fits.aborted_aggregates, 0u);
+
+    retarget_observation_t over;
+    RetargetTrial{}.run (largest + 1, over);
+    EXPECT_EQ (over.status, authority_publish_status_t::reply_batch_rejected);
+    EXPECT_EQ (over.commit_writes, 0u);
+    EXPECT_EQ (over.rows, 0u);
+    // The aggregate was reserved before the batch size was known, then aborted.
+    EXPECT_EQ (over.aborted_aggregates, 1u);
+    EXPECT_EQ (over.owner_id, over.seeded_owner_id);
+    EXPECT_EQ (over.store_version, over.seeded_store_version);
+}
+
+TEST (AuthorityAggregateRelocation, CommitResolvesPreparedToTheSharedCommittedRecord)
+{
+    const auto golden = golden_records ();
+    const auto find = [&] (std::string_view name) {
+        const auto &cases = golden.at ("cases");
+        const auto match = std::find_if (cases.begin (), cases.end (), [&] (const auto &item) {
+            return item.at ("name") == name;
+        });
+        EXPECT_NE (match, cases.end ()) << name;
+        return match->at ("aggregate");
+    };
+    const auto resolved = authority_aggregate_codec::commit_aggregate_authority (
+      authority_aggregate_codec::read (find ("relocation-only-prepared")));
+    ASSERT_TRUE (resolved && resolved->relocation);
+    EXPECT_EQ (resolved->relocation->phase, "committed");
+    // The committed relocation record other languages read back from the fixture.
+    EXPECT_EQ (resolved->encoded.at ("relocation").dump (),
+               find ("marker-and-committed").at ("relocation").dump ());
+    EXPECT_FALSE (resolved->encoded.at ("relocation").contains ("completion"));
+    EXPECT_EQ (authority_aggregate_codec::commit_aggregate_authority (
+                 authority_aggregate_codec::read (find ("relocation-only-captured"))),
+               nullptr);
 }
 
 TEST (AuthorityAggregateRelocation, SpotWideCommitConsumesForeignCapture)
@@ -856,7 +1223,7 @@ TEST (AuthorityAggregateRelocation, SpotWideCommitConsumesForeignCapture)
       provider, [] (std::string_view value) { return bytes (value); }, captured->at ("aggregate"));
 }
 
-TEST (AuthorityAggregateRelocation, SpotWideCommitConsumesForeignPrepared)
+TEST (AuthorityAggregateRelocation, SpotWideCommitMarksForeignPreparedCommitted)
 {
     const auto golden = golden_records ();
     const auto &cases = golden.at ("cases");

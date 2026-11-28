@@ -26,8 +26,7 @@ check it together is called the [Location Store](../00-foundation/02-glossary.en
 Creating and initializing a new Instance Spot from its first message when no instance is
 running is called
 [cold activation](../00-foundation/02-glossary.en.md#cold-activation). The store holding this
-cold activation's creation record and the completion records of requests that finish after
-relocation is called the [Relocation Store](../00-foundation/02-glossary.en.md#relocation-store).
+cold activation's creation record is called the [Relocation Store](../00-foundation/02-glossary.en.md#relocation-store).
 The Actor/Spot relocation handoff payload — application state, queue, and timers — doesn't
 pass through either Store; the source sends it to the target directly.
 
@@ -68,7 +67,7 @@ Stores.
 | Store | Information stored | How the Framework uses it |
 |---|---|---|
 | Location Store | Current owner and location, generation number, Spot membership, secured capacity, and relocation progress state | Makes the final decision on which node to recognize as the current owner. |
-| Relocation Store | The Instance Spot cold activation's creation info and first message, and the reply payload and completion result of pending requests that finish after relocation | Provides the data needed for cold-activation recovery and reply delivery through the previous owner. |
+| Relocation Store | The Instance Spot cold activation's creation info and first message | Provides the data needed for cold-activation recovery. Results of requests that finish after relocation are Location Store rows (§9.3). |
 
 The application state, unexecuted queue, and timers a new owner restores during
 Actor/Spot relocation aren't stored in either Store. The source keeps them in memory and
@@ -211,7 +210,7 @@ payload doesn't pass through this Store.
 | `DisableRelocation` cross-node move | Rejected before Capture. |
 | `RecreateOnRelocation` cross-node Actor/Spot move | Captures the not-yet-executed queue/timers without application state and sends them to the target directly. Nothing is stored in the Relocation Store. |
 | `PreserveStateWith` cross-node Actor/Spot move | Captures application state and the not-yet-executed queue/timers and sends them to the target directly. Nothing is stored in the Relocation Store. |
-| Actor/User Spot move for host maintenance | Sends per-target state and incomplete work to the target directly. Only the completion records of pending requests that finish after relocation are stored in the Relocation Store (§9.3). |
+| Actor/User Spot move for host maintenance | Sends per-target state and incomplete work to the target directly. Only the results of requests that finish after relocation are stored, as Location Store rows (§9.3). |
 | Cross-node Actor `JoinSpot`/`JoinEntrySpot` | Sends a payload matching the moving Actor's policy to the target directly. |
 | Processing a message while first creating an Instance Spot | Stores creation info and the first message together in the Relocation Store. Used even when policy is `DisableRelocation`. |
 
@@ -542,8 +541,7 @@ number precision).
 | `pendingCreation` | Creation-in-progress state (§7). `null` when absent; when present, includes `reservationId`, `requestContentReference`, `requestSha256` (hex, 64 characters), and `requestEncodedSize` (integer). `requestContentReference` has the form `inline-v1:{base64url}`, where `{base64url}` encodes the creation request bytes over the alphabet `A-Z a-z 0-9 - _` with no `=` padding. No other form is recognized. |
 | `aggregate` | Progress of the aggregate change this record takes part in (§8.1). The field is omitted when absent. When present, it includes `aggregateId` (lowercase canonical UUID), `aggregateGeneration` (integer as a string), `index` (JSON number, position in the participant list), `expectedStoreVersion`, `ownerTransition` (`preserve \| newOwner`), `targetAuthorityOwnerGeneration` (integer as a string), and `authorityPayloadSha256`·`membershipMutationSha256` (64 hex characters). |
 | `visibleStoreVersion` | While `aggregate` is present, the value the framework exposes as the public `StoreVersion`. Even when aggregate preparation rewrites this record, the public `StoreVersion` stays at its pre-preparation value. The field is omitted when `aggregate` is absent. |
-| `aggregate.relocation` | Relocation progress of this authority record (§9.1). Includes `relocationId` (lowercase canonical UUID), `phase` (`preparing \| captured \| prepared \| committed \| activating \| activated \| cleaning \| completed \| aborted`), `source`, `target`, `coordinator`, `sourceInventorySha256` (64 hex characters), and `applicationVersion` (integer as a string). `source` and `target` hold `nodeRid`, `nodeGeneration`, `ownerId`, and `ownerLeaseGeneration`; `target` also holds `attemptGeneration`. `target` is `null` in `preparing` and `captured` and complete from `prepared` on. `aborted` keeps the `target` of the phase it aborted from, so it is `null` after an abort from `preparing` or `captured` and complete after an abort from `prepared` or later. 64-bit integers are strings. |
-| `aggregate.relocation.completion` | Progress of the §9.3 completion record. First written in the target commit CAS, and removed together with the relocation progress information. `acceptedRequests` is the number of requests the source accepted and the target finishes: the requests in the queue fixed by capture plus the requests relayed before the cutover boundary ([Relocation flow §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover)). It's fixed at target commit and never changed afterwards. A request that arrives after the boundary is an ordinary request the target received and isn't counted. The other fields are `completedResults`, `pendingDeliveries` (all string integers), `reference` (the root-list reference of the completion record payload, `null` while there is no completion result), and `sha256` (SHA-256 of that payload's full bytes, 64 hex characters, `null` when `reference` is `null`). With no accepted request, `acceptedRequests` is `"0"`. Sends, events, and timers aren't counted in `acceptedRequests`. |
+| `aggregate.relocation` | Relocation progress of this authority record (§9.1). Includes `relocationId` (lowercase canonical UUID), `phase` (`preparing \| captured \| prepared \| committed \| activating \| activated \| cleaning \| completed \| aborted`), `source`, `target`, `coordinator`, `sourceInventorySha256` (64 hex characters), and `applicationVersion` (integer as a string). `source` and `target` hold `nodeRid`, `nodeGeneration`, `ownerId`, and `ownerLeaseGeneration`; `target` also holds `attemptGeneration`. `target` is `null` in `preparing` and `captured` and complete from `prepared` on. `aborted` keeps the `target` of the phase it aborted from, so it is `null` after an abort from `preparing` or `captured` and complete after an abort from `prepared` or later. 64-bit integers are strings. This list is the complete set of fields; a record with a field outside it (including the earlier `completion`) isn't read and is treated as `DataLost`. |
 | `aggregate.relocation.coordinator.expectedStoreVersion` | The original authority StoreVersion the coordinator that started the move read. An opaque string compared only for equality. Distinct from the current expected StoreVersion of a phase CAS. |
 
 The node that runs the creation decodes `requestContentReference` and verifies that the
@@ -566,7 +564,7 @@ The `aggregate` field holds the aggregate marker fields and an optional `relocat
 
 `aggregate.relocation` owns this record's durable relocation phase and the source, target, and coordinator fences. The same facts are not also recorded in `payload` or `visibleStoreVersion`; `payload` stays application-defined opaque bytes. The aggregate generation is owned only by the same record's aggregate marker (`aggregate.aggregateGeneration`), with no copy in `aggregate.relocation`. A Direct Join whose marker doesn't exist yet receives the aggregate generation from the fence of the move request its caller holds. Source cleanup progress is represented by the single phase `cleaning`, with no separate cleanup-state field. Earlier language-specific relocation encodings are read only as compatibility input, and new writers write this one representation. The field is an optional extension of `recordVersion` 1. Existing records without it are read as is, but its absence is not taken to mean there is no relocation. Finish in-flight relocations before upgrading to a runtime that writes this field, and do not roll back to an earlier version while records still carry it.
 
-Payloads the Relocation Store holds (the cold-activation envelope, completion records)
+Payloads the Relocation Store holds (the cold-activation envelope)
 don't use this opaque record. A separately versioned key space and raw-bytes storage
 format is defined by the
 [Relocation Store's official Redis implementation](03-relocation-store-redis.en.md#8-the-official-redis-provider).
@@ -1246,7 +1244,7 @@ repetition happens within the operation's deadline with no separate retry cap, e
 `NewOwner` and a `SpotWide` whole-unit batch ends.
 
 A regular `Preserve` has no relocation reservation information. Only for a standalone
-relocation, when updating the completion-record payload location or recording target
+relocation, when recording target
 readiness, can pre-secured reservation information be passed along. The Framework checks
 the authority key, first-read `StoreVersion`, source/target owner, and current capacity,
 all together. On success, the `StoreVersion` the reservation expects is also updated in
@@ -1633,15 +1631,15 @@ sequenceDiagram
 | [Reservation ID](../00-foundation/02-glossary.en.md#reservation-id) | A non-zero 128-bit value identifying the request that secured target capacity. Separate from the creation ID. |
 
 The Location Store's per-object location record is at most 1 MiB. Large lists are split
-into multiple records, and completion-record payloads are stored in the Relocation Store.
+into multiple records, and the results of requests that finish after relocation are per-request rows (§9.3).
 
 | Storage location | Content stored |
 |---|---|
-| Per-object location record | Source and target, current stage, application version, completion-record payload location and checksum, completion count |
+| Per-object location record | Source and target, current stage, application version |
 | Location Store's relocation target list | Sorted object ID, generation, membership, and the change to apply during the move |
 | `SpotWide` User Spot whole-move record | Owner, whole-change generation, total entry count, list start position, and content checksum |
 | `PerActor` User Spot move record | Spot authority source/target, relocation operation ID, total Actor count, and source/target Actor counts |
-| Relocation Store | The reply payload and per-object completion result of pending requests that finish after relocation |
+| Per-request result row | The reply bytes and delivery state of a request that finishes after relocation (§9.3) |
 
 The application state, queue, and timers to restore exist only in source memory and
 aren't stored in either Store. Which Actor belongs to which User Spot is judged by the
@@ -1702,6 +1700,8 @@ selection or a timeout.
 | `Preparing`, `Captured` | Source is owner. The first `Captured` has no target information. After capture finishes, target information that passed normal host admission can be linked to the same move. |
 | `Prepared` | Source is owner. Target attempt number, target owner lease, and target node must all be present. No relocation-specific capacity reservation is recorded. |
 | `Committed` through `Completed` | The exactly recorded target is owner. Keeps the same target attempt number. |
+
+The owner of a participant in an aggregate is decided by the single commit of the aggregate record. After the aggregate record's `state` ([§8.3](#83-storage-format-of-aggregate-records-and-the-participant-inventory)) becomes `committed`, the target recorded on that participant is owner even when the participant record's `aggregate.relocation.phase` is still `prepared`. Readers don't judge the participant phase separately, and writers change the participant phase to `committed` in the same batch as the aggregate commit.
 
 An Actor move that doesn't change User Spot membership changes owner with a single
 `NewOwner` CAS. Re-preparing on the same target process only replaces the target attempt
@@ -1908,7 +1908,7 @@ Location Store doesn't point at the payload's location or checksum.
 | `Captured` | Capture completion and the list content checksum. No payload location is recorded. | The source must be keeping the whole payload in memory. |
 | `Prepared` | Target attempt number and target owner information | Target's payload assembly and checksum verification, Restore, and relocation temporary queue registration must finish. |
 | Owner change | Target owner and membership | Restore must finish and the CAS for one object or the whole User Spot must succeed. The same authority CAS owns normal host-capacity accounting, but there is no relocation-specific reservation handshake. |
-| `Completed` | Target dispatch and required lifecycle are open, and required Session route updates were sent | There is no separate target completion reply, and it doesn't wait for all relay through the previous address to end. Message Follow handles late relay (§7.3). The recording condition also includes [§9.3](#93-handling-a-request-that-finished-after-the-source-changed): stored completion results for accepted requests and zero pending deliveries. |
+| `Completed` | Target dispatch and required lifecycle are open, and required Session route updates were sent | There is no separate target completion reply, and it doesn't wait for all relay through the previous address to end. Message Follow handles late relay (§7.3). It doesn't wait for the [§9.3](#93-handling-a-request-that-finished-after-the-source-changed) result row states. |
 
 The target puts into assembly only chunks whose binding values match the Restore
 request. If the assembled payload's checksum differs from the declared value, or the
@@ -1978,9 +1978,8 @@ Once the owner change commits, the resolver returns the target as the object's r
 hasn't yet met all the `Ready` conditions above doesn't reject a message arriving on that route
 (with `NotFound` or otherwise); it accepts it into the temporary queue from this section's first
 paragraph and runs it in order when it opens application dispatch. A caller's first request sent
-between the commit and the dispatch opening is therefore handled without failing. Keeping the
-completion-record payload location — for reply delivery through the previous owner and the
-`Completed` record after target dispatch switchover — doesn't block `Ready`. (#5576)
+between the commit and the dispatch opening is therefore handled without failing. Reply delivery through the
+previous owner after target dispatch switchover (the §9.3 rows) doesn't block `Ready` or `Completed`. (#5576)
 
 A `PerActor` User Spot's target shell becomes Ready for `ToSpot`, Create, and Join once
 the Spot authority CAS, source Spot queue relay, and target Spot admission preparation
@@ -2008,56 +2007,70 @@ The owner that first accepts the request reads these values once at acceptance a
 them. A request handed over by relay or relocation keeps the recorded values and does not read
 the Store again. Peer admission does not wait to read this descriptor from the Store.
 
-The Framework stores each object's completion result in object order. It doesn't insert
-the same source request information and `OperationId` twice. **It stores the new
-completion result and payload in the Relocation Store first, then changes the Location
-Store's payload location, checksum, completion count, and delivery-pending count in a
-single CAS.**
+**Each request's completion result is stored as one Location Store row.** The Relocation Store blob and the aggregate
+fields on the authority (completion count, delivery-pending count, payload reference and checksum) aren't used.
 
-The completion record payload is a JSON object stored in the [Relocation Store common blob format](03-relocation-store-redis.en.md),
-serialized in [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical form. Integers are decimal strings with no sign and no leading zeros. `OperationId` is written like the §3.4 creation terminal key: its big-endian 16 bytes as 32 lowercase hex characters. `ReplyRouteId` (`u64`) is a decimal string. `nodeRid` is the RoutingId raw bytes in lowercase hex. `reply` is [RFC 4648 §4](https://www.rfc-editor.org/rfc/rfc4648#section-4) standard base64 (with padding, no line breaks). Object order is the UTF-8 authority-key byte order of [Relocation flow §4.2](04-relocation-flow.en.md#42-stop-source-execution-not-message-reception).
+**Row key and value.** The row's logical key is `$zlink/relocation-reply/<relocationId>/<ownerId>.<leaseGeneration>.<nodeRid>.<nodeGeneration>/<operationId>`.
+Everything up to `<relocationId>/` is one relocation's prefix, and the prefix snapshot scan uses it including the trailing `/`.
+Integers are decimal with no sign and no leading zeros, `nodeRid` is the RoutingId raw bytes in lowercase hex, and `operationId`
+is the 32-character lowercase hex used by the §3.4 creation terminal key. The value is an [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)
+canonical JSON object and follows the Location Store value limit (1 MiB, [Location Store Redis](02-location-store-redis.en.md)).
 
 | Field | Meaning |
 |---|---|
-| `formatVersion` | Currently `1`. Any other value isn't read and is handled as `DataLost`. |
-| `relocationId` | The relocation this record belongs to. Must equal the Location Store's `aggregate.relocation.relocationId`. |
-| `entries` | Array of completion results, in object order and, within one object, in the order the source accepted the requests. |
-| `entries[].objectKey` | Authority logical key of the object that produced the result. |
-| `entries[].source` | The source request information from the table above (`ownerId`, `leaseGeneration`, `nodeRid`, `nodeGeneration`). |
-| `entries[].operationId`, `entries[].replyRouteId` | The values from the table above. |
-| `entries[].reply` | The final reply bytes produced by the existing reply serialization, base64-encoded. Holds both success and failure results. |
-| `entries[].delivery` | One of `pending`, `terminalReceived`, `alreadyTerminal`, `sourceLeaseExpired`. Changes from `pending` to the matching value once, when the basis in the table below is obtained. |
+| `formatVersion` | The current value is `1`. Any other value isn't read and is treated as `DataLost`. |
+| `relocationId`, `objectKey`, `source`, `operationId`, `replyRouteId` | The key's values and the values in the table above. A mismatch with the key is `DataLost`. |
+| `writer` | The target owner lease (`ownerId`, `leaseGeneration`) that may change this row. |
+| `state` | One of `accepted`, `pending`, `terminalReceived`, `alreadyTerminal`, `sourceLeaseExpired`. |
+| `reply` | The final reply bytes from `pending` on (the existing reply serialization, [RFC 4648 §4](https://www.rfc-editor.org/rfc/rfc4648#section-4) base64). Absent in `accepted`. Never changed once written. |
 
-Adding a completion result or changing `delivery` never edits the existing payload. The Framework stores the whole
-payload under a new reference, verifies it, then changes `reference`, `sha256`, `completedResults`, and
-`pendingDeliveries` in a single CAS. Several results or confirmations can be combined into one replacement.
-`completedResults` must equal the number of `entries` and `pendingDeliveries` the number of entries whose `delivery`
-is `pending`; otherwise it's `DataLost`. A reply is sent to the original requester only after the CAS that holds its
-result. A previous payload that's no longer referenced after a replacement is deleted after its retention.
+**The accepted set is fixed at target commit.** In the same batch as the authority and membership changes, the target
+commit CAS creates one `accepted` row, with a `Missing` condition, for each captured request and each relay request before
+the boundary. Ordinary requests, sends, events, and timers after the boundary aren't in the set. This batch shares the
+Location Store batch limit (2,048 keys, 4 MiB encoded) with the authority and membership keys. Past the limit, the target
+doesn't commit and aborts that relocation with `InternalFailure`. This limit is a limit outside relocation, which
+[Relocation flow §5.3](04-relocation-flow.en.md#53-no-relocation-specific-capacity-limit) keeps.
 
-After a Store error or a dropped connection during delivery, the target sends the `pending` entries of the payload `reference` points to again on the current route, within the same execution. What happens after the target's execution ends follows the failure contract of [Host relocation and shutdown](05-host-relocation-flow.en.md). After the target's execution ends, no other runtime takes over this relocation, per [failure policy §5](06-failure-failover-policy.en.md#5-host-relocation-failure); the stored completion record is used only when that policy activates the object again. In that case the runtime sends only the reply bytes of the `pending` entries again before activation, and doesn't run the handler, Restore, unfinished queue work, or target selection again.
+**A result is accepted by one row CAS.** When a request finishes, the writer changes its row from `accepted` to `pending`
+and writes `reply` (with a `Version` condition). If the row is already past `pending`, the result is discarded, so a
+request's result is accepted once. If the row with the reply bytes would exceed the value limit, it stores an
+`InternalFailure` (failure code `requestFailed`, [Framework error model §2](../00-foundation/07-framework-error-model.en.md))
+failure reply instead. The request already ran and only its result bytes couldn't be kept, so there's no new error kind
+and the relocation doesn't become a failure. The reply is sent to the original requester only after the `pending` CAS.
 
-**The size of a completion record is judged by the largest size it can still reach.** When it adds a result, the Framework computes the encoded payload size with every entry's `delivery` set to the longest value, `sourceLeaseExpired`, plus one entry holding the failure reply below for each accepted request that has no result yet (`acceptedRequests` minus the entries up to and including this result). A payload that passes this check always has room for its later `delivery` transitions and for the failure replies of the remaining results, so the CAS that lowers `pendingDeliveries` is never blocked by size. If this size would exceed the common blob limit of the [Relocation Store](03-relocation-store-redis.en.md), the Framework stores an `InternalFailure` failure reply (failure code `requestFailed`, [Framework error model §2](../00-foundation/07-framework-error-model.en.md)) as that entry's `reply` instead of the request's reply bytes. The request already ran and only its result bytes couldn't be kept, so no new error kind is added. Entries already stored don't change, and the relocation doesn't become a failure. Before the target commit CAS, the target computes the same size with no results yet. If that size exceeds the limit, the target doesn't commit and aborts the relocation with `InternalFailure`. This limit belongs to the Relocation Store; it is one of the limits outside relocation that [Relocation flow §5.3](04-relocation-flow.en.md#53-no-relocation-specific-capacity-limit) keeps.
+**Delivery confirmation is also a row CAS.** On the evidence in the table below, the writer changes the row once from
+`pending` to that state. If it's already in the same state, that's an idempotent success; if it's in a different terminal
+state, the row isn't changed.
 
-`Completed` is only recorded when the accepted request count equals the completion
-result count and the delivery-pending count is 0. Otherwise it's a recovery error.
-
-| State | Basis for confirming completion |
+| State | Evidence that the result was received |
 |---|---|
-| `TerminalReceived` | The source that sent the original request responded that it received the first completion result. |
-| `AlreadyTerminal` | The source responded that it already received the same completion result. |
-| `SourceLeaseExpired` | The Location Store confirmed the source owner lease has ended. |
+| `terminalReceived` | The source that sent the original request answered that it received the first completion result. |
+| `alreadyTerminal` | The source answered that it had already received the same completion result. |
+| `sourceLeaseExpired` | The Location Store shows that the row's source owner lease ended. |
 
-Connection closure or reconnection alone isn't judged as having received the completion
-result. The target keeps delivering on the current route. The `Relocate` deadline only ends the `Relocate`
-call; it doesn't stop delivery. Until `pendingDeliveries` reaches 0 — until every entry has obtained a basis from
-the table above — the Framework keeps `aggregate.relocation.completion` and the payload `reference` points to, and
-extends the retention of the payload's data chunks and root list by the renew rule of the
-[Relocation Store](03-relocation-store-redis.en.md). While `pendingDeliveries` is greater than 0, the next
-`Relocate` of that object ends as `Blocked/OperationInProgress`, and the Framework writes to the runtime log that the
-reason is a pending delivery, together with the `RelocationId` and `pendingDeliveries`. Languages whose result
-carries a description string put the same reason in that string as well. When `pendingDeliveries` reaches 0,
-the existing terminal cleanup removes the relocation progress information and the payload.
+A connection close or reconnect, or a submit success on an intermediate node, alone isn't evidence that the result was
+received. The target keeps sending `pending` rows on the current route. The `Relocate` deadline ends only the `Relocate`
+call and doesn't stop delivery.
+
+**Writer.** A CAS that changes a row runs only while the owner lease in the row's `writer` is valid. The writer is that
+relocation's target owner lease, and it keeps recording results and confirmations with the same lease after dispatch opens
+and the relocation publication is released. A new relocation that changes the object owner doesn't change the writer of an
+earlier relocation's rows. A row whose writer lease ended goes away when the retention below runs out, and no other runtime
+takes it over.
+
+**Retention.** Rows are kept by Location Store expiry. `accepted` and `pending` rows keep 24 hours, and the writer extends
+them by rewriting the same value before they expire. A terminal-state row is shortened to 5 minutes by that CAS (as for the
+creation terminal). The Store removes expired rows, so there's no separate deleter.
+
+**Relocation end and the next relocation.** When dispatch opens, the relocation publication is released and `Completed` is
+recorded. `Completed` doesn't wait for row states. Remaining `pending` rows don't block the object's next `Relocate`; the
+next relocation waits only for a handoff in progress.
+
+**After the target execution ends.** Per [failure policy §5](06-failure-failover-policy.en.md#5-host-relocation-failure), no other
+runtime takes over this relocation. Only when that policy reactivates the object, that runtime finds the rows with the
+relocation prefix snapshot before activation and resends only the reply bytes of `pending` rows. It doesn't rerun handlers,
+Restore, unfinished queues, or target selection. A row left in `accepted` because the target ended before the result CAS
+isn't sent and expires; that request's caller ends on its own deadline.
 
 ### 9.4 Cancellation Before Relay-Ready Is Accepted
 
@@ -2174,8 +2187,7 @@ the Framework fixed in advance. That recheck has no separate time limit and runs
 after retention ends. If a provider keeps input bytes even after an async request finishes,
 it must make a copy. Bytes returned as a success result must not change afterward.
 
-**Payloads stored in the Relocation Store — the Instance Spot cold-activation record and
-pending-request completion records — are stored first and re-verified. Only afterward
+**Payloads stored in the Relocation Store — the Instance Spot cold-activation record — are stored first and re-verified. Only afterward
 does the Location Store CAS to point at that reference.** When replacing a payload,
 the new payload is stored and verified first, then reference, checksum, and entry count
 are changed together. On deletion, the Location Store first records the end of reference
@@ -2411,10 +2423,10 @@ store record golden fixture. Each item maps to one test.
 - `Missing`, `Creating`, and Store errors aren't left in the location cache. The cache
   doesn't exceed the owner's new-work-acceptance deadline. Delivery through the previous
   owner is at most 8 hops, with no cap on the retained amount (§7.3).
-- Completion results are distinguished by `OperationId` and `ReplyRouteId`; the stored
-  entry count must equal the Location Store's entry count, and payload use doesn't end
-  before reply delivery through the previous owner or owner-lease termination (§9.3).
-- Near the completion-record limit, adding results and all three `delivery` transitions are stored and the record reaches `Completed`. A result that exceeds the final-size check is stored as an `InternalFailure` failure reply, and a relocation whose record exceeds it with no results is aborted before target commit (§9.3).
+- The target commit batch creates one result row per accepted request, the result CAS succeeds once per request, and
+  delivery confirmation changes only on the original requester's answer or the end of the source lease. A second
+  transition to a different terminal state and a CAS after the writer lease ended are rejected (§9.3).
+- A reply over 1 MiB is stored as an `InternalFailure` failure reply, and a relocation whose accepted rows exceed the batch limit is aborted before target commit. When dispatch opens, `Completed` is recorded and the next `Relocate` isn't blocked even with `pending` rows left (§9.3).
 - For a payload stored in the Relocation Store, its storage and verification are
   observed before the Location Store CAS, and the Location Store's ending of reference
   use is observed before payload deletion (§10).

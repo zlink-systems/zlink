@@ -2356,23 +2356,45 @@ raw_mesh_node_owner_t::relocated_request_source (const protocol::wire_operation_
       _options.descriptor.node_routing_id, _options.descriptor.lifecycle_generation};
 }
 
-bool raw_mesh_node_owner_t::owns_request_source (const protocol::request_source_fence_t &source,
-                                                 const service_node_descriptor_t &local) noexcept
+std::optional<protocol::request_source_fence_t>
+raw_mesh_node_owner_t::local_relocation_reply_source () const
 {
-    return source.node_routing_id == local.node_routing_id
-           && source.node_generation == local.lifecycle_generation;
+    const auto identity = request_identity (std::nullopt);
+    if (!identity)
+        return std::nullopt;
+    return protocol::request_source_fence_t{
+      identity->lease->owner_id, static_cast<std::uint64_t> (identity->lease->lease_generation),
+      _options.descriptor.node_routing_id, _options.descriptor.lifecycle_generation};
+}
+
+bool raw_mesh_node_owner_t::authenticates_relocation_reply (
+  const service_mailbox_record_t &record,
+  const protocol::relocation_coordinator_fence_t &peer) const
+{
+    if (record.source_routing_id != peer.node_routing_id
+        || record.source_node_generation != peer.node_generation)
+        return false;
+    if (peer.node_routing_id == _options.descriptor.node_routing_id) {
+        const auto source = local_relocation_reply_source ();
+        return source && source->node_generation == peer.node_generation
+               && source->owner_id == peer.owner_id
+               && source->lease_generation == peer.lease_generation;
+    }
+    if (!_request_sources)
+        return false;
+    const auto source = _request_sources->cached_request_source (
+      _options.descriptor.mesh_name, peer.node_routing_id, peer.node_generation);
+    return source && *source && (*source)->owner_id == peer.owner_id
+           && static_cast<std::uint64_t> ((*source)->lease_generation) == peer.lease_generation;
 }
 
 bool raw_mesh_node_owner_t::complete_relocated_request (
   const protocol::reply_relay_t &relay, const std::optional<protocol::application_payload_t> &reply)
 {
-    if (!relocated_request_source (relay.operation, relay.reply_route_id))
-        return false;
-    if (relay.terminal_result == 0 && !reply)
-        return false;
-    const auto owner =
-      _operation_owner_resolver ({relay.operation.high, relay.operation.low}, relay.reply_route_id);
-    if (!owner)
+    const foundation::call_id_t operation{relay.operation.high, relay.operation.low};
+    const auto owner = _operation_owner_resolver (operation, relay.reply_route_id);
+    if (!owner || !owner->first->request_identity (owner->second, operation)
+        || (relay.terminal_result == 0 && !reply))
         return false;
     const auto &id = owner->second;
     const auto &operations = owner->first;

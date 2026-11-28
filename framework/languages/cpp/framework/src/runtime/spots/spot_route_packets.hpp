@@ -40,8 +40,6 @@ struct spot_actor_admission_route_reply_t
 {
     bool accepted = false;
     std::vector<std::uint8_t> payload;
-    std::string completion_root_reference;
-    std::uint32_t completion_root_checksum = 0;
 };
 
 // One preserved in-flight packet carried with the commit (spot-actor §10.2-2).
@@ -67,8 +65,6 @@ struct spot_actor_commit_route_request_t
     std::uint64_t actor_generation = 0;
     std::uint64_t actor_authority_owner_generation = 0;
     std::string expected_actor_store_version;
-    std::string completion_root_reference;
-    std::uint32_t completion_root_checksum = 0;
     std::string target_spot_id;
     std::uint64_t target_spot_generation = 0;
     std::string source_mesh_name;

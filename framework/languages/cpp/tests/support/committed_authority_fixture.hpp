@@ -33,7 +33,8 @@ class committed_authority_fixture_t final : public runtime::stateful::authority_
              std::string,
              runtime::protocol::relocation_id_t,
              location_owner_token_t,
-             const runtime::protocol::relocation_prepare_t *) override
+             const runtime::protocol::relocation_prepare_t *,
+             std::span<const zlink::framework::store_put_t>) override
     {
         throw std::logic_error ("confirmed authority fixture does not publish");
     }

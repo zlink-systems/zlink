@@ -13,7 +13,11 @@
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
-#include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/live_location_reader.hpp"
+#include "runtime/locations/provider_location_repository.hpp"
+#include "runtime/locations/provider_relocation_repository.hpp"
+#include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
@@ -328,6 +332,51 @@ void verify_raw_terminal_reply_relay ()
     source.close ();
     target.close ();
 }
+struct reply_locations_t
+{
+    runtime::in_memory_location_store_t provider;
+    std::shared_ptr<runtime::provider_location_repository_t> locations =
+      std::make_shared<runtime::provider_location_repository_t> (provider);
+    runtime::live_location_reader_t reader{*locations};
+    runtime::in_memory_relocation_store_t blobs;
+    std::shared_ptr<runtime::provider_relocation_repository_t> relocations =
+      std::make_shared<runtime::provider_relocation_repository_t> (blobs);
+
+    void configure (host::public_host_runtime_t &host)
+    {
+        host.configure_relocation (
+          std::make_shared<stateful::public_authority_store_adapter_t> (*locations),
+          std::make_shared<stateful::public_relocation_store_adapter_t> (relocations));
+    }
+
+    void observe_peer (const mesh::service_node_descriptor_t &peer,
+                       const location_owner_token_t &owner)
+    {
+        const mesh_node_descriptor_t descriptor{.mesh_name = peer.mesh_name,
+                                                .rid =
+                                                  zlink::routing_id_t::from (peer.node_routing_id),
+                                                .lifecycle_generation = peer.lifecycle_generation,
+                                                .descriptor_revision = 1,
+                                                .endpoint = "tcp://127.0.0.1:1",
+                                                .state = framework_runtime_state_t::serving,
+                                                .security_identity = peer.security_identity,
+                                                .owner_id = owner.owner_id,
+                                                .lease_generation = owner.lease_generation};
+        assert (
+          await_task (locations->update_mesh_node (descriptor, location_write_intent_t::new_claim))
+            .status
+          == location_write_status_t::stored);
+        (void) await_task (reader.poll_mesh_sources (peer.mesh_name));
+    }
+
+    location_owner_token_t claim (std::string owner)
+    {
+        return std::get<owner_lease_claimed_t> (
+                 locations->claim_owner_lease (std::move (owner), 15s).result ().value ())
+          .token;
+    }
+};
+
 void verify_durable_reply_relay_single_winner ()
 {
     mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
@@ -338,6 +387,12 @@ void verify_durable_reply_relay_single_winner ()
       .descriptor = descriptor ("terminal-target"),
       .runtime_failures =
         std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()});
+    reply_locations_t stores;
+    const auto source_lease =
+      std::make_shared<const location_owner_token_t> (stores.claim ("request-owner"));
+    const auto target_lease = stores.claim ("terminal-target-owner");
+    source.configure_request_sources (&stores.reader, [source_lease] { return source_lease; });
+    stores.observe_peer (target.topology ().local_descriptor (), target_lease);
     source.start ();
     target.start ();
     const auto source_descriptor = source.topology ().local_descriptor ();
@@ -359,39 +414,52 @@ void verify_durable_reply_relay_single_winner ()
     const protocol::relocation_id_t relocation{301, 302};
     const protocol::wire_operation_id_t operation{401, 402};
     const protocol::relocation_coordinator_fence_t coordinator{
-      "terminal-coordinator", 9, target_descriptor.node_routing_id,
-      target_descriptor.lifecycle_generation, "store-terminal"};
-    const protocol::request_source_fence_t request_source{"request-owner", 10,
-                                                          source_descriptor.node_routing_id,
-                                                          source_descriptor.lifecycle_generation};
+      target_lease.owner_id, static_cast<std::uint64_t> (target_lease.lease_generation),
+      target_descriptor.node_routing_id, target_descriptor.lifecycle_generation, "store-terminal"};
+    const protocol::request_source_fence_t request_source{
+      source_lease->owner_id, static_cast<std::uint64_t> (source_lease->lease_generation),
+      source_descriptor.node_routing_id, source_descriptor.lifecycle_generation};
     const protocol::reply_relay_t relay{
       operation, 501, relocation, 6, coordinator, 7, 8, 0, protocol::framework_error_code::none};
     const protocol::application_payload_t reply{"TerminalReply", "application/json",
                                                 bytes ("completed")};
 
-    stateful::raw_relocation_replay_coordinator_t source_coordinator (source, 1ms, 1ms);
-    stateful::raw_relocation_replay_coordinator_t target_coordinator (target, 1ms, 1ms);
+    stateful::raw_relocation_replay_coordinator_t source_coordinator (source, 1ms);
+    stateful::raw_relocation_replay_coordinator_t target_coordinator (target, 1ms);
     assert (!source_coordinator.next_activity ());
     assert (!target_coordinator.next_activity ());
-    int completion_count = 0;
-    assert (source_coordinator.register_terminal_source (
-      {relocation, coordinator, operation, request_source, target_descriptor.node_routing_id,
-       target_descriptor.lifecycle_generation, 6, 7, 8, 501,
-       [&] (const protocol::reply_relay_t &received,
-            const std::optional<protocol::application_payload_t> &payload) {
-           ++completion_count;
-           return received == relay && payload && *payload == reply;
-       }}));
+    std::atomic_int completion_count{0};
+    std::atomic_bool published{false};
+    std::promise<void> completion;
+    auto completed = completion.get_future ();
+    const foundation::call_id_t slot{source_descriptor.lifecycle_generation, relay.reply_route_id};
+    assert (source.operation_registry ()->register_operation (
+      slot, std::chrono::steady_clock::now () + 10s,
+      [&] (foundation::operation_terminal_t terminal, result_t<zlink::message_t> payload) {
+          assert (published);
+          assert (terminal == foundation::operation_terminal_t::completed);
+          assert (protocol::decode_application_payload (payload.value ().to_bytes ()) == reply);
+          ++completion_count;
+          completion.set_value ();
+      },
+      {}, {},
+      foundation::operation_registry_t::request_identity_t{{operation.high, operation.low},
+                                                           source_lease}));
     int persisted_ack_count = 0;
     protocol::reply_relay_ack_status_t persisted_status{};
     assert (target_coordinator.register_terminal_target (
       {relay, request_source, reply,
        [&] (protocol::reply_relay_ack_status_t status) {
+           assert (published);
            ++persisted_ack_count;
            persisted_status = status;
            return true;
        },
-       [] { return true; }}));
+       [] { return true; },
+       [&] (auto &, auto &) {
+           published = true;
+           return stateful::raw_relocation_delivery_t::ready;
+       }}));
     assert (target_coordinator.pending_terminal_relays () == 1);
     assert (target_coordinator.next_activity ()
             == stateful::raw_relocation_replay_coordinator_t::clock_t::time_point::min ());
@@ -435,8 +503,10 @@ void verify_durable_reply_relay_single_winner ()
     assert (target_coordinator.next_activity () == first_send_time + 1ms);
     assert (receive (source, source_coordinator)
             == stateful::raw_relocation_replay_result_t::terminal_received);
+    assert (completed.wait_for (2s) == std::future_status::ready);
     assert (completion_count == 1);
-    assert (source_coordinator.next_activity ());
+    assert (!source_coordinator.next_activity ());
+    assert (!source.operation_pending (slot));
 
     bool first_ack_dropped = false;
     deadline = std::chrono::steady_clock::now () + 2s;
@@ -464,14 +534,12 @@ void verify_durable_reply_relay_single_winner ()
     assert (first_ack_dropped);
     assert (target_coordinator.pending_terminal_relays () == 1);
 
-    auto conflicting_reply = reply;
-    conflicting_reply.payload_bytes () = bytes ("conflicting");
-    assert (target.send_reply_relay (source_descriptor.node_routing_id, relay, conflicting_reply)
-              .result ()
-              .value ());
+    auto stale_peer_relay = relay;
+    ++stale_peer_relay.coordinator.lease_generation;
+    assert (await_task (
+      target.send_reply_relay (source_descriptor.node_routing_id, stale_peer_relay, reply)));
     assert (receive (source, source_coordinator)
-            == stateful::raw_relocation_replay_result_t::conflicting_duplicate);
-    assert (completion_count == 1);
+            == stateful::raw_relocation_replay_result_t::stale_fence);
 
     assert (await_task (target_coordinator.retry_terminal_relays (first_send_time + 2ms)) == 1);
     assert (receive (source, source_coordinator)
@@ -495,28 +563,26 @@ void verify_durable_reply_relay_single_winner ()
        [&] {
            ++expiry_persisted;
            return true;
-       }}));
+       },
+       [] (auto &, auto &) { return stateful::raw_relocation_delivery_t::source_lease_expired; }}));
     auto wrong_source = request_source;
     ++wrong_source.lease_generation;
     assert (!target_coordinator.confirm_terminal_source_lease_expired (
       relocation, expiry_relay.operation, wrong_source));
     assert (target_coordinator.pending_terminal_relays () == 1);
-    assert (target_coordinator.confirm_terminal_source_lease_expired (
-      relocation, expiry_relay.operation, request_source));
+    assert (await_task (target_coordinator.retry_terminal_relays (
+              stateful::raw_relocation_replay_coordinator_t::clock_t::now ()))
+            == 0);
     assert (expiry_persisted == 1);
     assert (target_coordinator.pending_terminal_relays () == 0);
     assert (target_coordinator.terminal_retained_bytes () == 0);
 
-    assert (source_coordinator.reap_terminal_tombstones (
-              stateful::raw_relocation_replay_coordinator_t::clock_t::now () + 2ms)
-            == 1);
     assert (!source_coordinator.next_activity ());
-    assert (
-      target.send_reply_relay (source_descriptor.node_routing_id, relay, reply).result ().value ());
+    assert (await_task (target.send_reply_relay (source_descriptor.node_routing_id, relay, reply)));
     assert (receive (source, source_coordinator)
-            == stateful::raw_relocation_replay_result_t::not_registered);
+            == stateful::raw_relocation_replay_result_t::terminal_duplicate);
 
-    stateful::raw_relocation_replay_coordinator_t unbounded_target (target, 1ms, 1ms);
+    stateful::raw_relocation_replay_coordinator_t unbounded_target (target, 1ms);
     assert (unbounded_target.register_terminal_target (
       {relay, request_source, reply, [] (protocol::reply_relay_ack_status_t) { return true; },
        [] { return true; }}));
@@ -532,6 +598,7 @@ void verify_durable_reply_relay_single_winner ()
 
 void verify_aggregate_saved_request_terminal_identity ()
 {
+    reply_locations_t stores;
     auto target = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
         .descriptor = descriptor ("aggregate-terminal-target"),
@@ -550,14 +617,14 @@ void verify_aggregate_saved_request_terminal_identity ()
         -> zlink::framework::task_t<std::optional<stateful::accepted_record_authority_t>> {
           co_return std::nullopt;
       });
-    const protocol::relocation_coordinator_fence_t coordinator{"source-owner", 1, {'s'}, 1, "v1"};
-    const protocol::request_source_fence_t source{"source-owner", 1, {'s'}, 1};
-    auto store = std::make_shared<zlink::framework::runtime::in_memory_location_repository_t> ();
-    store->configure_reclaim_margin (std::chrono::milliseconds::zero ());
-    const auto owner = std::get<zlink::framework::owner_lease_claimed_t> (
-                         store->claim_owner_lease (source.owner_id, 15s).result ().value ())
-                         .token;
-    assert (owner.lease_generation == static_cast<std::int64_t> (source.lease_generation));
+    stores.configure (*target);
+    const auto owner = stores.claim ("source-owner");
+    const auto writer = stores.claim ("target-owner");
+    const auto source_generation = static_cast<std::uint64_t> (owner.lease_generation);
+    const protocol::relocation_coordinator_fence_t coordinator{
+      owner.owner_id, source_generation, {'s'}, 1, "v1"};
+    const protocol::request_source_fence_t source{owner.owner_id, source_generation, {'s'}, 1};
+    const auto &store = stores.locations;
     const zlink::framework::mesh_node_descriptor_t source_node{
       .mesh_name = "mesh",
       .rid = zlink::routing_id_t::from (source.node_routing_id),
@@ -585,6 +652,8 @@ void verify_aggregate_saved_request_terminal_identity ()
     prepare.relocation = {0x1786, 3};
     prepare.target_attempt_generation = 1;
     prepare.coordinator = coordinator;
+    prepare.target.target_owner_id = writer.owner_id;
+    prepare.target.target_owner_lease_generation = writer.lease_generation;
     std::vector<stateful::frozen_object_state_t> frozen;
     std::vector<stateful::object_ref_t> targets;
     std::vector<protocol::frozen_record_t> requests;
@@ -621,9 +690,13 @@ void verify_aggregate_saved_request_terminal_identity ()
     frozen.push_back ({spot, "spot", {}, {}, {}});
     targets.push_back (target_spot);
     const stateful::relocation_restore_identity_t identity{"aggregate-terminal"};
-    assert (host::public_host_runtime_test_access_t::restore_saved (*target, prepare, frozen,
-                                                                    targets, identity));
+    assert (host::public_host_runtime_test_access_t::restore_saved (
+      *target, prepare, frozen, targets, identity, stores.provider));
     const protocol::application_payload_t reply{"Reply", "application/json", {0x42}};
+    const auto local = target->transport ().topology ().local_descriptor ();
+    const protocol::relocation_coordinator_fence_t reply_peer{
+      writer.owner_id, static_cast<std::uint64_t> (writer.lease_generation), local.node_routing_id,
+      local.lifecycle_generation, coordinator.expected_authority_store_version};
     for (std::size_t index = 0; index != requests.size (); ++index) {
         assert (target->objects ().commit_relocation_restore (targets[index], identity)
                 == stateful::stateful_error_t::none);
@@ -635,7 +708,7 @@ void verify_aggregate_saved_request_terminal_identity ()
                                                *request.reply_route_id,
                                                prepare.relocation,
                                                1,
-                                               coordinator,
+                                               reply_peer,
                                                index + 1,
                                                sequence,
                                                0,
@@ -653,6 +726,7 @@ void verify_aggregate_saved_request_terminal_identity ()
 void verify_restored_request_completes_local_native_alias ()
 {
     using namespace zlink::framework;
+    reply_locations_t stores;
     auto target = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
         .descriptor = descriptor ("alias-source-target"),
@@ -660,8 +734,10 @@ void verify_restored_request_completes_local_native_alias ()
     mesh::raw_mesh_node_owner_t coordinator_node (mesh::raw_mesh_node_options_t{
       .descriptor = descriptor ("alias-coordinator"),
       .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
-    auto lease = std::make_shared<const location_owner_token_t> (
-      location_owner_token_t{"alias-source-owner", 1});
+    stores.configure (*target);
+    auto lease =
+      std::make_shared<const location_owner_token_t> (stores.claim ("alias-source-owner"));
+    const auto writer = *lease;
     target->transport ().configure_request_sources (nullptr, [lease] { return lease; });
     target->objects ().configure_relocation_state (
       [] (const auto &, const auto &, std::stop_token) -> task_t<stateful::frozen_object_state_t> {
@@ -692,8 +768,9 @@ void verify_restored_request_completes_local_native_alias ()
     assert (ready_peer (target->transport ().topology (), remote.node_routing_id));
     const protocol::wire_operation_id_t original{0x2507, 0x77};
     constexpr std::uint64_t reply_route = 0x1786;
-    const protocol::request_source_fence_t source{lease->owner_id, 1, local.node_routing_id,
-                                                  local.lifecycle_generation};
+    const protocol::request_source_fence_t source{
+      lease->owner_id, static_cast<std::uint64_t> (lease->lease_generation), local.node_routing_id,
+      local.lifecycle_generation};
     const protocol::relocation_coordinator_fence_t coordinator{
       "alias-coordinator-owner", 2, remote.node_routing_id, remote.lifecycle_generation, "v1"};
     const stateful::object_ref_t owner{
@@ -739,15 +816,20 @@ void verify_restored_request_completes_local_native_alias ()
     prepare.relocation = {0x2507, 0x88};
     prepare.target_attempt_generation = 1;
     prepare.coordinator = coordinator;
+    prepare.target.target_owner_id = writer.owner_id;
+    prepare.target.target_owner_lease_generation = writer.lease_generation;
     const stateful::relocation_restore_identity_t identity{"alias-relocation"};
     const auto dispatch = [] (const auto &, const auto &, auto, auto) {};
     const auto reply =
       protocol::application_payload_t::from_parts ({zlink::message_t::from ("reply")});
+    const protocol::relocation_coordinator_fence_t reply_peer{
+      writer.owner_id, static_cast<std::uint64_t> (writer.lease_generation), local.node_routing_id,
+      local.lifecycle_generation, coordinator.expected_authority_store_version};
     protocol::reply_relay_t incorrect{wrong_operation,
                                       reply_route,
                                       prepare.relocation,
                                       1,
-                                      coordinator,
+                                      reply_peer,
                                       1,
                                       original.low,
                                       0,
@@ -764,8 +846,8 @@ void verify_restored_request_completes_local_native_alias ()
     assert (completions == 0);
     assert (target->transport ().operation_pending ({local.lifecycle_generation, reply_route}));
     assert (host::public_host_runtime_test_access_t::restore_saved (
-      *target, prepare, {{owner, "actor", {}, {{1, {}, 0, {}, request}}, {}}}, {restored},
-      identity));
+      *target, prepare, {{owner, "actor", {}, {{1, {}, 0, {}, request}}, {}}}, {restored}, identity,
+      stores.provider));
     assert (target->objects ().commit_relocation_restore (restored, identity)
             == stateful::stateful_error_t::none);
     const bool handler_completed =
@@ -803,6 +885,13 @@ void verify_public_host_dispatches_durable_reply_relay ()
         .descriptor = descriptor ("host-terminal-target"),
         .runtime_failures =
           std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
+    reply_locations_t stores;
+    const auto source_lease =
+      std::make_shared<const location_owner_token_t> (stores.claim ("host-source-owner"));
+    const auto target_lease = stores.claim ("host-terminal-target-owner");
+    source->transport ().configure_request_sources (&stores.reader,
+                                                    [source_lease] { return source_lease; });
+    stores.observe_peer (target->transport ().topology ().local_descriptor (), target_lease);
     source->start ();
     target->start ();
     const auto source_status = source->status ();
@@ -812,25 +901,29 @@ void verify_public_host_dispatches_durable_reply_relay ()
     const protocol::relocation_id_t relocation{601, 602};
     const protocol::wire_operation_id_t operation{603, 604};
     const protocol::relocation_coordinator_fence_t coordinator{
-      "host-coordinator", 11, target_status.routing_id ().to_bytes (),
-      target_status.lifecycle_generation (), "host-store"};
-    const protocol::request_source_fence_t request_source{"host-source-owner", 12,
-                                                          source_status.routing_id ().to_bytes (),
-                                                          source_status.lifecycle_generation ()};
+      target_lease.owner_id, static_cast<std::uint64_t> (target_lease.lease_generation),
+      target_status.routing_id ().to_bytes (), target_status.lifecycle_generation (), "host-store"};
+    const protocol::request_source_fence_t request_source{
+      source_lease->owner_id, static_cast<std::uint64_t> (source_lease->lease_generation),
+      source_status.routing_id ().to_bytes (), source_status.lifecycle_generation ()};
     const protocol::reply_relay_t relay{
       operation, 605, relocation, 13, coordinator, 14, 15, 0, protocol::framework_error_code::none};
-    int completions = 0;
-    int acknowledgements = 0;
-    assert (source->relocation_wire ().register_terminal_source (
-      {relocation, coordinator, operation, request_source, target_status.routing_id ().to_bytes (),
-       target_status.lifecycle_generation (), 13, 14, 15, 605,
-       [&] (const protocol::reply_relay_t &received,
-            const std::optional<protocol::application_payload_t> &payload) {
-           ++completions;
-           return received == relay && !payload;
-       }}));
+    std::atomic_int completions{0};
+    std::atomic_int acknowledgements{0};
+    const protocol::application_payload_t reply{"Reply", "application/json", bytes ("result")};
+    const foundation::call_id_t slot{source_status.lifecycle_generation (), relay.reply_route_id};
+    assert (source->transport ().operation_registry ()->register_operation (
+      slot, std::chrono::steady_clock::now () + 10s,
+      [&] (foundation::operation_terminal_t terminal, result_t<zlink::message_t> payload) {
+          assert (terminal == foundation::operation_terminal_t::completed);
+          assert (protocol::decode_application_payload (payload.value ().to_bytes ()) == reply);
+          ++completions;
+      },
+      {}, {},
+      foundation::operation_registry_t::request_identity_t{{operation.high, operation.low},
+                                                           source_lease}));
     assert (target->relocation_wire ().register_terminal_target (
-      {relay, request_source, std::nullopt,
+      {relay, request_source, reply,
        [&] (protocol::reply_relay_ack_status_t) {
            ++acknowledgements;
            return true;
@@ -849,69 +942,7 @@ void verify_public_host_dispatches_durable_reply_relay ()
     assert (acknowledgements == 1);
     assert (target->relocation_wire ().pending_terminal_relays () == 0);
 
-    auto duplicate_relay = relay;
-    duplicate_relay.operation = {606, 607};
-    duplicate_relay.reply_route_id = 608;
-    int duplicate_completions = 0;
-    int duplicate_acknowledgements = 0;
-    assert (source->relocation_wire ().register_terminal_source (
-      {relocation, coordinator, duplicate_relay.operation, request_source,
-       target_status.routing_id ().to_bytes (), target_status.lifecycle_generation (), 13, 14, 15,
-       608,
-       [&] (const protocol::reply_relay_t &received,
-            const std::optional<protocol::application_payload_t> &payload) {
-           ++duplicate_completions;
-           return received == duplicate_relay && !payload;
-       }}));
-    assert (target->relocation_wire ().register_terminal_target (
-      {duplicate_relay, request_source, std::nullopt,
-       [&] (protocol::reply_relay_ack_status_t) {
-           ++duplicate_acknowledgements;
-           return true;
-       },
-       [] { return true; }}));
-
-    const auto first = stateful::raw_relocation_replay_coordinator_t::clock_t::now ();
-    assert (await_task (target->relocation_wire ().retry_terminal_relays (first)) == 1);
-    while (await_task (
-             source->transport ().pump_one (mesh::service_liveness_registry_t::clock_t::now ()))
-           == mesh::raw_mesh_pump_result_t::no_data) {
-    }
-    assert (await_task (source->relocation_wire ().pump_one ())
-            == stateful::raw_relocation_replay_result_t::terminal_received);
-    assert (duplicate_completions == 1);
-
-    bool dropped = false;
-    while (!dropped) {
-        (void) await_task (
-          target->transport ().pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
-        auto claim = target->transport ().mailbox ().try_claim (
-          mesh::service_mailbox_domain_t::infrastructure, 1, 64 * 1024);
-        if (!claim)
-            continue;
-        dropped = protocol::decode_header (
-                    protocol::message_bytes (claim->records.front ()->parts ().front ()))
-                    .kind
-                  == protocol::command::replyRelayAck;
-        assert (target->transport ().mailbox ().release (*claim));
-    }
-    assert (target->relocation_wire ().pending_terminal_relays () == 1);
-    assert (await_task (target->relocation_wire ().retry_terminal_relays (first + 2s)) == 1);
-    while (await_task (
-             source->transport ().pump_one (mesh::service_liveness_registry_t::clock_t::now ()))
-           == mesh::raw_mesh_pump_result_t::no_data) {
-    }
-    assert (await_task (source->relocation_wire ().pump_one ())
-            == stateful::raw_relocation_replay_result_t::terminal_duplicate);
-    assert (duplicate_completions == 1);
-    while (await_task (
-             target->transport ().pump_one (mesh::service_liveness_registry_t::clock_t::now ()))
-           == mesh::raw_mesh_pump_result_t::no_data) {
-    }
-    assert (await_task (target->relocation_wire ().pump_one ())
-            == stateful::raw_relocation_replay_result_t::relay_acknowledged);
-    assert (duplicate_acknowledgements == 1);
-    assert (target->relocation_wire ().pending_terminal_relays () == 0);
+    assert (!source->transport ().operation_pending (slot));
 
     auto expiry_relay = relay;
     expiry_relay.operation = {609, 610};

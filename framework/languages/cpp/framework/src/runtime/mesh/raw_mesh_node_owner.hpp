@@ -284,8 +284,10 @@ class raw_mesh_node_owner_t
     std::optional<protocol::request_source_fence_t>
     relocated_request_source (const protocol::wire_operation_id_t &operation,
                               std::uint64_t reply_route_id) const;
-    static bool owns_request_source (const protocol::request_source_fence_t &source,
-                                     const service_node_descriptor_t &local) noexcept;
+    std::optional<protocol::request_source_fence_t> local_relocation_reply_source () const;
+    bool
+    authenticates_relocation_reply (const service_mailbox_record_t &record,
+                                    const protocol::relocation_coordinator_fence_t &peer) const;
     bool complete_relocated_request (const protocol::reply_relay_t &relay,
                                      const std::optional<protocol::application_payload_t> &reply);
     std::shared_ptr<foundation::operation_registry_t> operation_registry () const

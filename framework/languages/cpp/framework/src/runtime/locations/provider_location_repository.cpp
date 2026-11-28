@@ -752,6 +752,10 @@ provider_location_repository_t::compare_exchange_authority_core (
             if (membership_failure)
                 co_return co_await authority_conflict (std::move (current), membership_failure);
         }
+        if (retarget
+            && !relocation_completion::append_accepted (write_request,
+                                                        retarget->relocation_replies))
+            co_return relocation_reply_batch_rejected_t{};
         check_deadline ();
         if (source_allocation) {
             co_return co_await publish_retarget (
@@ -1818,14 +1822,21 @@ provider_location_repository_t::commit_aggregate (aggregate_fence_t fence,
         capacity.change (target, decode_bundle (record.at (location_record_fields::capacity)), -1,
                          1);
 
+        record[location_record_fields::state] = aggregate_status::committed;
+        store_write_request_t commit{
+          {version_condition (key, found->value.version), owner_condition (target.owner)},
+          {store_put_t{key, to_bytes (record.dump ()), std::nullopt}}};
         for (std::size_t index = 0; index != participants->size (); ++index) {
             const auto &participant = (*participants)[index];
-            const auto read = co_await _store.read (key_authority (participant.key.value));
+            const auto authority_key = key_authority (participant.key.value);
+            const auto read = co_await _store.read (authority_key);
             const auto *row = std::get_if<store_found_t> (&read);
             if (!row)
                 co_return aggregate_commit_result_t::stale;
+            auto authority =
+              parse_canonical_record (row->value.bytes, location_record_fields::authority);
             const auto snapshot =
-              decode_authority (row->value.bytes, row->value.version, row->value.store_now);
+              decode_authority (authority, row->value.version.value, row->value.store_now);
             if (!snapshot.aggregate
                 || !matches_aggregate_marker (snapshot.aggregate->encoded, fence,
                                               aggregate_inventory::entry (participant, index)))
@@ -1838,14 +1849,20 @@ provider_location_repository_t::commit_aggregate (aggregate_fence_t fence,
                     co_return aggregate_commit_result_t::stale;
             }
             capacity.change (source_target, snapshot.allocation.capacity_bundle, 0, -1);
+            const auto committed =
+              authority_aggregate_codec::commit_aggregate_authority (snapshot.aggregate);
+            if (committed != snapshot.aggregate) {
+                authority[location_record_fields::aggregate] = committed->encoded;
+                commit.conditions.push_back (version_condition (authority_key, row->value.version));
+                commit.mutations.push_back (
+                  store_put_t{authority_key, to_bytes (authority.dump ()), std::nullopt});
+            }
         }
-        record[location_record_fields::state] = aggregate_status::committed;
-        store_write_request_t commit{
-          {version_condition (key, found->value.version), owner_condition (target.owner)},
-          {store_put_t{key, to_bytes (record.dump ()), std::nullopt}}};
         for (const auto &[name, value] : descriptors)
             commit.conditions.push_back (version_condition (value.key, value.provider_version));
         capacity.append_to (commit);
+        if (!relocation_completion::append_accepted (commit, fence.relocation_replies))
+            co_return aggregate_commit_result_t::relocation_reply_batch_rejected;
         if (!batch_fits (commit))
             co_return aggregate_commit_result_t::stale;
         if (std::holds_alternative<store_write_applied_t> (
@@ -2198,7 +2215,10 @@ provider_location_repository_t::resolve_authority_async (const store_found_t &ro
         } else if (transition != "preserve") {
             authority_aggregate_codec::invalid_record ();
         }
-        snapshot.aggregate = authority_aggregate_codec::without_capture (snapshot.aggregate);
+        // A participant read may precede the atomic commit observed in the root read.
+        // Older writers also left the prepared participant bytes after committing the root.
+        snapshot.aggregate =
+          authority_aggregate_codec::commit_aggregate_authority (snapshot.aggregate);
     } else if (status != aggregate_status::aborted) {
         authority_aggregate_codec::invalid_record ();
     }
@@ -3576,6 +3596,10 @@ provider_location_repository_t::publish_retarget (const authority_key_t &authori
         auto attempt = commit;
         attempt.conditions.push_back (
           version_condition (qualified->key, qualified->provider_version));
+        if (!batch_fits (attempt)) {
+            (void) co_await abort_aggregate (fence);
+            co_return relocation_reply_batch_rejected_t{};
+        }
         const auto written = co_await await_result (
           write_async (std::move (attempt), nullptr, {}, "compare_exchange", deadline));
         if (const auto *applied =

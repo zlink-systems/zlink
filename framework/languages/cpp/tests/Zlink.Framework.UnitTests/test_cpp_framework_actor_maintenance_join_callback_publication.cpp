@@ -8,6 +8,7 @@
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
+#include "runtime/locations/relocation_completion_store.hpp"
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <memory>
@@ -137,15 +138,27 @@ TEST_P (ActorJoinCallbackPublication, NormalizesAtCapturedRequestBoundary)
     const auto finishing = fw::runtime::finishing_relocation (at_callback);
     EXPECT_EQ (finishing.has_value (), remote && capture_request)
       << "Actor authority is finishing at Join completion";
+    const auto authority_is_steady = [&] {
+        auto row = repository->read_authority (key).result ().value ();
+        const auto &snapshot = std::get<fw::authority_snapshot_t> (row);
+        return !snapshot.aggregate || !snapshot.aggregate->relocation;
+    };
 
     if (request) {
         const auto entered = publication->handler_entered.task ().result_for (wait_budget);
         ASSERT_TRUE (entered && *entered);
         EXPECT_FALSE (request->await_ready ());
-        auto row = repository->read_authority (key).result ().value ();
-        EXPECT_EQ (
-          fw::runtime::finishing_relocation (std::get<fw::authority_snapshot_t> (row)).has_value (),
-          remote);
+        if (remote) {
+            ASSERT_TRUE (finishing);
+            EXPECT_TRUE (host_lifecycle::wait_until (authority_is_steady, wait_budget));
+            const auto rows =
+              store->scan ({fw::runtime::relocation_completion::prefix (finishing->id)})
+                .result ()
+                .value ();
+            ASSERT_TRUE (std::holds_alternative<fw::store_scan_page_t> (rows));
+            EXPECT_EQ (std::get<fw::store_scan_page_t> (rows).items.size (), 1u);
+            EXPECT_FALSE (request->await_ready ());
+        }
         publication->release_handler.complete (fw::result_t<void>::success ());
         const auto reply = request->result_for (wait_budget);
         ASSERT_TRUE (reply && *reply);
@@ -161,13 +174,7 @@ TEST_P (ActorJoinCallbackPublication, NormalizesAtCapturedRequestBoundary)
         EXPECT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (evidence->completions[0]));
         EXPECT_EQ (evidence->completion_owners[0], target_rid);
     }
-    EXPECT_TRUE (host_lifecycle::wait_until (
-      [&] {
-          auto row = repository->read_authority (key).result ().value ();
-          const auto &snapshot = std::get<fw::authority_snapshot_t> (row);
-          return !snapshot.aggregate || !snapshot.aggregate->relocation;
-      },
-      wait_budget));
+    EXPECT_TRUE (host_lifecycle::wait_until (authority_is_steady, wait_budget));
 }
 
 INSTANTIATE_TEST_SUITE_P (LocalAndRemote,

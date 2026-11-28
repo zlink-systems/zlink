@@ -1738,6 +1738,51 @@ reply_relay_t decode_reply_relay (std::span<const std::uint8_t> bytes)
             static_cast<framework_error_code> (generated.failure_code)};
 }
 
+std::vector<std::byte>
+encode_relocation_completion_reply (const reply_relay_t &relay,
+                                    const std::optional<application_payload_t> &reply)
+{
+    std::vector<std::uint8_t> result;
+    append_u32 (result, reply ? 2 : 1);
+    const auto append_part = [&] (const std::vector<std::uint8_t> &part) {
+        if (part.size () > std::numeric_limits<std::uint32_t>::max ())
+            throw service_wire_error_t ("Relocation completion reply part exceeds u32");
+        append_u32 (result, static_cast<std::uint32_t> (part.size ()));
+        result.insert (result.end (), part.begin (), part.end ());
+    };
+    append_part (encode_reply_relay (relay));
+    if (reply)
+        append_part (encode_application_payload (*reply));
+    const auto bytes = std::as_bytes (std::span (result));
+    return {bytes.begin (), bytes.end ()};
+}
+
+std::pair<reply_relay_t, std::optional<application_payload_t>>
+decode_relocation_completion_reply (std::span<const std::byte> bytes, bool capture_flow)
+{
+    const std::span<const std::uint8_t> input{
+      reinterpret_cast<const std::uint8_t *> (bytes.data ()), bytes.size ()};
+    std::size_t offset = 0;
+    const auto parts = read_u32 (input, offset);
+    if (parts != 1 && parts != 2)
+        throw service_wire_error_t ("Invalid relocation completion reply part count");
+    const auto read_part = [&] {
+        const auto length = read_u32 (input, offset);
+        if (length > input.size () - offset)
+            throw service_wire_error_t ("Truncated relocation completion reply");
+        const auto part = input.subspan (offset, length);
+        offset += length;
+        return part;
+    };
+    auto relay = decode_reply_relay (read_part ());
+    std::optional<application_payload_t> reply;
+    if (parts == 2)
+        reply = decode_application_payload (read_part (), capture_flow);
+    if (offset != input.size () || (relay.terminal_result != 0 && reply))
+        throw service_wire_error_t ("Invalid relocation completion reply");
+    return {std::move (relay), std::move (reply)};
+}
+
 std::vector<std::uint8_t> encode_reply_relay_ack (const reply_relay_ack_t &record)
 {
     return generated_codec_call ([&] {

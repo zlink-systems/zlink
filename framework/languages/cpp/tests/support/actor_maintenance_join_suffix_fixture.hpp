@@ -8,5 +8,6 @@ void next_join_suffix (bool remote,
                        bool request = false,
                        bool restore_source = false,
                        bool native_initiator = false,
-                       bool hold_native_suffix = false);
+                       bool hold_native_suffix = false,
+                       bool join_from_captured_request = false);
 } // namespace zlink::framework::test::actor_maintenance_join

@@ -65,11 +65,7 @@ class provider_relocation_repository_t final : public relocation_repository_t
         for (;;) {
             if (auto terminal = check_operation ())
                 return std::move (*terminal);
-            auto pending_put = observe_spi<blob_put_result_t> ("relocation_put", [&] {
-                return _store->put (blob_reference_t{reference},
-                                    std::span<const std::byte> (payload.data (), payload.size ()),
-                                    retention_ms);
-            });
+            auto pending_put = put_blob (reference, payload, retention_ms);
             auto response = detail::observe_task_result_for (
               pending_put,
               std::chrono::ceil<std::chrono::milliseconds> (operation_deadline
@@ -211,6 +207,16 @@ class provider_relocation_repository_t final : public relocation_repository_t
         for (const auto word : words)
             stream << std::setw (16) << word;
         return stream.str ();
+    }
+
+    task_t<blob_put_result_t> put_blob (const std::string &reference,
+                                        std::span<const std::byte> payload,
+                                        std::chrono::milliseconds retention)
+    {
+        return observe_spi<blob_put_result_t> (
+          "relocation_put", [this, reference, payload, retention] {
+              return _store->put (blob_reference_t{reference}, payload, retention);
+          });
     }
 
     template <typename T, typename Start> task_t<T> observe_spi (const char *operation, Start start)

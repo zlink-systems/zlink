@@ -779,24 +779,16 @@ Transport, target과 Session owner가 수행하는 검증과 그 경계는
 
 ### Terminal completion 추적
 
-- Target은 terminal completion과 delivery state를 새 immutable relocation root에 사용한 뒤 authority CAS로 `TerminalCompletionCount`와 `PendingRelayCount`를 함께 갱신한다.
-- `replyRelay`는 원래 reply route와 그 요청을 가리키는 source lease fence를 사용한다.
+- Target은 terminal result를 [Location runtime §9.3](../05-location-relocation/01-location-runtime.ko.md#93-source가-바뀐-뒤-끝난-request를-처리한다)의 그 request row에 CAS로 기록(`accepted` → `pending`)한 뒤에만 `replyRelay`를 보낸다.
+- `replyRelay`는 원래 reply route와 그 요청을 가리키는 source lease fence를 사용한다. 목적지는 row의 request source node(원 requester node)다. 그 node는 자기 request registry로 결과를 받았는지(`terminalReceived`) 이미 끝났는지(`alreadyTerminal`) 판정해 relay를 보낸 target에게 `replyRelayAck`(command 46)을 보낸다. Registry는 아직 결과를 기다리는 request만 둔다: 결과를 받으면(직접 reply든 relay든) 바로 지우고 끝난 request의 기록을 따로 보관하지 않는다. Registry에 없는 operation의 relay는 `alreadyTerminal`로 답하고 결과는 버린다(그 requester는 이미 결과를 받았거나 기다리지 않는다; 같은 relay의 재전송도 이렇게 걸러진다). 따라서 registry 크기는 진행 중 request 수를 넘지 않는다. Relay는 기존 peer authority fence(coordinator RID·generation·owner lease)로 인증하고 Store를 다시 읽지 않는다.
 - Request source fence의 node generation은 받은 request 기록이 실어 온 송신 node의 generation(ingress source node generation)이다. 그 값이 없는 기록(이 node에서 만든 local request)만 이 node의 lifecycle generation을 쓴다.
-- Source는 terminal result를 수락하거나 이미 terminal임을 확인한 뒤 authenticated `replyRelayAck`을 보낸다.
+- Source는 원래 requester가 terminal result를 수락하거나 이미 terminal임을 확인한 뒤에만 authenticated `replyRelayAck`을 보낸다. 중간 node의 submit 성공은 근거가 아니다. Target은 이 ACK로 row를 terminal 상태로 바꾼다.
 - Physical connection close는 terminal delivery의 증거가 아니다.
 
 ### `Completed` 조건
 
-`Completed`는 accepted request count와 terminal completion count가 같고 pending relay가 0일 때만 허용한다. Source
-lease가 유효한 동안 ACK를 확인하지 못한 채 deadline을 넘긴 경우의 결과와 보관 기간은
+`Completed`는 target dispatch 개방에서 기록하며 row 상태를 기다리지 않는다. ACK를 확인하지 못한 row의 결과와 보관 기간은
 [Location runtime §9.3](../05-location-relocation/01-location-runtime.ko.md#93-source가-바뀐-뒤-끝난-request를-처리한다)이 정한다.
-
-### Root replacement
-
-- Root replacement는 새 immutable root의 reference·checksum·inventory digest를 검증한 뒤 authority CAS로 연결한다.
-- Conflict loser root는 orphan으로 정리한다.
-- Cleanup은 Location authority에서 reference를 해제한 뒤 Relocation Store delete를 수행한다.
-- Published reference의 permanent missing, checksum mismatch 또는 inventory digest mismatch는 non-retriable `RelocationDataLost`이며 commit된 owner·membership을 source로 되돌리지 않는다.
 
 ### `SendReady` record와 binding completion
 
@@ -834,9 +826,8 @@ Schema self-test, 생성된 codec의 golden fixture decode 결과와 checked-in 
 - Relocation adapter bytes를 JSON이나 typed state contract로 해석하지 않는다.
 
 **Terminal completion**
-- 남은 pending request terminal record 경로(§11 Root replacement)에서는 `Captured` CAS 전
-  crash를 durable replay로 처리하지 않는다. 최상위 record를 사용하고 검증하는 일이 authority CAS보다
-  먼저이고, authority가 그 참조를 놓는 일이 record 삭제보다 먼저다.
+- Pending request 결과 row(§11 Terminal completion 추적)는 `Captured` CAS 전 crash를 durable replay로 처리하지 않는다.
+  Row는 target commit batch에서만 생기고, 결과 CAS가 `replyRelay`보다 먼저다.
 - `replyRelayAck` 없이 physical disconnect만으로 pending relay를 완료하지 않는다.
 
 ---

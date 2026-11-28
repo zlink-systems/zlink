@@ -6,13 +6,16 @@
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/locations/sha256.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/timers/async_delay.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <charconv>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <set>
@@ -22,6 +25,12 @@
 
 namespace zlink::framework::runtime::stateful
 {
+authority_key_t relocation_authority_key (const object_ref_t &object)
+{
+    return object.kind == object_kind_t::actor ? actor_authority_key (object.key)
+                                               : spot_authority_key (object.key);
+}
+
 namespace
 {
 
@@ -41,7 +50,6 @@ canonical_participants (const std::vector<frozen_object_state_t> &participants)
 }
 
 constexpr std::array<std::uint8_t, 4> session_journal_magic{'Z', 'L', 'S', 'J'};
-constexpr std::chrono::hours relocation_retention{24};
 constexpr std::size_t max_envelope_bytes = 256u * 1024u * 1024u;
 constexpr std::size_t max_application_state_bytes = 64u * 1024u * 1024u;
 constexpr std::uint32_t max_pending_records = 4096;
@@ -378,7 +386,8 @@ durable_session_journal_store_t::prepare (const durable_session_journal_record_t
 {
     const auto payload = encode_session_journal (record);
     const auto checksum = maintenance_runtime_t::crc32c (payload);
-    const auto stored = _store->put (payload, relocation_retention, operation_deadline);
+    const auto stored =
+      _store->put (payload, relocation_repository_t::default_retention, operation_deadline);
     if (stored.reference.empty () || stored.checksum_crc32c != checksum)
         throw std::runtime_error ("durable Session journal store write failed");
     return {stored.reference, checksum};
@@ -433,14 +442,6 @@ maintenance_runtime_t::maintenance_runtime_t (stateful_object_runtime_t &objects
         throw std::invalid_argument ("maintenance provider set is incomplete");
 }
 
-void maintenance_runtime_t::attach_relocation_wire (
-  raw_relocation_replay_coordinator_t &wire,
-  std::function<raw_stateful_dispatch_t *()> dispatch) noexcept
-{
-    _relocation_wire = &wire;
-    _relocation_dispatch = std::move (dispatch);
-}
-
 void maintenance_runtime_t::attach_committed_terminal (committed_terminal_t terminal) noexcept
 {
     _committed_terminal = std::move (terminal);
@@ -482,7 +483,6 @@ maintenance_runtime_t::build_boundary_records (
         || !context.send_cutover || !context.abort_target_before_cutover)
         return std::nullopt;
 
-    const auto ordered = canonical_participants (participants);
     std::vector<protocol::relocation_data_t> records;
     try {
         for (const auto &batch_participant : batch.participants) {
@@ -495,14 +495,8 @@ maintenance_runtime_t::build_boundary_records (
             const protocol::relocation_object_t object{
               to_wire_object_kind (frozen->owner.kind), frozen->stable_type, frozen->owner.key,
               frozen->owner.object_generation, frozen->owner.authority_owner_generation};
-            const auto participant_id =
-              static_cast<std::uint64_t> (std::find (ordered.begin (), ordered.end (), &*frozen)
-                                          - ordered.begin ())
-              + 1;
             for (const auto &turn : batch_participant.records) {
                 if (!turn.application_record)
-                    return std::nullopt;
-                if (!register_terminal_source (context, frozen->owner, participant_id, turn))
                     return std::nullopt;
                 auto record = protocol::encode_frozen_application_record (*turn.application_record);
                 records.push_back ({context.relocation, context.target_attempt_generation,
@@ -535,47 +529,6 @@ protocol::reply_relay_t maintenance_runtime_t::terminal_identity (
             protocol::framework_error_code::none};
 }
 
-bool maintenance_runtime_t::register_terminal_source (
-  const eligible_relocation_unit_t::canonical_wire_context_t &context,
-  const object_ref_t &owner,
-  std::uint64_t participant_id,
-  const turn_record_t &turn) const
-{
-    const auto dispatch = _relocation_dispatch ? _relocation_dispatch () : nullptr;
-    if (!_relocation_wire || !dispatch)
-        return true;
-    std::optional<protocol::frozen_record_t> decoded_record;
-    const protocol::frozen_record_t *record = nullptr;
-    if (turn.application_record) {
-        decoded_record.emplace (
-          protocol::summarize_frozen_application_record (*turn.application_record));
-        record = &*decoded_record;
-    } else if (turn.frozen_record) {
-        record = &*turn.frozen_record;
-    } else {
-        decoded_record.emplace (protocol::decode_frozen_record (turn.payload));
-        record = &*decoded_record;
-    }
-    if (!record->application || !record->reply_route_id)
-        return true;
-    if (!_relocation_wire->owns_request_source (record->source))
-        return true;
-    auto terminal = terminal_identity (context.relocation, context.target_attempt_generation,
-                                       context.coordinator, participant_id, *record);
-    return _relocation_wire->register_terminal_source (
-      {terminal.relocation, std::move (terminal.coordinator), terminal.operation, record->source,
-       context.target_node_routing_id, context.target_node_generation,
-       terminal.target_attempt_generation, terminal.participant_id, terminal.sequence,
-       terminal.reply_route_id,
-       [dispatch, owner,
-        sequence = turn.sequence] (const protocol::reply_relay_t &relay,
-                                   const std::optional<protocol::application_payload_t> &reply) {
-           return dispatch->complete_relocated_source_async (owner, sequence, relay, reply)
-             .result ()
-             .value ();
-       }});
-}
-
 task_t<stateful_error_t> maintenance_runtime_t::abort_relocation_before_cutover (
   std::shared_ptr<relocation_terminal_state_t> state, std::span<const object_ref_t> before_capture)
 {
@@ -597,11 +550,8 @@ task_t<stateful_error_t> maintenance_runtime_t::resume_preserved_source (
 {
     const auto aborted =
       co_await _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
-    if (aborted == stateful_error_t::none) {
+    if (aborted == stateful_error_t::none)
         state->metric->complete (relocation_authority_t::source_preserved);
-        if (_relocation_wire)
-            co_await _relocation_wire->unregister_terminal_sources (state->context.relocation);
-    }
     co_return aborted;
 }
 
@@ -611,11 +561,6 @@ task_t<relocation_reason_t> maintenance_runtime_t::prepare_target (
   const relocation_payload_manifest_t &manifest)
 {
     try {
-        const auto ordered = canonical_participants (participants);
-        for (std::size_t index = 0; index != ordered.size (); ++index)
-            for (const auto &turn : ordered[index]->pending_application)
-                if (!register_terminal_source (context, ordered[index]->owner, index + 1, turn))
-                    co_return relocation_reason_t::restore_failed;
         co_return co_await context.prepare_target (participants, manifest);
     }
     catch (...) {
@@ -906,11 +851,22 @@ maintenance_runtime_t::apply_relocation_settlement (
     switch (settled.outcome) {
         case relocation_authority_t::target_committed: {
             state->metric->complete (settled.outcome);
-            relocation_ingress_batch_t committed;
-            (void) co_await _objects.finalize_relocation_cutover (token, deliver, &committed);
-            if (_committed_terminal)
-                for (const auto &participant : committed.participants)
-                    _committed_terminal (participant.owner, participant.records);
+            const auto finalized = co_await _objects.finalize_relocation_cutover (token, deliver);
+            if (finalized == stateful_error_t::none && _committed_terminal) {
+                auto &captured_participants = state->seal_attempt.seal.participants;
+                auto &boundary_participants = state->batch.participants;
+                assert (captured_participants.size () == boundary_participants.size ());
+                for (std::size_t index = 0; index != captured_participants.size (); ++index) {
+                    auto &captured = captured_participants[index];
+                    auto &boundary = boundary_participants[index];
+                    assert (captured.owner == boundary.owner);
+                    auto committed = std::move (captured.pending_application);
+                    committed.insert (committed.end (),
+                                      std::make_move_iterator (boundary.records.begin ()),
+                                      std::make_move_iterator (boundary.records.end ()));
+                    _committed_terminal (captured.owner, committed);
+                }
+            }
             co_return std::pair{relocation_terminal_t::completed, relocation_reason_t::none};
         }
         case relocation_authority_t::source_preserved:
@@ -2051,8 +2007,6 @@ void public_host_runtime_t::attach_relocation_terminals (
 {
     if (_delay_owner)
         maintenance.bind_delay_owner (*_delay_owner);
-    maintenance.attach_relocation_wire (*_relocation_wire,
-                                        [this] { return _stateful_dispatch.get (); });
     maintenance.attach_committed_terminal (
       [this] (const stateful::object_ref_t &owner,
               const std::vector<stateful::turn_record_t> &committed) {

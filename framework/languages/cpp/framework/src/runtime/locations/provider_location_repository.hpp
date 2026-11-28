@@ -3,6 +3,7 @@
 
 #include "runtime/diagnostics/capacity_metrics.hpp"
 #include "runtime/locations/location_repository.hpp"
+#include "runtime/locations/relocation_completion_store.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
 #include <zlink/framework/detail/binary_text_codec.hpp>
@@ -53,6 +54,8 @@ inline constexpr char aborted[] = "aborted";
 
 class provider_location_repository_t final : public location_repository_t
 {
+    friend class relocation_completion::repository_t;
+    relocation_completion::repository_t _relocation_replies{*this};
     class provider_boundary_t final : public location_store_t
     {
       public:
@@ -76,6 +79,13 @@ class provider_location_repository_t final : public location_repository_t
     };
 
   public:
+    static store_key_t key_aggregate (std::string_view suffix);
+
+    relocation_completion::repository_t *relocation_replies () noexcept override
+    {
+        return &_relocation_replies;
+    }
+
     explicit provider_location_repository_t (
       location_store_t &store,
       std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring = {});
@@ -377,8 +387,6 @@ class provider_location_repository_t final : public location_repository_t
     static store_key_t key_authority (std::string_view value);
 
     static store_key_t key_creation_terminal (const creation_operation_identity_t &operation);
-
-    static store_key_t key_aggregate (std::string_view suffix);
 
     static store_key_t key_aggregate (const aggregate_fence_t &fence);
 

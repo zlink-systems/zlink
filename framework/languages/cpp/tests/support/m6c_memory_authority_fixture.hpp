@@ -39,7 +39,8 @@ class memory_authority_store_t final : public authority_relocation_port_t
              std::string = {},
              zlink::framework::runtime::protocol::relocation_id_t = {},
              zlink::framework::location_owner_token_t = {},
-             const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override;
+             const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr,
+             std::span<const zlink::framework::store_put_t> = {}) override;
 
     std::optional<authority_relocation_reference_t> read (object_kind_t kind,
                                                           const std::string &key) override;

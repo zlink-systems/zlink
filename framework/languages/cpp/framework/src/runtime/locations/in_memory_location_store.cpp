@@ -1186,10 +1186,10 @@ in_memory_location_repository_t::commit_aggregate (aggregate_fence_t fence,
               snapshot.store_version = next_store_version ();
               snapshot.payload = participant.authority_payload;
               snapshot.store_now = now;
+              snapshot.aggregate =
+                authority_aggregate_codec::commit_aggregate_authority (snapshot.aggregate);
               if (participant.owner_transition == authority_generation_transition_t::new_owner) {
                   snapshot.authority_owner_generation = ++next_owner_generation;
-                  snapshot.aggregate =
-                    authority_aggregate_codec::without_capture (snapshot.aggregate);
                   snapshot.owner = aggregate->second.request.target_owner;
                   const auto source_allocation = snapshot.allocation;
                   snapshot.allocation.target = target;

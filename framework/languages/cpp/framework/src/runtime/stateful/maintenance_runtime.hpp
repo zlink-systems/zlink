@@ -7,6 +7,7 @@
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/stateful/relocation_transfer.hpp"
 #include "runtime/locations/relocation_authority_payload.hpp"
+#include "runtime/locations/relocation_completion_store.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 
@@ -46,6 +47,8 @@ struct dispatch_options_t;
 
 namespace zlink::framework::runtime::stateful
 {
+authority_key_t relocation_authority_key (const object_ref_t &object);
+
 
 using relocation_session_binding_t =
   std::pair<protocol::actor_identity_t, protocol::relocation_envelope_session_binding_t>;
@@ -109,6 +112,7 @@ enum class authority_publish_status_t
 {
     published,
     conflict,
+    reply_batch_rejected,
     failed
 };
 
@@ -263,7 +267,8 @@ class authority_relocation_port_t
              std::string expected_store_version = {},
              protocol::relocation_id_t relocation = {},
              location_owner_token_t source_owner = {},
-             const protocol::relocation_prepare_t *prepare = nullptr) = 0;
+             const protocol::relocation_prepare_t *prepare = nullptr,
+             std::span<const store_put_t> replies = {}) = 0;
     virtual task_t<std::optional<std::string>>
     begin_source_capture (const std::vector<object_ref_t> &,
                           const relocation_authority_fence_t &fence,
@@ -282,6 +287,7 @@ class authority_relocation_port_t
     {
         co_return true;
     }
+    virtual relocation_completion::repository_t *relocation_replies () noexcept { return nullptr; }
     virtual bool cancel_source_capture (const relocation_authority_fence_t &) { return true; }
     virtual bool finish_relocation (const object_ref_t &, const protocol::relocation_prepare_t &)
     {
@@ -289,30 +295,6 @@ class authority_relocation_port_t
     }
     virtual std::optional<authority_relocation_reference_t> read (object_kind_t kind,
                                                                   const std::string &key) = 0;
-    virtual authority_publish_result_t publish_completion (object_kind_t,
-                                                           const std::string &,
-                                                           const std::string &,
-                                                           std::uint64_t,
-                                                           std::string,
-                                                           std::uint32_t)
-    {
-        return {};
-    }
-    virtual authority_publish_result_t replace_completion (object_kind_t,
-                                                           const std::string &,
-                                                           std::uint64_t,
-                                                           const std::string &,
-                                                           std::uint32_t,
-                                                           std::string,
-                                                           std::uint32_t)
-    {
-        return {};
-    }
-    virtual bool release_completion (
-      object_kind_t, const std::string &, std::uint64_t, const std::string &, std::uint32_t)
-    {
-        return false;
-    }
 };
 
 struct aggregate_relocation_fence_t
@@ -328,6 +310,7 @@ enum class aggregate_publish_status_t
     prepared,
     committed,
     conflict,
+    reply_batch_rejected,
     failed
 };
 
@@ -348,7 +331,8 @@ class aggregate_authority_port_t
                                                 std::string relocation_reference,
                                                 std::uint32_t checksum_crc32c,
                                                 inventory_digest_t inventory_digest,
-                                                relocation_authority_fence_t source_fence) = 0;
+                                                relocation_authority_fence_t source_fence,
+                                                std::span<const store_put_t> replies = {}) = 0;
     virtual aggregate_publish_result_t commit (aggregate_relocation_fence_t fence) = 0;
     virtual void abort (aggregate_relocation_fence_t fence) = 0;
 };
@@ -532,8 +516,6 @@ struct aggregate_relocation_result_t
     source_relocation_settlement_t settlement;
 };
 
-class raw_relocation_replay_coordinator_t;
-class raw_stateful_dispatch_t;
 
 class maintenance_runtime_t
 {
@@ -593,8 +575,6 @@ class maintenance_runtime_t
       std::stop_token cancellation = {},
       std::uint64_t advertised_receive_chunk_limit_bytes = 0);
 
-    void attach_relocation_wire (raw_relocation_replay_coordinator_t &wire,
-                                 std::function<raw_stateful_dispatch_t *()> dispatch = {}) noexcept;
     void bind_delay_owner (detail::delay_owner_t &owner) noexcept { _delay_owner = &owner; }
     /* Expired-owner terminal (28 §4.4): replies Unavailable once to each
      * pending request of the object and drops its accepted records. */
@@ -728,11 +708,6 @@ class maintenance_runtime_t
                             const eligible_relocation_unit_t::canonical_wire_context_t &context,
                             const relocation_ingress_batch_t &batch,
                             relocation_reason_t &failure_reason) const;
-    bool
-    register_terminal_source (const eligible_relocation_unit_t::canonical_wire_context_t &context,
-                              const object_ref_t &owner,
-                              std::uint64_t participant_id,
-                              const turn_record_t &turn) const;
     task_t<stateful_error_t>
     abort_relocation_before_cutover (std::shared_ptr<relocation_terminal_state_t> state,
                                      std::span<const object_ref_t> before_capture = {});
@@ -759,8 +734,6 @@ class maintenance_runtime_t
     relocation_limits_t _limits;
     observer_t _observer;
     detail::delay_owner_t *_delay_owner = nullptr;
-    raw_relocation_replay_coordinator_t *_relocation_wire = nullptr;
-    std::function<raw_stateful_dispatch_t *()> _relocation_dispatch;
     std::function<void (const object_ref_t &)> _unavailable_terminal;
     committed_terminal_t _committed_terminal;
     /* route_convergence metric + SafeToShutdown obligation count, held

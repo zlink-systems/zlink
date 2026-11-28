@@ -559,6 +559,9 @@ class mesh_node_runtime_t
     // sealed transfer each have a separate named coroutine frame.
     struct remote_actor_join_state_t;
 
+    task_t<std::chrono::milliseconds>
+    await_actor_relocation_publication (const actor_ref_t &actor,
+                                        std::chrono::steady_clock::time_point deadline);
     task_t<actor_join_reply_t>
     join_remote_application_actor_to_spot (std::shared_ptr<remote_actor_join_state_t> state,
                                            std::optional<observed_spot_authority_t> observed);

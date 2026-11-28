@@ -3020,6 +3020,8 @@ public_host_runtime_t::dispatch_user_spot_batch (
                 const relocation_attempt_key_t key{cutover->relocation.high,
                                                    cutover->relocation.low,
                                                    cutover->target_attempt_generation};
+                std::shared_ptr<std::vector<store_put_t>> replies;
+                location_owner_token_t writer;
                 std::optional<std::vector<
                   std::tuple<stateful::object_ref_t, protocol::relocation_data_t, std::uint64_t>>>
                   verified;
@@ -3059,7 +3061,12 @@ public_host_runtime_t::dispatch_user_spot_batch (
                     }
                     if (matches) {
                         found->second.phase = relocation_target_phase_t::cutover_received;
-                        lower_relocation_next_due_on_lane (relocation_due_now);
+                        set_relocation_finalize_at_on_lane (
+                          found->second, std::chrono::steady_clock::time_point::max ());
+                        replies = found->second.replies;
+                        const auto &target = found->second.prepare.target;
+                        writer = {target.target_owner_id,
+                                  static_cast<std::int64_t> (target.target_owner_lease_generation)};
                         verified.emplace (std::make_move_iterator (
                                             batch.end () - static_cast<std::ptrdiff_t> (count)),
                                           std::make_move_iterator (batch.end ()));
@@ -3075,10 +3082,19 @@ public_host_runtime_t::dispatch_user_spot_batch (
                 });
                 if (verified) {
                     bool staged = true;
-                    for (const auto &[target, data, participant_id] : *verified)
-                        if (staged)
-                            staged =
-                              co_await stage_relocation_record (target, data, participant_id);
+                    try {
+                        for (const auto &[target, data, participant_id] : *verified) {
+                            if (!co_await stage_relocation_record (target, data, participant_id,
+                                                                   writer, *replies)) {
+                                staged = false;
+                                break;
+                            }
+                        }
+                    }
+                    catch (...) {
+                        _options.mesh.runtime_failures->report (std::current_exception ());
+                        staged = false;
+                    }
                     co_await _relocation_session_terminal_lane.run_task ([&] {
                         const auto found = _relocation_target_attempts.find (key);
                         if (found == _relocation_target_attempts.end ())

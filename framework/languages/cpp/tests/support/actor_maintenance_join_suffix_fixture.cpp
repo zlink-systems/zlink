@@ -8,7 +8,10 @@
 #include "runtime/spots/spot_runtime.hpp"
 #include <zlink/framework.hpp>
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
+#include <atomic>
 #include <cstdio>
+#include <string_view>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -20,6 +23,47 @@ namespace zlink::framework::test::actor_maintenance_join
 {
 namespace
 {
+// Hold the authenticated delivery CAS while the next Join runs. The relay
+// can reach the requester, but its durable result must remain pending.
+class suffix_location_store_t final : public fw::location_store_t
+{
+  public:
+    explicit suffix_location_store_t (bool hold_ack) : _hold_ack (hold_ack) {}
+
+    fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
+    {
+        return _store.read (std::move (key));
+    }
+
+    fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
+    {
+        if (_hold_ack.load ())
+            for (const auto &mutation : request.mutations) {
+                const auto *put = std::get_if<fw::store_put_t> (&mutation);
+                if (!put || !put->key.value.starts_with ("$zlink/relocation-reply/"))
+                    continue;
+                const auto value = nlohmann::json::parse (std::string_view{
+                  reinterpret_cast<const char *> (put->bytes.data ()), put->bytes.size ()});
+                if (value.at ("state") == "terminalReceived"
+                    || value.at ("state") == "alreadyTerminal")
+                    throw fw::framework_exception_t (fw::framework_error_kind_t::unavailable,
+                                                     "Test holds relocation delivery confirmation");
+            }
+        return _store.write (std::move (request));
+    }
+
+    fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
+    {
+        return _store.scan (std::move (request));
+    }
+
+    void release_ack () { _hold_ack.store (false); }
+
+  private:
+    std::atomic<bool> _hold_ack;
+    fw::runtime::in_memory_location_store_t _store;
+};
+
 std::string suffix_failure_snapshot (host_t &host)
 {
     namespace st = fw::runtime::stateful;
@@ -43,8 +87,12 @@ std::string suffix_failure_snapshot (host_t &host)
 }
 } // namespace
 
-void next_join_suffix (
-  bool remote, bool request, bool restore_source, bool native_initiator, bool hold_native_suffix)
+void next_join_suffix (bool remote,
+                       bool request,
+                       bool restore_source,
+                       bool native_initiator,
+                       bool hold_native_suffix,
+                       bool join_from_captured_request)
 {
     auto evidence_owner = std::make_shared<observations_t> ();
     auto &evidence = *evidence_owner;
@@ -54,7 +102,10 @@ void next_join_suffix (
     evidence.fail_remote_factory = restore_source;
     if (hold_native_suffix)
         evidence.native_handoff_hold = std::make_shared<native_handoff_hold_t> ();
-    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    constexpr auto following_spot = "join-from-captured-request";
+    if (join_from_captured_request)
+        evidence.suffix_request_join_target = following_spot;
+    auto store = std::make_shared<suffix_location_store_t> (join_from_captured_request);
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t source, target, initiator;
     release_callbacks_t release{evidence};
@@ -68,6 +119,9 @@ void next_join_suffix (
                    .get_or_create (fw::actor_id_t (actor_id), actor_type)
                    .async ()
                    .result ());
+    if (join_from_captured_request)
+        ASSERT_TRUE (
+          spots.get_or_create (fw::spot_id_t (following_spot), room_type).async ().result ());
     if (remote) {
         configure (target, evidence_owner, second_rid, store, relocations);
         target.start ();
@@ -164,9 +218,13 @@ void next_join_suffix (
         hold->release.complete (fw::result_t<void>::success ());
     }
     std::unique_lock lock (evidence.mutex);
-    ASSERT_TRUE (evidence.changed.wait_for (
-      lock, wait_budget,
-      [&] { return evidence.completions.size () >= 2 && evidence.handled_payloads.size () >= 2; }))
+    const std::size_t expected_completions = join_from_captured_request ? 3 : 2;
+    ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget,
+                                            [&] {
+                                                return evidence.completions.size ()
+                                                         >= expected_completions
+                                                       && evidence.handled_payloads.size () >= 2;
+                                            }))
       << "completions=" << evidence.completions.size ()
       << " handled=" << evidence.handled_payloads.size () << suffix_failure_snapshot (source);
     EXPECT_EQ (evidence.handled_payloads, (std::vector<int>{1, 2}));
@@ -176,7 +234,7 @@ void next_join_suffix (
       evidence.handled_nodes,
       (std::vector<std::string>{first_rid, remote && !restore_source ? second_rid : first_rid}));
     EXPECT_EQ (evidence.handled_completion_counts, (std::vector<std::size_t>{1, 2}));
-    ASSERT_EQ (evidence.completions.size (), 2u);
+    ASSERT_EQ (evidence.completions.size (), expected_completions);
     EXPECT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.front ()));
     if (restore_source) {
         EXPECT_FALSE (
@@ -185,6 +243,11 @@ void next_join_suffix (
     } else
         EXPECT_TRUE (
           std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions.back ()));
+    if (join_from_captured_request) {
+        EXPECT_TRUE (std::holds_alternative<fw::actor_join_accepted_t> (evidence.completions[1]));
+        EXPECT_EQ (evidence.completion_owners.back (), first_rid);
+        EXPECT_EQ (evidence.completion_spots.back (), fw::spot_id_t (following_spot));
+    }
     const auto reply = evidence.suffix_reply;
     lock.unlock ();
     if (request) {
@@ -192,6 +255,17 @@ void next_join_suffix (
         const auto result = reply ();
         ASSERT_TRUE (result) << (result.error () ? result.error ()->what () : "no error");
         EXPECT_EQ (result.value (), 2);
+    }
+    if (join_from_captured_request) {
+        const auto scanned = store->scan ({"$zlink/relocation-reply/", {}, 10}).result ().value ();
+        const auto *page = std::get_if<fw::store_scan_page_t> (&scanned);
+        ASSERT_NE (page, nullptr);
+        ASSERT_EQ (page->items.size (), 1u);
+        const auto &bytes = page->items.front ().value.bytes;
+        const auto value = nlohmann::json::parse (
+          std::string_view{reinterpret_cast<const char *> (bytes.data ()), bytes.size ()});
+        EXPECT_EQ (value.at ("state"), "pending");
+        store->release_ack ();
     }
 }
 } // namespace zlink::framework::test::actor_maintenance_join

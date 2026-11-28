@@ -509,12 +509,17 @@ TEST (FrameworkRelocationSealContract,
               .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()},
           .object_stable_types = {"framework.spot"}});
     };
+    in_memory_location_repository_t locations;
+    live_location_reader_t sources{locations};
     auto requester = make_host ("requester-A");
     auto previous = make_host ("previous-B");
     auto target = make_host ("target-C");
     auto lease =
       std::make_shared<const location_owner_token_t> (location_owner_token_t{"requester-owner", 3});
-    requester->configure_stateful_dispatch ([lease] { return lease; });
+    const auto writer = std::get<owner_lease_claimed_t> (
+                          locations.claim_owner_lease ("target-owner", 30s).result ().value ())
+                          .token;
+    requester->configure_stateful_dispatch ([lease] { return lease; }, &sources);
     requester->configure_spot_route_fence_resolver (
       [] (const auto &, const auto &, auto) -> task_t<std::optional<host::route_fence_t>> {
           co_return host::route_fence_t{1, 1, 1};
@@ -522,6 +527,23 @@ TEST (FrameworkRelocationSealContract,
     requester->start ();
     previous->start ();
     target->start ();
+    const auto target_peer = target->transport ().topology ().local_descriptor ();
+    const mesh_node_descriptor_t known_target{.mesh_name = target_peer.mesh_name,
+                                              .rid = target->status ().routing_id (),
+                                              .lifecycle_generation =
+                                                target_peer.lifecycle_generation,
+                                              .descriptor_revision = 1,
+                                              .endpoint = target->transport ().endpoint (),
+                                              .state = framework_runtime_state_t::serving,
+                                              .security_identity = target_peer.security_identity,
+                                              .owner_id = writer.owner_id,
+                                              .lease_generation = writer.lease_generation};
+    ASSERT_EQ (locations.update_mesh_node (known_target, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    (void) sources.poll_mesh_sources (target_peer.mesh_name).result ().value ();
     ASSERT_TRUE (requester->connect_peer (previous->transport ().endpoint (),
                                           previous->status ().routing_id ()));
     ASSERT_TRUE (
@@ -567,8 +589,9 @@ TEST (FrameworkRelocationSealContract,
                                                   requester->status ().routing_id ().to_bytes (),
                                                   requester->status ().lifecycle_generation ()};
     const protocol::relocation_coordinator_fence_t coordinator{
-      "previous-owner", 4, previous->status ().routing_id ().to_bytes (),
-      previous->status ().lifecycle_generation (), "authority-v1"};
+      writer.owner_id, static_cast<std::uint64_t> (writer.lease_generation),
+      target->status ().routing_id ().to_bytes (), target->status ().lifecycle_generation (),
+      "authority-v1"};
     protocol::reply_relay_t relay{header.operation,
                                   *header.correlation,
                                   {2119, 5},
@@ -590,15 +613,16 @@ TEST (FrameworkRelocationSealContract,
     auto wrong = relay;
     ++wrong.operation.high;
     EXPECT_EQ (requester->relocation_wire ().process (relay_record (wrong)).result ().value (),
-               stateful::raw_relocation_replay_result_t::not_registered);
+               stateful::raw_relocation_replay_result_t::terminal_duplicate);
     wrong = relay;
     ++wrong.operation.low;
     EXPECT_EQ (requester->relocation_wire ().process (relay_record (wrong)).result ().value (),
-               stateful::raw_relocation_replay_result_t::not_registered);
+               stateful::raw_relocation_replay_result_t::terminal_duplicate);
     wrong = relay;
     ++wrong.reply_route_id;
     EXPECT_EQ (requester->relocation_wire ().process (relay_record (wrong)).result ().value (),
-               stateful::raw_relocation_replay_result_t::not_registered);
+               stateful::raw_relocation_replay_result_t::terminal_duplicate);
+    EXPECT_FALSE (pending.completion->task ().await_ready ());
     std::atomic_int acknowledgements{0};
     ASSERT_TRUE (target->relocation_wire ().register_terminal_target ({relay, source, reply,
                                                                        [&] (auto) {

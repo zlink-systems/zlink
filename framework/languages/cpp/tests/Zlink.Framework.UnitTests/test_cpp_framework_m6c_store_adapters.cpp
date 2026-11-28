@@ -394,30 +394,6 @@ void test_public_authority_store_adapter (test_context_t &test)
                   "Missing must never attempt source Preserve");
     test.require (missing_settlement.authority_missing,
                   "Missing must be reported apart from a source lease expiry");
-
-    const std::vector<std::byte> application_payload{std::byte{0x31}, std::byte{0x32}};
-    store.snapshot = zlink::framework::authority_snapshot_t{
-      "10", application_payload, 7, 12, {"owner-b", 5}, std::chrono::system_clock::now ()};
-    const auto completion_published = adapter.publish_completion (
-      object_kind_t::actor, "actor-public", "mesh", 7, "completion-prepared", 51);
-    const auto completion_replaced =
-      adapter.replace_completion (object_kind_t::actor, "actor-public", 7, "completion-prepared",
-                                  51, "completion-delivered", 52);
-    const auto completion_read = adapter.read (object_kind_t::actor, "actor-public");
-    test.require (
-      completion_published.status == authority_publish_status_t::published
-        && completion_replaced.status == authority_publish_status_t::published && completion_read
-        && completion_read->relocation_reference == "completion-delivered"
-        && completion_read->checksum_crc32c == 52 && completion_read->source.object_generation == 7
-        && completion_read->source.authority_owner_generation == 12,
-      "completion cursor roots must use exact preserve-generation authority CAS");
-    const auto completion_released = adapter.release_completion (
-      object_kind_t::actor, "actor-public", 7, "completion-delivered", 52);
-    test.require (completion_released && store.snapshot
-                    && store.snapshot->payload == application_payload
-                    && store.snapshot->authority_owner_generation == 12
-                    && !adapter.read (object_kind_t::actor, "actor-public"),
-                  "Delivered release must restore authority payload before root cleanup");
 }
 
 } // namespace m6c_test
