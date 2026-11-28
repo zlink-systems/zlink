@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
+#include "runtime/locations/location_record_fields.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/location_runtime.hpp"
