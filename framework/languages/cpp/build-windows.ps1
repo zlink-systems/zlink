@@ -147,11 +147,12 @@ Invoke-ZlinkCMake -FailureMessage "C++ Framework configure failed" -Arguments $C
 if ($Target.Count -gt 0) {
     $BuildArguments = @(
         "--build", $BuildDir, "--config", $Configuration, "--parallel", "$Parallel", "--target"
-    ) + $Target
+    ) + $Target + @("--", "/bl:$(Join-Path $BuildDir 'msbuild.binlog')")
     Invoke-ZlinkCMake -FailureMessage "C++ Framework target build failed" -Arguments $BuildArguments
 } else {
     Invoke-ZlinkCMake -FailureMessage "C++ Framework build failed" -Arguments @(
-        "--build", $BuildDir, "--config", $Configuration, "--parallel", "$Parallel"
+        "--build", $BuildDir, "--config", $Configuration, "--parallel", "$Parallel",
+        "--", "/bl:$(Join-Path $BuildDir 'msbuild.binlog')"
     )
 
     # Server sample targets are intentionally EXCLUDE_FROM_ALL. Build every
@@ -159,7 +160,7 @@ if ($Target.Count -gt 0) {
     $SampleTargets = @(Get-ZlinkCppWindowsSampleTargets)
     $SampleBuildArguments = @(
         "--build", $BuildDir, "--config", $Configuration, "--parallel", "$Parallel", "--target"
-    ) + $SampleTargets
+    ) + $SampleTargets + @("--", "/bl:$(Join-Path $BuildDir 'msbuild.binlog')")
     Invoke-ZlinkCMake -FailureMessage "C++ Framework sample build failed" -Arguments $SampleBuildArguments
 }
 

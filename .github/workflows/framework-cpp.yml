@@ -584,6 +584,15 @@ jobs:
             throw "Framework C++ tests failed with exit code $LASTEXITCODE"
           }
 
+      - name: Upload MSBuild binary log on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: framework-cpp-msbuild-binlog-win-x64-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/framework-cpp-windows-build/msbuild.binlog
+          retention-days: 14
+          if-no-files-found: warn
+
       - name: Upload test results on failure
         if: failure()
         uses: actions/upload-artifact@v6
