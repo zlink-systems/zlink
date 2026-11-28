@@ -1899,7 +1899,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     found.Snapshot,
                     participant,
                     stage.Envelope.AggregateId,
-                    new ZLinkMeshNodeDescriptorKey(stage.SourceMeshName, stage.Node.Node.RoutingId),
+                    new ZLinkMeshNodeDescriptorKey(stage.TargetMeshName, stage.Node.Node.RoutingId),
                     stage.Node.Node.MeshStatus().LifecycleGeneration,
                     exactLocalOwner,
                     allowCurrentAuthorityGeneration: stage.TargetAuthorityOwnerGenerationFor(
@@ -2011,7 +2011,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                         ))
                         .ToArray(),
                     ZLinkAggregateInventoryDigest.Compute(participants),
-                    new ZLinkMeshNodeDescriptorKey(stage.SourceMeshName, stage.Node.Node.RoutingId),
+                    new ZLinkMeshNodeDescriptorKey(stage.TargetMeshName, stage.Node.Node.RoutingId),
                     targetStatus.LifecycleGeneration,
                     new ZLinkCapacityVector(0, 0, null),
                     localOwner,

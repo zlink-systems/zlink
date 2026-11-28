@@ -259,6 +259,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
     )
     {
         var ownerGeneration = checked((ulong)targetOwner.LeaseGeneration);
+        var (targetMeshName, targetNodeRid) = target;
         if (
             kind == ZLinkPlacementObjectKind.UserSpot
             && ZLinkUserSpotAuthorityPayloadCodec.TryDecode(sourcePayload.Span, out var user)
@@ -269,7 +270,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     State = ZLinkUserSpotAuthorityState.Ready,
                     OwnerId = targetOwner.OwnerId,
                     OwnerLeaseGeneration = ownerGeneration,
-                    NodeRid = target.Rid,
+                    MeshName = targetMeshName,
+                    NodeRid = targetNodeRid,
                     NodeGeneration = targetNodeGeneration,
                 }
             );
@@ -286,7 +288,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     State = ZLinkInstanceSpotAuthorityState.Ready,
                     OwnerId = targetOwner.OwnerId,
                     OwnerLeaseGeneration = ownerGeneration,
-                    NodeRid = target.Rid,
+                    MeshName = targetMeshName,
+                    NodeRid = targetNodeRid,
                     NodeGeneration = targetNodeGeneration,
                 }
             );
@@ -313,7 +316,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                             State = ZLinkActorAuthorityState.Ready,
                             OwnerId = targetOwner.OwnerId,
                             OwnerLeaseGeneration = ownerGeneration,
-                            NodeRid = target.Rid,
+                            MeshName = targetMeshName,
+                            NodeRid = targetNodeRid,
                             NodeGeneration = targetNodeGeneration,
                         }
                     ),
@@ -332,7 +336,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     State = ZLinkActorAuthorityState.Ready,
                     OwnerId = targetOwner.OwnerId,
                     OwnerLeaseGeneration = ownerGeneration,
-                    NodeRid = target.Rid,
+                    MeshName = targetMeshName,
+                    NodeRid = targetNodeRid,
                     NodeGeneration = targetNodeGeneration,
                 }
             );
