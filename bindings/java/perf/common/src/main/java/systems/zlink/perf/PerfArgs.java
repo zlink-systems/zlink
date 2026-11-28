@@ -37,7 +37,7 @@ final class PerfArgs {
             intEnv("PERF_SNDTIMEO_MS", 200));
         int recvTimeoutMs = intEnv("PERF_SINGLE_RCVTIMEO_MS",
             intEnv("PERF_RCVTIMEO_MS", 200));
-        int monitorHwm = intEnv("PERF_MONITOR_HWM", 4_096_000);
+        String monitorHwmBytes = null;
         int connectReadyTimeoutMs = intEnv("PERF_CONNECT_READY_TIMEOUT_MS", 1_000);
         for (int i = 3; i < args.length; i += 2) {
             requireOptionValue(args, i);
@@ -57,7 +57,7 @@ final class PerfArgs {
                     sendTimeoutMs = parseIntOption(args, i);
                 case "--rcvtimeo", "--recv-timeout-ms" ->
                     recvTimeoutMs = parseIntOption(args, i);
-                case "--monitor-hwm" -> monitorHwm = parseIntOption(args, i);
+                case "--monitor-hwm-bytes" -> monitorHwmBytes = args[i + 1];
                 case "--connect-ready-timeout-ms" ->
                     connectReadyTimeoutMs = parseIntOption(args, i);
                 default -> throw unknownOption(args[i]);
@@ -65,7 +65,8 @@ final class PerfArgs {
         }
         return new PerfUtil.Config("single", pattern, transport, size, duration,
             "", 1, ioThreads, sendHwm, recvHwm, sendBuffer, recvBuffer,
-            sendTimeoutMs, recvTimeoutMs, monitorHwm, connectReadyTimeoutMs, 0);
+            sendTimeoutMs, recvTimeoutMs, resolveMonitorHwmBytes(monitorHwmBytes, false),
+            connectReadyTimeoutMs, 0);
     }
 
     static PerfUtil.Config parseMultiArgs(String[] args) {
@@ -119,8 +120,7 @@ final class PerfArgs {
             intEnv("PERF_SNDTIMEO_MS", 200));
         int recvTimeoutMs = intEnv("PERF_MULTI_RCVTIMEO_MS",
             intEnv("PERF_RCVTIMEO_MS", 200));
-        int monitorHwm = intEnv("PERF_MULTI_MONITOR_HWM",
-            intEnv("PERF_MONITOR_HWM", 4_096_000));
+        String monitorHwmBytes = null;
         int connectReadyTimeoutMs = intEnv("PERF_MULTI_CONNECT_READY_TIMEOUT_MS",
             intEnv("PERF_CONNECT_READY_TIMEOUT_MS", 10_000));
         int connectConcurrency = intEnv("PERF_MULTI_CONNECT_CONCURRENCY",
@@ -146,7 +146,7 @@ final class PerfArgs {
                     sendTimeoutMs = parseIntOption(args, i);
                 case "--rcvtimeo", "--recv-timeout-ms" ->
                     recvTimeoutMs = parseIntOption(args, i);
-                case "--monitor-hwm" -> monitorHwm = parseIntOption(args, i);
+                case "--monitor-hwm-bytes" -> monitorHwmBytes = args[i + 1];
                 case "--connect-ready-timeout-ms" ->
                     connectReadyTimeoutMs = parseIntOption(args, i);
                 case "--connect-concurrency" -> {
@@ -162,8 +162,34 @@ final class PerfArgs {
         }
         return new PerfUtil.Config("multi", pattern, transport, size, duration,
             endpoint, clients, ioThreads, sendHwm, recvHwm, sendBuffer,
-            recvBuffer, sendTimeoutMs, recvTimeoutMs, monitorHwm,
+            recvBuffer, sendTimeoutMs, recvTimeoutMs, resolveMonitorHwmBytes(monitorHwmBytes, true),
             connectReadyTimeoutMs, connectConcurrency);
+    }
+
+    private static long resolveMonitorHwmBytes(String explicit, boolean multi) {
+        for (String legacy : new String[] {"PERF_MULTI_MONITOR_HWM", "PERF_MONITOR_HWM"}) {
+            if (System.getenv(legacy) != null) {
+                throw new IllegalArgumentException(legacy + " is obsolete. Use " + legacy + "_BYTES.");
+            }
+        }
+        String value = explicit;
+        if (value == null) {
+            value = multi ? System.getenv("PERF_MULTI_MONITOR_HWM_BYTES") : null;
+            if (value == null || value.isEmpty()) {
+                value = System.getenv("PERF_MONITOR_HWM_BYTES");
+            }
+            if (value == null || value.isEmpty()) {
+                return 4_096_000;
+            }
+        }
+        try {
+            if (value.matches("[0-9]+")) {
+                return Long.parseLong(value);
+            }
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("monitor HWM bytes must fit in a non-negative long: " + value, ex);
+        }
+        throw new IllegalArgumentException("monitor HWM bytes must be a non-negative integer: " + value);
     }
 
     private static int intEnv(String name, int fallback) {
