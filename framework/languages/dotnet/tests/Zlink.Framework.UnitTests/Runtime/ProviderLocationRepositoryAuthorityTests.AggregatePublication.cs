@@ -1,5 +1,3 @@
-using System.Text;
-using System.Text.Json;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Host;
@@ -9,6 +7,108 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed partial class ProviderLocationRepositoryAuthorityTests
 {
+    [Theory]
+    [InlineData(false, "descriptor removed")]
+    [InlineData(false, "lease expired")]
+    [InlineData(false, "identity mismatch")]
+    [InlineData(true, "descriptor removed")]
+    [InlineData(true, "lease expired")]
+    [InlineData(true, "identity mismatch")]
+    public async Task AggregateCommitFencesAuthorityIdentity(bool inMemory, string change)
+    {
+        var time = new ManualTimeProvider();
+        IZLinkLocationRepository repository = inMemory
+            ? new ZLinkInMemoryLocationStore(time)
+            : new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore(time));
+        var sourceOwner = await ClaimAsync(repository, "aggregate-source");
+        var targetOwner = await ClaimAsync(repository, "aggregate-target", TimeSpan.FromMinutes(1));
+        var source = Descriptor("source", sourceOwner);
+        var target = Descriptor("target", targetOwner);
+        await PublishAsync(repository, source, ZLinkLocationWriteIntent.NewClaim);
+        await PublishAsync(repository, target, ZLinkLocationWriteIntent.NewClaim);
+        var request = Reservation("aggregate-fence", source, sourceOwner);
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(request)
+        );
+        var ready = Assert
+            .IsType<ZLinkObjectCommitResult.Committed>(
+                await repository.CommitAsync(reserved.Reservation, new byte[] { 1 })
+            )
+            .Snapshot;
+        var participant = new ZLinkAggregateParticipant(
+            request.Key,
+            ready.StoreVersion,
+            ZLinkAuthorityGenerationTransition.NewOwner,
+            new byte[] { 2 },
+            ReadOnlyMemory<byte>.Empty
+        );
+        var aggregate = AggregateRequest([participant], target, targetOwner);
+        var prepared = Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(
+            await repository.PrepareAggregateAsync(aggregate)
+        );
+        var fence = prepared.Fence;
+
+        if (change == "descriptor removed")
+        {
+            Assert.Equal(
+                ZLinkLocationWriteStatus.Stored,
+                await repository.RemoveMeshNodeAsync(aggregate.TargetDescriptor, targetOwner)
+            );
+            var lease = Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
+                await repository.ReadOwnerLeaseAsync(targetOwner.OwnerId)
+            );
+            Assert.True(lease.LeaseExpiresAt > lease.StoreNow);
+        }
+        else if (change == "lease expired")
+        {
+            time.Advance(TimeSpan.FromSeconds(61));
+            var lease = await repository.ReadOwnerLeaseAsync(targetOwner.OwnerId);
+            Assert.True(
+                lease is ZLinkOwnerLeaseReadResult.Missing
+                    || lease is ZLinkOwnerLeaseReadResult.Found found
+                        && found.LeaseExpiresAt <= found.StoreNow
+            );
+            var nodes = await repository.ListMeshNodesAsync(target.MeshName, new(100));
+            Assert.Contains(nodes.Items, node => node.Rid == target.Rid);
+        }
+        else
+        {
+            Assert.Equal(
+                ZLinkAggregateCommitResult.Stale,
+                await repository.CommitAggregateAsync(fence with { AggregateId = Guid.NewGuid() })
+            );
+            Assert.Equal(
+                ZLinkAggregateCommitResult.Stale,
+                await repository.CommitAggregateAsync(
+                    fence with
+                    {
+                        AggregateGeneration = fence.AggregateGeneration + 1,
+                    }
+                )
+            );
+            var unchanged = Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await repository.ReadAuthorityAsync(request.Key)
+                )
+                .Snapshot;
+            Assert.Equal(sourceOwner.OwnerId, unchanged.OwnerId);
+            Assert.Equal(ready.AuthorityOwnerGeneration, unchanged.AuthorityOwnerGeneration);
+        }
+
+        Assert.Equal(
+            ZLinkAggregateCommitResult.Committed,
+            await repository.CommitAggregateAsync(fence)
+        );
+        var committed = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await repository.ReadAuthorityAsync(request.Key)
+            )
+            .Snapshot;
+        Assert.Equal(targetOwner.OwnerId, committed.OwnerId);
+        Assert.Equal(targetOwner.LeaseGeneration, committed.OwnerLeaseGeneration);
+        Assert.True(committed.AuthorityOwnerGeneration > ready.AuthorityOwnerGeneration);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -128,18 +228,23 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         var releaseTarget = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        ZLinkAggregateInventory.Aggregate? aborted = null;
         provider.Inspect = async write =>
         {
             foreach (var put in write.Mutations.OfType<ZLinkStoreMutation.Put>())
             {
                 if (put.Key != root)
                     continue;
-                using var record = JsonDocument.Parse(put.Bytes);
-                if (record.RootElement.GetProperty("status").GetInt32() == 2)
+                var record = ZLinkAggregateInventory.Decode<ZLinkAggregateInventory.Aggregate>(
+                    put.Bytes
+                );
+                if (record.State == "committed")
                 {
                     targetWriting.TrySetResult();
                     await releaseTarget.Task;
                 }
+                else if (record.State == "aborted")
+                    aborted = record;
             }
         };
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -195,15 +300,15 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             Assert.Equal(sourceBefore.Allocation, preserved.Allocation);
             Assert.Equal(payload, preserved.Payload.ToArray());
             Assert.Equal(preserve.Relocation, preserved.Relocation);
-            var aborted = Assert.IsType<ZLinkStoreReadResult.Found>(await provider.ReadAsync(root));
-            using var marker = JsonDocument.Parse(aborted.Value.Bytes);
-            Assert.Equal(3, marker.RootElement.GetProperty("status").GetInt32());
+            Assert.NotNull(aborted);
+            Assert.Equal("aborted", aborted.State);
+            Assert.IsType<ZLinkStoreReadResult.Missing>(await provider.ReadAsync(root));
             Assert.Equal("0", await ReadCounterAsync(provider, pending));
 
             releaseTarget.SetResult();
             Assert.Equal(ZLinkAggregateCommitResult.Stale, await targetCommit);
             Assert.Equal(
-                ZLinkAggregateAbortResult.AlreadyAborted,
+                ZLinkAggregateAbortResult.Stale,
                 await repository.AbortAggregateAsync(prepared.Fence)
             );
             Assert.Equal("0", await ReadCounterAsync(provider, pending));
@@ -262,9 +367,9 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                     .Mutations.OfType<ZLinkStoreMutation.Put>()
                     .Any(put =>
                         put.Key.Value == root
-                        && Encoding
-                            .UTF8.GetString(put.Bytes.Span)
-                            .Contains("\"status\":1", StringComparison.Ordinal)
+                        && ZLinkAggregateInventory
+                            .Decode<ZLinkAggregateInventory.Aggregate>(put.Bytes)
+                            .State == "prepared"
                     )
             )
                 return;

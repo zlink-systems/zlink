@@ -5,7 +5,7 @@ using Zlink.Framework.Runtime.Locations;
 namespace Zlink.Framework.Locations.Redis.Tests;
 
 [Collection(RedisTestCollection.Name)]
-public sealed class RedisProviderRepositoryAuthorityTests(RedisTestFixture fixture)
+public sealed partial class RedisProviderRepositoryAuthorityTests(RedisTestFixture fixture)
 {
     [SkippableFact]
     public async Task SeparateRepositoriesShareCreationAndRelocationAuthority()

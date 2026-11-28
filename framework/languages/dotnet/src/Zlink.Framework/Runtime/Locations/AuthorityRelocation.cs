@@ -71,6 +71,7 @@ internal sealed record ZLinkAuthoritySnapshot(
 )
 {
     internal Zlink.Framework.Runtime.Locations.ZLinkAuthorityRelocation? Relocation { get; init; }
+    internal string? AggregateExpectedStoreVersion { get; init; }
 }
 
 internal abstract record ZLinkAuthorityReadResult
@@ -368,7 +369,11 @@ internal sealed record ZLinkAggregateParticipant(
     ReadOnlyMemory<byte> AuthorityPayload,
     ReadOnlyMemory<byte> MembershipMutation,
     ulong? AcceptedRequests = null
-);
+)
+{
+    internal string? CapturedStoreVersion { get; init; }
+    internal string CompareExchangeStoreVersion => CapturedStoreVersion ?? ExpectedStoreVersion;
+}
 
 internal sealed record ZLinkAggregatePrepareRequest(
     Guid AggregateId,
@@ -383,6 +388,7 @@ internal sealed record ZLinkAggregatePrepareRequest(
 )
 {
     internal ZLinkAuthorityRelocation? Relocation { get; init; }
+    internal ZLinkAuthorityKey? RepresentativeKey { get; init; }
     internal bool ClearRelocation { get; init; }
 
     internal ZLinkAuthorityRelocation? ApplyRelocation(
