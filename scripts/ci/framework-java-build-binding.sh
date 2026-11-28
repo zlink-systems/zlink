@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)"
-core_prefix="$(bash scripts/local-package/core/fetch-release.sh \
+core_prefix="$(python3 scripts/ci/framework_timing.py "Core release fetch for Java binding" \
+  bash scripts/local-package/core/fetch-release.sh \
   --version "${core_version}" \
   --platform "${1}" \
   --cache-dir "${ZLINK_CORE_CACHE_DIR:-${RUNNER_TEMP}/zlink-core-release}")"

@@ -79,7 +79,7 @@ on:
 env:
   PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/framework/languages/node/.cache/ms-playwright
 
-# The framework consumes a checkout-built @zlink-systems/zlink package with a
+# The framework consumes a verified @zlink-systems/zlink package with a
 # platform prebuild and its verified Core release runtime. Package construction
 # is owned by .github/actions/node-binding-package.
 
@@ -177,7 +177,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ci/framework-node-core-runtime.sh "${{ matrix.target.core_platform }}"
 
-      - name: Build the checkout Node binding package
+      - name: Prepare the Node binding package
         uses: ./.github/actions/node-binding-package
         with:
           core-prefix: ${{ steps.core.outputs.prefix }}
@@ -189,7 +189,7 @@ jobs:
           MSYS: winsymlinks:nativestrict
         run: bash scripts/ci/framework-node-http-client.sh .artifacts/wsl
 
-      - name: Pin framework install to the checkout Node binding package
+      - name: Pin framework install to the prepared Node binding package
         working-directory: framework/languages/node
         shell: bash
         run: bash ../../../scripts/ci/framework-node-pin-binding.sh "${{ steps.core.outputs.binding_version }}"
@@ -329,6 +329,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v5
@@ -356,9 +358,9 @@ jobs:
 
       - name: Prepare the .NET local packages for the cross-language test host
         shell: bash
-        run: bash scripts/ci/framework-node-cross-dotnet.sh "${{ steps.core.outputs.core_version }}" "${{ steps.core.outputs.prefix }}"
+        run: bash scripts/ci/framework-node-cross-dotnet.sh "${{ steps.core.outputs.prefix }}"
 
-      - name: Build the checkout Node binding package
+      - name: Prepare the Node binding package
         uses: ./.github/actions/node-binding-package
         with:
           core-prefix: ${{ steps.core.outputs.prefix }}

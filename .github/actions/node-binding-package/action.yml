@@ -1,5 +1,5 @@
-name: Package the checkout Node binding
-description: Build a platform prebuild with the verified Core runtime before packing.
+name: Prepare the Node binding package
+description: Reuse the published package or build a platform prebuild with verified Core.
 inputs:
   core-prefix:
     description: Verified Core release install prefix
@@ -10,4 +10,8 @@ runs:
     - shell: bash
       env:
         CORE_PREFIX: ${{ inputs.core-prefix }}
-      run: bash scripts/ci/framework-node-pack-binding.sh
+      run: |
+        interpreter=python3
+        if [[ "${RUNNER_OS}" == Windows ]]; then interpreter=python; fi
+        "${interpreter}" scripts/ci/framework-binding-package.py node .artifacts/wsl \
+          -- bash scripts/ci/framework-node-pack-binding.sh

@@ -157,12 +157,14 @@ jobs:
         if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'linux-')) }}
         run: bash scripts/ci/verify-framework-relocation-conformance.sh
 
-      - name: Fetch Core and build the checkout Java binding package on Linux
+      - name: Prepare the Java binding package on Linux
         if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'linux-')) }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ci/framework-java-build-binding.sh "${{ matrix.target.core_platform }}" "${{ matrix.target.local_package_root }}"
+        run: |
+          python3 scripts/ci/framework-binding-package.py java "${{ matrix.target.local_package_root }}" \
+            -- bash scripts/ci/framework-java-build-binding.sh "${{ matrix.target.core_platform }}" "${{ matrix.target.local_package_root }}"
 
       - name: Verify the packaged Java public contract and API snapshot
         if: ${{ !inputs.skip_tests && matrix.target.name == 'linux-x64' }}
@@ -172,7 +174,7 @@ jobs:
         if: ${{ !inputs.skip_tests && matrix.target.name == 'linux-x64' }}
         run: bash framework/languages/java/scripts/verify_packaged_contract.sh kotlin
 
-      - name: Fetch Core and build the checkout Java binding package on Windows
+      - name: Prepare the Java binding package on Windows
         if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'win-')) }}
         shell: pwsh
         run: |
@@ -186,8 +188,9 @@ jobs:
           if (-not (Test-Path -LiteralPath $corePrefix -PathType Container)) {
             throw "Core release prefix was not created: $corePrefix"
           }
-          .\scripts\local-package\java\build-windows.ps1 `
-            -CorePrefix $corePrefix
+          python scripts/ci/framework-binding-package.py java "${{ matrix.target.local_package_root }}" `
+            -- pwsh -NoProfile -NonInteractive -File scripts/local-package/java/build-windows.ps1 -CorePrefix $corePrefix
+          if ($LASTEXITCODE -ne 0) { throw "Java binding package preparation failed" }
           $runtime = Join-Path $corePrefix "bin\zlink.dll"
           if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) {
             throw "Core runtime was not created: $runtime"

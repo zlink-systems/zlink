@@ -2,14 +2,28 @@ name: Framework cpp main dependency cache
 
 # Path filters on this main-only entry point do not suppress merge-queue checks.
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
       - "framework/languages/cpp/vcpkg.json"
+      - "bindings/**"
+      - "core/**"
+      - "VERSION"
+      - "LICENSE"
+      - "scripts/ci/framework-binding-package.py"
+      - "scripts/ci/framework-cpp-build-binding.sh"
+      - "scripts/local-package/cpp/**"
+      - "scripts/local-package/build-windows.ps1"
+      - ".github/workflows/framework-cpp.yml"
+      - ".github/workflows/framework-cpp-main-cache.yml"
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
   warm-cache:
     uses: ./.github/workflows/framework-cpp.yml
+    with:
+      warm_binding_cache: true
