@@ -1285,7 +1285,7 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
                 state->read_state = read_state_t::ending;
                 break;
             }
-            auto value = std::move (frame->value ());
+            auto &value = frame->value ();
             const auto &header = value.header;
             const auto attempt = header.request_seq.value_or (0);
             const auto push = header.kind == message_kind_t::send

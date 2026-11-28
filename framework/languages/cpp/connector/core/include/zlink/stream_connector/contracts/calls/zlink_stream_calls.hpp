@@ -312,10 +312,9 @@ class request_call_t
         request_sending_context_t sending{request_name, actor_id, _packet.value ().metadata};
         detail::run_request_sending (state, sending);
         auto reply_hook_ids = std::make_shared<std::vector<std::uint64_t>> ();
-        auto packet = std::move (_packet.value ());
         const auto timeout = _timeout;
         detail::submit_request_async (
-          state, std::move (packet), timeout,
+          state, std::move (_packet.value ()), timeout,
           [state, request_name, actor_id, started, reply_hook_ids,
            callback = std::move (callback)] (result_t<detail::request_reply_t> reply) mutable {
               erased_result_t erased (state, reply);
@@ -354,11 +353,15 @@ class request_call_t
         return context;
     }
 
+    // Borrows the reply instead of copying it: every caller builds it from a reply it owns and
+    // consumes it with as<T>() before that reply goes out of scope (a temporary in the sync path,
+    // a local inside the async completion callback). Never store or return it.
     class erased_result_t
     {
       public:
-        erased_result_t (std::shared_ptr<void> state, result_t<detail::request_reply_t> result) :
-            _state (std::move (state)), _result (std::move (result))
+        erased_result_t (std::shared_ptr<void> state,
+                         const result_t<detail::request_reply_t> &result) :
+            _state (std::move (state)), _result (result)
         {
         }
 
@@ -381,7 +384,7 @@ class request_call_t
 
       private:
         std::shared_ptr<void> _state;
-        result_t<detail::request_reply_t> _result;
+        const result_t<detail::request_reply_t> &_result;
     };
 
     request_call_t (std::shared_ptr<void> state,

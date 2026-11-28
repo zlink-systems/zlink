@@ -13,7 +13,7 @@ namespace zlink::stream_connector
 template <typename T> class result_t
 {
   public:
-    static result_t success (T value) { return result_t (std::move (value)); }
+    static result_t success (T value) { return result_t (std::in_place, std::move (value)); }
     static result_t failure (error_code_t code, std::string message)
     {
         return result_t (error_t{code, std::move (message)});
@@ -39,7 +39,7 @@ template <typename T> class result_t
     }
 
   private:
-    explicit result_t (T value) : _value (std::move (value)) {}
+    result_t (std::in_place_t, T &&value) : _value (std::in_place, std::move (value)) {}
     explicit result_t (error_t error) : _error (std::move (error)) {}
 
     std::optional<T> _value;

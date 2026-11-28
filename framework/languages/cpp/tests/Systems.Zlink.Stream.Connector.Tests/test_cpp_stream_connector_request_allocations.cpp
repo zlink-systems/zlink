@@ -71,9 +71,18 @@ int main ()
 
     std::cout << "Ordinary Request allocations: submit=" << submit_allocations
               << " reply=" << reply_allocations << '\n';
-    // Measured using the same test against origin/main (6752099006).
-    constexpr std::size_t main_request_allocations = 16;
-    return succeeded.load () && submit_allocations + reply_allocations <= main_request_allocations
+#if defined(_MSC_VER)
+    // MSVC STL allocates a std::map head node whenever a map is default- or move-constructed,
+    // so each packet_t and stream_header_t built or moved on this path adds one 96-byte
+    // allocation through metadata_t. origin/main measured 52 (5e9ba7d2af, run 46052948260:
+    // 38 map head nodes + 14 other). Fewer packet/header moves leave 42 (submit 16, reply 26;
+    // Windows Release run 46100615075).
+    constexpr std::size_t request_allocation_limit = 42;
+#else
+    // Linux: submit 10, reply 6 before and after the move changes (6752099006).
+    constexpr std::size_t request_allocation_limit = 16;
+#endif
+    return succeeded.load () && submit_allocations + reply_allocations <= request_allocation_limit
              ? 0
              : 1;
 }
