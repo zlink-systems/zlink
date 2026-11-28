@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include <zlink/json.hpp>
 #include <zlink/framework.hpp>
+#include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/relocation_authority_payload.hpp"
@@ -300,7 +301,7 @@ TEST (SpotRequestAdmission, NewHostRequestsExistingSpotImmediatelyAfterReady)
 TEST (SpotWideHostRelocation, TargetRejectsChangedCoordinatorFenceBeforeAggregatePrepare)
 {
     namespace stateful = fw::runtime::stateful;
-    for (const auto changed : {"none", "owner", "lease", "baseline"}) {
+    for (const auto changed : {"none", "owner", "lease", "baseline", "route", "retry"}) {
         SCOPED_TRACE (changed);
         joins_t joins;
         auto locations = std::make_shared<fw::runtime::in_memory_location_store_t> ();
@@ -356,12 +357,40 @@ TEST (SpotWideHostRelocation, TargetRejectsChangedCoordinatorFenceBeforeAggregat
         target.start ();
         ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
         auto &repository = services.get_required<fw::location_repository_t> ();
-        const auto spot = std::get<fw::authority_snapshot_t> (
+        auto spot = std::get<fw::authority_snapshot_t> (
           repository.read_authority (fw::runtime::spot_authority_key (room_id)).result ().value ());
-        const auto actor = std::get<fw::authority_snapshot_t> (
+        auto actor = std::get<fw::authority_snapshot_t> (
           repository.read_authority (fw::runtime::actor_authority_key ("fenced-member"))
             .result ()
             .value ());
+        const auto actor_key = fw::runtime::actor_authority_key ("fenced-member");
+        const auto spot_key = fw::runtime::spot_authority_key (room_id);
+        if (std::string_view (changed) == "route") {
+            auto actor_payload = fw::runtime::decode_direct_actor_authority_payload (actor.payload);
+            auto spot_payload =
+              fw::runtime::decode_direct_user_spot_authority_payload (spot.payload);
+            ASSERT_TRUE (actor_payload);
+            ASSERT_TRUE (spot_payload);
+            actor_payload->mesh_name = "sealed-source-mesh";
+            spot_payload->mesh_name = "sealed-source-mesh";
+            const auto actor_write =
+              repository
+                .compare_exchange_authority (
+                  actor_key, actor.store_version,
+                  fw::authority_put_t{fw::runtime::encode_actor_authority_payload (*actor_payload)})
+                .result ()
+                .value ();
+            const auto spot_write =
+              repository
+                .compare_exchange_authority (
+                  spot_key, spot.store_version,
+                  fw::authority_put_t{
+                    fw::runtime::encode_user_spot_authority_payload (*spot_payload)})
+                .result ()
+                .value ();
+            actor = std::get<fw::authority_stored_t> (actor_write).snapshot;
+            spot = std::get<fw::authority_stored_t> (spot_write).snapshot;
+        }
         const auto nodes = repository.list_mesh_nodes (mesh_name).result ().value ();
         const auto destination =
           std::find_if (nodes.items.begin (), nodes.items.end (),
@@ -407,9 +436,82 @@ TEST (SpotWideHostRelocation, TargetRejectsChangedCoordinatorFenceBeforeAggregat
         stateful::public_aggregate_authority_adapter_t adapter (repository);
         const auto prepared =
           adapter.prepare (participants, target_rid, target_owner, "fenced-unit", 1, {}, fence);
-        const bool accepted = std::string_view (changed) == "none";
+        if (std::string_view (changed) == "route") {
+            ASSERT_EQ (prepared.status, stateful::aggregate_publish_status_t::prepared);
+            ASSERT_EQ (adapter.commit (prepared.fence).status,
+                       stateful::aggregate_publish_status_t::committed);
+            const auto current_actor = std::get<fw::authority_snapshot_t> (
+              repository.read_authority (actor_key).result ().value ());
+            const auto current_spot = std::get<fw::authority_snapshot_t> (
+              repository.read_authority (spot_key).result ().value ());
+            const auto actor_payload =
+              fw::runtime::decode_direct_actor_authority_payload (current_actor.payload);
+            const auto spot_payload =
+              fw::runtime::decode_direct_user_spot_authority_payload (current_spot.payload);
+            ASSERT_TRUE (actor_payload);
+            ASSERT_TRUE (spot_payload);
+            EXPECT_EQ (actor_payload->mesh_name, destination->mesh_name);
+            EXPECT_EQ (spot_payload->mesh_name, destination->mesh_name);
+            continue;
+        }
+        const bool retry = std::string_view (changed) == "retry";
+        const bool accepted = std::string_view (changed) == "none" || retry;
         EXPECT_EQ (prepared.status, accepted ? stateful::aggregate_publish_status_t::prepared
                                              : stateful::aggregate_publish_status_t::conflict);
+        if (retry) {
+            ASSERT_EQ (prepared.status, stateful::aggregate_publish_status_t::prepared);
+            const auto id =
+              fw::runtime::aggregate_inventory::key_suffix (prepared.fence.durable_fence);
+            EXPECT_EQ (id, fw::runtime::authority_aggregate_codec::wire_uuid (4718, 2) + ":1");
+            const auto prefix = "zlink:v11:aggregate-inventory:" + id;
+            const std::vector<std::string> keys{"zlink:v11:aggregate:" + id, prefix + ":root",
+                                                prefix + ":page:0:0",
+                                                prefix + ":participant:0:authorityPayload",
+                                                prefix + ":participant:0:membershipMutation"};
+            const auto stored_records = [&] {
+                std::vector<fw::store_value_t> records;
+                for (const auto &key : keys) {
+                    const auto read = locations->read ({key}).result ().value ();
+                    const auto *row = std::get_if<fw::store_found_t> (&read);
+                    EXPECT_NE (row, nullptr) << key;
+                    if (row)
+                        records.push_back (row->value);
+                }
+                return records;
+            };
+            const auto original_records = stored_records ();
+            auto next = prepare;
+            ++next.target_attempt_generation;
+            const auto next_fence =
+              stateful::relocation_authority_fence_t::from_prepare (participants.front (), next);
+            EXPECT_TRUE (
+              authority.record_target_prepared (participants.front (), next).result ().value ());
+            const auto retried = adapter.prepare (participants, target_rid, target_owner,
+                                                  "fenced-unit", 1, {}, next_fence);
+            EXPECT_EQ (retried.status, stateful::aggregate_publish_status_t::prepared);
+            EXPECT_TRUE (
+              authority.record_target_prepared (participants.front (), next).result ().value ());
+            auto changed_target = next;
+            ++changed_target.target_attempt_generation;
+            changed_target.target.target_node_routing_id =
+              zlink::routing_id_t::from ("other").to_bytes ();
+            EXPECT_FALSE (authority.record_target_prepared (participants.front (), changed_target)
+                            .result ()
+                            .value ());
+            EXPECT_EQ (adapter.commit (prepared.fence).status,
+                       stateful::aggregate_publish_status_t::conflict);
+            adapter.abort (prepared.fence);
+            const auto after_stale_requests = stored_records ();
+            ASSERT_EQ (after_stale_requests.size (), original_records.size ());
+            for (std::size_t index = 0; index < original_records.size (); ++index) {
+                EXPECT_EQ (after_stale_requests[index].bytes, original_records[index].bytes);
+                EXPECT_EQ (after_stale_requests[index].version.value,
+                           original_records[index].version.value);
+            }
+            EXPECT_EQ (adapter.commit (retried.fence).status,
+                       stateful::aggregate_publish_status_t::committed);
+            continue;
+        }
         if (prepared.status == stateful::aggregate_publish_status_t::prepared)
             adapter.abort (prepared.fence);
         for (const auto &entry : participants) {
@@ -425,10 +527,39 @@ TEST (SpotWideHostRelocation, TargetRejectsChangedCoordinatorFenceBeforeAggregat
     }
 }
 
-TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
+class sealed_inventory_store_t final : public fw::location_store_t
+{
+  public:
+    fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
+    {
+        auto value = co_await inner.read (key);
+        if (!corrupt_suffix.empty () && key.value.starts_with ("zlink:v11:aggregate-inventory:")
+            && key.value.ends_with (corrupt_suffix))
+            if (auto *row = std::get_if<fw::store_found_t> (&value))
+                row->value.bytes.push_back (std::byte{1});
+        co_return value;
+    }
+
+    fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+
+    fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
+    {
+        return inner.write (std::move (request));
+    }
+
+    fw::runtime::in_memory_location_store_t inner;
+    std::string_view corrupt_suffix;
+};
+
+void relocate_spotwide_with_sealed_inventory (std::string_view corrupt_suffix)
 {
     joins_t joins;
-    auto locations = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto locations = std::make_shared<sealed_inventory_store_t> ();
+    locations->corrupt_suffix = corrupt_suffix;
+    std::atomic<unsigned> target_restores{0};
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     const auto configure = [&] (host_t &host, const char *rid) {
         auto &options = host.app.add_zlink_framework ();
@@ -450,7 +581,9 @@ TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
             [] (auto &factory) { factory.recreate_on_relocation (); })
           .add_spot_factory<room_t> (
             room_type,
-            [] (fw::spot_context_t context) {
+            [&, is_target = std::string_view (rid) == target_rid] (fw::spot_context_t context) {
+                if (is_target)
+                    ++target_restores;
                 return std::make_shared<room_t> (std::move (context));
             },
             [] (auto &factory) {
@@ -498,6 +631,11 @@ TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
         .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
         .result ();
     ASSERT_TRUE (moved);
+    if (!corrupt_suffix.empty ()) {
+        EXPECT_NE (moved.value ().outcome, fw::relocation_outcome_t::relocated);
+        EXPECT_EQ (target_restores.load (), 0u);
+        return;
+    }
     ASSERT_EQ (moved.value ().outcome, fw::relocation_outcome_t::relocated)
       << "reason=" << static_cast<int> (moved.value ().reason);
     auto target_services = target.app.advanced ().services ().build_provider ();
@@ -520,6 +658,19 @@ TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
     std::lock_guard lock (joins.mutex);
     EXPECT_EQ (joins.accepted, 2u);
 }
+TEST (SpotWideSealedInventory, FrameworkManagedMembersKeepUserSpotHandler)
+{
+    relocate_spotwide_with_sealed_inventory ({});
+}
+
+TEST (SpotWideSealedInventory, RejectsTamperedRecordsBeforeRestore)
+{
+    for (const auto *record : {":root", ":page:0:0", ":participant:0:authorityPayload"}) {
+        SCOPED_TRACE (record);
+        relocate_spotwide_with_sealed_inventory (record);
+    }
+}
+
 TEST (SpotWideHostRelocation, GetOrCreateReturnsExistingRelocationTarget)
 {
     auto locations = std::make_shared<fw::runtime::in_memory_location_store_t> ();

@@ -49,6 +49,14 @@ class paused_aggregate_commit_store_t final : public location_store_t
             commit_waiting.complete (result_t<bool>::success (true));
             co_await release.task ();
         }
+        const bool removing_inventory =
+          interrupt_cleanup && std::ranges::any_of (request.mutations, [] (const auto &mutation) {
+              const auto *remove = std::get_if<store_delete_t> (&mutation);
+              return remove && remove->key.value.starts_with ("zlink:v11:aggregate-inventory:");
+          });
+        if (removing_inventory && inventory_deletes++ == 1)
+            co_return result_t<store_write_result_t>::failure (
+              framework_error_kind_t::internal_failure, "provider stopped after a child delete");
         auto written = co_await inner.write (std::move (request));
         if (aborting && std::holds_alternative<store_write_applied_t> (written)) {
             abort_reply_lost = true;
@@ -62,6 +70,8 @@ class paused_aggregate_commit_store_t final : public location_store_t
     task_completion_source_t<void> release;
     bool interrupt_abort_reply = false;
     bool abort_reply_lost = false;
+    bool interrupt_cleanup = false;
+    unsigned inventory_deletes = 0;
 };
 
 inline task_t<aggregate_commit_result_t>
@@ -78,7 +88,8 @@ void aggregate_read_keeps_source_version_until_commit (
   location_store_t &store,
   TBytes bytes,
   authority_aggregate_codec::json_t relocation_record = nullptr,
-  bool interrupt_abort = false)
+  bool interrupt_abort = false,
+  bool verify_cleanup = false)
 {
     namespace stateful = zlink::framework::runtime::stateful;
     paused_aggregate_commit_store_t provider (store);
@@ -212,6 +223,35 @@ void aggregate_read_keeps_source_version_until_commit (
     ASSERT_TRUE (std::holds_alternative<aggregate_prepared_t> (prepared))
       << "prepare result variant " << prepared.index ();
     const auto fence = std::get<aggregate_prepared_t> (prepared).fence;
+    const auto suffix = aggregate_inventory::key_suffix (fence);
+    const auto verify_terminal_inventory_removed = [&] {
+        if (!verify_cleanup)
+            return;
+        for (const auto &record_key :
+             {"zlink:v11:aggregate:" + suffix, "zlink:v11:aggregate-inventory:" + suffix + ":root",
+              "zlink:v11:aggregate-inventory:" + suffix + ":page:0:0",
+              "zlink:v11:aggregate-inventory:" + suffix + ":participant:0:authorityPayload",
+              "zlink:v11:aggregate-inventory:" + suffix + ":participant:0:membershipMutation"})
+            EXPECT_TRUE (std::holds_alternative<store_missing_t> (
+              store.read ({record_key}).result ().value ()))
+              << record_key;
+    };
+    if (verify_cleanup) {
+        const store_key_t leaf{"zlink:v11:aggregate-inventory:" + suffix + ":page:0:0"};
+        const auto read = store.read (leaf).result ().value ();
+        const auto *page = std::get_if<store_found_t> (&read);
+        ASSERT_NE (page, nullptr);
+        ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+          store.write ({{}, {store_delete_t{leaf}}}).result ().value ()));
+        const auto damaged = repository.read_aggregate_participants (fence).result ();
+        ASSERT_FALSE (damaged);
+        ASSERT_NE (damaged.error (), nullptr);
+        EXPECT_EQ (damaged.error ()->kind (), framework_error_kind_t::data_lost);
+        ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+          store.write ({{}, {store_put_t{leaf, page->value.bytes, std::nullopt}}})
+            .result ()
+            .value ()));
+    }
     auto pending =
       observe_aggregate_commit (repository.commit_aggregate (fence), provider.commit_waiting);
     scope_exit_t release_commit ([&] {
@@ -260,6 +300,21 @@ void aggregate_read_keeps_source_version_until_commit (
         EXPECT_EQ (target_node->capacity.actors.reserved, 0);
         EXPECT_EQ (target_node->capacity.spots.active, 0);
         EXPECT_EQ (target_node->capacity.spots.reserved, 0);
+        if (verify_cleanup) {
+            provider.interrupt_cleanup = true;
+            EXPECT_THROW (repository.abort_aggregate (fence).result ().value (),
+                          framework_exception_t);
+            EXPECT_EQ (provider.inventory_deletes, 2u);
+            EXPECT_TRUE (std::holds_alternative<store_found_t> (
+              store.read ({"zlink:v11:aggregate-inventory:" + suffix + ":root"})
+                .result ()
+                .value ()));
+            EXPECT_TRUE (std::holds_alternative<store_found_t> (
+              store.read ({"zlink:v11:aggregate:" + suffix}).result ().value ()));
+            EXPECT_EQ (recovered.abort_aggregate (fence).result ().value (),
+                       aggregate_abort_result_t::already_aborted);
+        }
+        verify_terminal_inventory_removed ();
         return;
     }
     // Release the commit even if an observation fails, so the fixture owns no pending work.
@@ -301,6 +356,18 @@ void aggregate_read_keeps_source_version_until_commit (
         settlement = adapter.settle_source_relocation (source_fence, {participant}, false);
     EXPECT_EQ (settlement.outcome, stateful::relocation_authority_t::target_committed)
       << "Source settlement must remain open to the completed target commit";
+    if (verify_cleanup) {
+        provider.interrupt_cleanup = true;
+        EXPECT_THROW (repository.finish_aggregate (fence).result ().value (),
+                      framework_exception_t);
+        EXPECT_EQ (provider.inventory_deletes, 2u);
+        provider_location_repository_t recovered (store);
+        const auto after_child = recovered.read_authority (key).result ().value ();
+        ASSERT_TRUE (std::holds_alternative<authority_snapshot_t> (after_child));
+        EXPECT_EQ (std::get<authority_snapshot_t> (after_child).payload, bytes ("after"));
+        EXPECT_TRUE (recovered.finish_aggregate (fence).result ().value ());
+        verify_terminal_inventory_removed ();
+    }
     if (!relocation_record.is_null ()) {
         const auto target_read = repository.read_authority (key).result ().value ();
         const auto &target_authority = std::get<authority_snapshot_t> (target_read);

@@ -127,7 +127,10 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
       "authority-v1"};
     /* Restores one Actor on the target and returns the attempt's wire
      * identity once the target replied relay-ready. */
-    const auto prepare = [&] (std::string actor_id, protocol::relocation_id_t relocation) {
+    const auto prepare = [&] (std::string actor_id, protocol::relocation_id_t relocation,
+                              std::uint64_t attempt = 0) {
+        if (attempt == 0)
+            attempt = target_descriptor.lifecycle_generation;
         const object_ref_t source_actor{
           object_kind_t::actor,
           actor_id,
@@ -147,7 +150,7 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
         const auto manifest = plan_relocation_payload (payload, 1024);
         const protocol::relocation_prepare_t request{
           relocation,
-          target_descriptor.lifecycle_generation,
+          attempt,
           coordinator,
           {target_descriptor.node_routing_id, target_descriptor.lifecycle_generation,
            "target-owner", 9},
@@ -165,15 +168,16 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
         for (std::uint32_t ordinal = 0; ordinal != manifest.chunk_count; ++ordinal) {
             (void) await_task (source.send_relocation_control (
               target_descriptor.node_routing_id,
-              make_relocation_state_chunk (relocation, target_descriptor.lifecycle_generation,
-                                           coordinator, object, payload, ordinal, 1024)));
+              make_relocation_state_chunk (relocation, attempt, coordinator, object, payload,
+                                           ordinal, 1024)));
         }
         (void) pump_until ([&] { return ready.await_ready (); }, 5s);
         const auto &response = ready.result ();
         return std::pair{object, response && response.value ().ready.has_value ()};
     };
     const auto record = [&] (const protocol::relocation_object_t &object,
-                             protocol::relocation_id_t relocation, std::uint64_t operation) {
+                             protocol::relocation_id_t relocation, std::uint64_t operation,
+                             std::uint64_t attempt = 0) {
         protocol::frozen_application_record_t accepted;
         accepted.kind = protocol::frozen_record_kind_t::actor_send;
         accepted.source_kind = protocol::frozen_source_kind_t::node;
@@ -189,24 +193,24 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
               return parts;
           }())};
         return protocol::relocation_data_t{
-          relocation,  target_descriptor.lifecycle_generation,
+          relocation,  attempt == 0 ? target_descriptor.lifecycle_generation : attempt,
           coordinator, protocol::relocation_role_t::source,
           object,      protocol::encode_frozen_application_record (accepted)};
     };
-    const auto cutover = [&] (const protocol::relocation_object_t &object,
-                              protocol::relocation_id_t relocation,
-                              const std::vector<protocol::relocation_data_t> &batch) {
-        relocation_crc32c_accumulator_t checksum;
-        for (const auto &data : batch)
-            checksum.update (protocol::encode_relocation_control (data));
-        protocol::relocation_cutover_t value{relocation, target_descriptor.lifecycle_generation,
-                                             coordinator, protocol::relocation_role_t::source,
-                                             object};
-        value.boundary_record_count = batch.size ();
-        value.boundary_checksum_crc32c = checksum.value ();
-        (void) await_task (
-          source.send_relocation_control (target_descriptor.node_routing_id, value));
-    };
+    const auto cutover =
+      [&] (const protocol::relocation_object_t &object, protocol::relocation_id_t relocation,
+           const std::vector<protocol::relocation_data_t> &batch, std::uint64_t attempt = 0) {
+          relocation_crc32c_accumulator_t checksum;
+          for (const auto &data : batch)
+              checksum.update (protocol::encode_relocation_control (data));
+          protocol::relocation_cutover_t value{
+            relocation, attempt == 0 ? target_descriptor.lifecycle_generation : attempt,
+            coordinator, protocol::relocation_role_t::source, object};
+          value.boundary_record_count = batch.size ();
+          value.boundary_checksum_crc32c = checksum.value ();
+          (void) await_task (
+            source.send_relocation_control (target_descriptor.node_routing_id, value));
+      };
     const auto publishes = [&] {
         std::lock_guard lock (authority->mutex);
         return authority->publish_count;
@@ -280,6 +284,31 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
         std::lock_guard lock (delivered_mutex);
         test.require (delivered == std::vector<std::uint64_t>{41, 41, 77},
                       "batch retransmission must execute once, followed by late ingress");
+    }
+
+    const protocol::relocation_id_t retry_relocation{0x71, 0x04};
+    const auto [older, older_ready] = prepare ("cutover-retry", retry_relocation, 1);
+    const auto [newer, newer_ready] = prepare ("cutover-retry", retry_relocation, 2);
+    const auto old_record = record (older, retry_relocation, 81, 1);
+    const auto new_record = record (newer, retry_relocation, 82, 2);
+    const auto before_retry = publishes ();
+    (void) await_task (
+      source.send_relocation_control (target_descriptor.node_routing_id, old_record));
+    cutover (older, retry_relocation, {old_record}, 1);
+    (void) await_task (
+      source.send_relocation_control (target_descriptor.node_routing_id, new_record));
+    cutover (newer, retry_relocation, {new_record}, 2);
+    const auto retried = pump_until (
+      [&] {
+          std::lock_guard lock (delivered_mutex);
+          return delivered.size () >= 4;
+      },
+      3s);
+    {
+        std::lock_guard lock (delivered_mutex);
+        test.require (older_ready && newer_ready && retried && publishes () == before_retry + 1
+                        && delivered == std::vector<std::uint64_t>{41, 41, 77, 82},
+                      "late CUTOVER must leave only attempt two eligible to publish and dispatch");
     }
 
     // FW22: an indeterminate CAS is resubmitted with no count or timer while

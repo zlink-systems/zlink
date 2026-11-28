@@ -57,6 +57,31 @@ TEST (ZLinkFrameworkLocationsRedis, AggregateReadKeepsSourceVersionUntilCommit)
     zlink::framework::test::aggregate_read_keeps_source_version_until_commit (provider, bytes);
 }
 
+TEST (ZLinkFrameworkLocationsRedis, TerminalInventoryCleanupResumesBeforeDeletingRoot)
+{
+    auto options = find_redis_options ();
+    if (!options)
+        GTEST_SKIP () << "Redis is not reachable at 127.0.0.1:6379; set ZLINK_REDIS_TEST_ENDPOINT";
+    const auto base_prefix = options->key_prefix;
+    for (const bool interrupt_abort : {false, true}) {
+        SCOPED_TRACE (interrupt_abort ? "aborted" : "committed");
+        options->key_prefix = base_prefix + (interrupt_abort ? ":aborted" : ":committed");
+        redis_location_store_t provider (*options);
+        sw::redis::Redis raw (zlink::framework::redis::detail::normalize_connection_string (
+          options->connection_string));
+        zlink::framework::test::scope_exit_t cleanup ([&] {
+            EXPECT_NO_THROW ({
+                std::vector<std::string> keys;
+                raw.keys (options->key_prefix + ":*", std::back_inserter (keys));
+                if (!keys.empty ())
+                    raw.del (keys.begin (), keys.end ());
+            });
+        });
+        zlink::framework::test::aggregate_read_keeps_source_version_until_commit (
+          provider, bytes, nullptr, interrupt_abort, true);
+    }
+}
+
 TEST (ZLinkFrameworkLocationsRedis, PublicTypesImplementOnlyTheOpaqueStoreContracts)
 {
     static_assert (std::is_base_of_v<location_store_t, redis_location_store_t>);
