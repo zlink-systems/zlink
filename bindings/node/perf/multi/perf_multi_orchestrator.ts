@@ -523,11 +523,7 @@ function childEnv(args, component) {
   }
   env.PERF_MULTI_CONNECT_READY_TIMEOUT_MS =
     String(resolveMultiConnectReadyTimeoutMs(args.connectReadyTimeoutMs));
-  env.PERF_MULTI_MONITOR_HWM = String(
-    Number.isSafeInteger(args.monitorHwm) && args.monitorHwm >= 0
-      ? args.monitorHwm
-      : resolveMultiMonitorHwm(env)
-  );
+  env.PERF_MULTI_MONITOR_HWM_BYTES = String(resolveMultiMonitorHwm(env, args.monitorHwm));
   if (Number.isFinite(args.connectConcurrency)) {
     env.PERF_MULTI_CONNECT_CONCURRENCY = String(args.connectConcurrency);
   }
@@ -620,7 +616,8 @@ function resolveMultiTimeoutSeconds(args) {
   const duration = Math.max(Number(args.duration) || 0, 1);
   const msgSize = Math.max(Number(args.msgSize) || 0, 64);
   if (args.pattern === 'STREAM') {
-    return Math.max(45, Math.floor(duration * 3) + 20);
+    const latencyDuration = Number(args.latencyDuration ?? duration);
+    return Math.max(45, Math.floor(duration * 3) + 2 * latencyDuration + 20);
   }
   if ((args.transport === 'tls' || args.transport === 'wss') && msgSize >= 131072) {
     return Math.max(90, Math.floor(duration * 6) + 30);

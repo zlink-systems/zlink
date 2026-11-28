@@ -234,6 +234,7 @@ SocketMonitor.Recv *SocketMonitor, RecvFlags) (*MonitorEvent, error)
 SocketMonitor.Status *SocketMonitor) (*MonitorStatus, error)
 StreamSocket.Bind *StreamSocket, string) error
 StreamSocket.Close *StreamSocket) error
+StreamSocket.CommonOptions *StreamSocket) *CommonSocketOptions
 StreamSocket.DisconnectRID *StreamSocket, RoutingID) error
 StreamSocket.LastEndpoint *StreamSocket) (string, error)
 StreamSocket.Notify *StreamSocket) (bool, error)

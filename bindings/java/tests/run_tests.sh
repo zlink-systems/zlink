@@ -123,6 +123,17 @@ else
   printf '[LOG] %s\n' "${sample_log}"
 fi
 
+# Multi perf runner option parsing (no measurement).
+for perf_test in "${ROOT_DIR}"/perf/multi/tests/*.sh; do
+  printf '[RUN] %s\n' "${perf_test#"${ROOT_DIR}/"}"
+  if bash "${perf_test}"; then
+    printf '[PASS] %s\n' "${perf_test#"${ROOT_DIR}/"}"
+  else
+    printf '[FAIL] %s\n' "${perf_test#"${ROOT_DIR}/"}"
+    failures=$((failures + 1))
+  fi
+done
+
 if (( failures > 0 )); then
   printf 'Test summary: %d failed\n' "$failures"
   exit 1

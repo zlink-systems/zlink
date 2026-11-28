@@ -34,6 +34,7 @@
     X(_entries_by_id) \
     X(_error) \
     X(_finish_rejected_submit_locked) \
+    X(_abort_rejected_submit) \
     X(_handle) \
     X(_index) \
     X(_keepalive) \
@@ -1344,15 +1345,23 @@ static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
         PyObject *projection = hot_call (owner, hp__finish_rejected_submit_locked,
                                          "OiiKi", entry, rc, err, completion_id,
                                          initial_attempt);
-        if (!projection)
-            goto done;
-        PyObject *projected_outcome, *retry;
-        if (PyArg_ParseTuple (projection, "OO", &projected_outcome, &retry)) {
-            resubmit = PyObject_IsTrue (retry);
-            if (resubmit >= 0)
-                outcome = Py_NewRef (projected_outcome);
+        if (projection) {
+            PyObject *projected_outcome, *retry;
+            if (PyArg_ParseTuple (projection, "OO", &projected_outcome, &retry)) {
+                resubmit = PyObject_IsTrue (retry);
+                if (resubmit >= 0)
+                    outcome = Py_NewRef (projected_outcome);
+            }
+            Py_DECREF (projection);
         }
-        Py_DECREF (projection);
+        if (!outcome) {
+            PyObject *type, *error, *tb;
+            PyErr_Fetch (&type, &error, &tb);
+            PyObject *aborted = hot_call (owner, hp__abort_rejected_submit, "(O)", entry);
+            Py_XDECREF (aborted);
+            PyErr_Restore (type, error, tb);
+            goto done;
+        }
     } else if (completion_id) {
         PyObject *published =
           hot_call (owner, hp__publish_writable_locked, "OK", entry, completion_id);
