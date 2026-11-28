@@ -258,94 +258,173 @@ pub fn run_client(config: ReqRepConfig) {
 
     let request_timeout = common::resolve_multi_reqrep_timeout();
     let payload_size = args.msg_size.max(common::HEADER_SIZE);
-    let active_deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
-    let mut sequences = vec![1u64; sockets.len()];
-    let mut requests = common::ConcurrentTasks::<RequestTask>::new(0);
-    let mut admissions = common::ConcurrentTasks::<AdmissionTask>::new(sockets.len());
-    let mut latency = common::LatencyStats::new();
-
-    // Submit once per socket per turn, then progress both admission and reply
-    // completions. This preserves continuous load without starving the poller.
-    while Instant::now() < active_deadline {
-        let mut progressed = false;
-        for (socket_index, socket) in sockets.iter().enumerate() {
-            if admissions.is_pending(socket_index) {
-                continue;
-            }
-            let sequence = sequences[socket_index];
-            sequences[socket_index] = sequence.wrapping_add(1);
-            let mut payload = Message::with_size(payload_size).expect("request payload");
-            common::encode_header(
-                payload.data_mut(),
-                common::PHASE_ACTIVE,
-                args.msg_size as u32,
-                sequence,
-            );
-            let submission = socket
-                .submit_request(payload, request_timeout)
-                .unwrap_or_else(|error| panic!("request submit failed: {error}"));
-            let result = submission.result;
-            requests.push(Box::pin(
-                async move { (socket_index, submission.reply.await) },
+    let active_seconds = settings.duration_seconds;
+    let latency_seconds = common::latency_seconds(active_seconds);
+    let mut active_received = 0;
+    let mut active_sends = 0;
+    let mut schedule = None;
+    let mut pending_due = vec![0; sockets.len()];
+    let result = loop {
+        let paced = active_received > 0;
+        let end = common::now_ns()
+            + if paced {
+                common::SETTLE_NS + latency_seconds * common::SECOND_NS
+            } else {
+                active_seconds * common::SECOND_NS
+            };
+        if paced {
+            schedule = Some(common::Schedule::new(
+                end - common::SETTLE_NS - latency_seconds * common::SECOND_NS,
+                active_received,
+                active_seconds,
             ));
-            progressed = true;
-            if result == SubmitResult::Backpressured {
-                admissions.insert(socket_index, submission.admitted);
+        }
+        let mut sender = 0;
+        let mut sequences = vec![1u64; sockets.len()];
+        let mut requests = common::ConcurrentTasks::<RequestTask>::new(0);
+        let mut admissions = common::ConcurrentTasks::<AdmissionTask>::new(sockets.len());
+        let mut latency = common::LatencyStats::new();
+        let mut paced_received = 0;
+        let sample_start = schedule.as_ref().map(|s| s.epoch + common::SETTLE_NS);
+
+        // Submit once per socket per turn, then progress both admission and reply
+        // completions. This preserves continuous load without starving the poller.
+        while common::now_ns() < end {
+            let mut progressed = false;
+            for _ in 0..sockets.len() {
+                let now = common::now_ns();
+                if now >= end || schedule.as_ref().is_some_and(|schedule| !schedule.due(now)) {
+                    break;
+                }
+                let socket_index = sender;
+                sender = (sender + 1) % sockets.len();
+                let socket = &sockets[socket_index];
+                if admissions.is_pending(socket_index) {
+                    continue;
+                }
+                let sequence = sequences[socket_index];
+                sequences[socket_index] = sequence.wrapping_add(1);
+                let mut payload = Message::with_size(payload_size).expect("request payload");
+                common::encode_header(
+                    payload.data_mut(),
+                    match &schedule {
+                        Some(schedule) if now < schedule.epoch + common::SETTLE_NS => {
+                            common::PHASE_WARMUP
+                        }
+                        Some(_) => common::PHASE_LATENCY,
+                        None => common::PHASE_ACTIVE,
+                    },
+                    args.msg_size as u32,
+                    sequence,
+                );
+                let due = schedule.as_mut().map_or(0, |schedule| schedule.reserve());
+                let submission = socket
+                    .submit_request(payload, request_timeout)
+                    .unwrap_or_else(|error| panic!("request submit failed: {error}"));
+                let result = submission.result;
+                requests.push(Box::pin(
+                    async move { (socket_index, submission.reply.await) },
+                ));
+                progressed = true;
+                if result == SubmitResult::Backpressured {
+                    pending_due[socket_index] = due;
+                    admissions.insert(socket_index, submission.admitted);
+                } else if let Some(schedule) = &mut schedule {
+                    schedule.admit(due, common::now_ns());
+                } else if common::now_ns() < end {
+                    active_sends += 1;
+                }
+            }
+
+            for (index, result) in admissions.poll_ready() {
+                result.unwrap_or_else(|error| panic!("request admission failed: {error}"));
+                let now = common::now_ns();
+                if let Some(schedule) = &mut schedule {
+                    schedule.admit(pending_due[index], now);
+                } else if now < end {
+                    active_sends += 1;
+                }
+                progressed = true;
+            }
+            let ready = requests.poll_ready();
+            progressed |= !ready.is_empty();
+            for (_, (_, completion)) in ready {
+                paced_received +=
+                    process_completion(completion, args.msg_size, end, sample_start, &mut latency);
+            }
+            if common::now_ns() < end {
+                let wait_ms = if progressed {
+                    0
+                } else {
+                    let now = common::now_ns();
+                    let until = schedule
+                        .as_ref()
+                        .filter(|schedule| !schedule.due(now))
+                        .map_or(end, |schedule| end.min(schedule.next()));
+                    common::wait_ms(now, until)
+                };
+                completion_poller
+                    .wait(&mut completion_events, wait_ms)
+                    .expect("request completion wait");
             }
         }
 
-        for (_, result) in admissions.poll_ready() {
-            result.unwrap_or_else(|error| panic!("request admission failed: {error}"));
-            progressed = true;
+        let drain_deadline =
+            Instant::now() + common::resolve_multi_reqrep_drain_timeout(request_timeout);
+        while (requests.any_pending() || admissions.any_pending())
+            && Instant::now() < drain_deadline
+        {
+            let admission_ready = admissions.poll_ready();
+            for (index, result) in &admission_ready {
+                result
+                    .as_ref()
+                    .unwrap_or_else(|error| panic!("request admission failed: {error}"));
+                if let Some(schedule) = &mut schedule {
+                    schedule.admit(pending_due[*index], common::now_ns());
+                }
+            }
+            let ready = requests.poll_ready();
+            let progressed = !ready.is_empty() || !admission_ready.is_empty();
+            for (_, (_, completion)) in ready {
+                paced_received +=
+                    process_completion(completion, args.msg_size, end, sample_start, &mut latency);
+            }
+            if requests.any_pending() || admissions.any_pending() {
+                let wait_ms = if progressed {
+                    0
+                } else {
+                    common::poll_timeout_until(drain_deadline)
+                };
+                completion_poller
+                    .wait(&mut completion_events, wait_ms)
+                    .expect("request completion drain wait");
+            }
         }
-        let ready = requests.poll_ready();
-        progressed |= !ready.is_empty();
-        for (_, (_, completion)) in ready {
-            process_completion(completion, args.msg_size, active_deadline, &mut latency);
+        for (_, (_, completion)) in requests.poll_ready() {
+            paced_received +=
+                process_completion(completion, args.msg_size, end, sample_start, &mut latency);
         }
-        if Instant::now() < active_deadline {
-            let wait_ms = if progressed {
-                0
-            } else {
-                common::poll_timeout_until(active_deadline)
-            };
-            completion_poller
-                .wait(&mut completion_events, wait_ms)
-                .expect("request completion wait");
-        }
-    }
+        assert!(
+            !requests.any_pending() && !admissions.any_pending(),
+            "request completion drain timed out"
+        );
 
-    let drain_deadline =
-        Instant::now() + common::resolve_multi_reqrep_drain_timeout(request_timeout);
-    while (requests.any_pending() || admissions.any_pending()) && Instant::now() < drain_deadline {
-        let admission_ready = admissions.poll_ready();
-        for (_, result) in &admission_ready {
-            result.unwrap_or_else(|error| panic!("request admission failed: {error}"));
+        let mut result = latency.finish();
+        if let Some(schedule) = &schedule {
+            schedule.print(
+                config.pattern,
+                args.msg_size,
+                (active_sends, active_received, active_seconds),
+                paced_received,
+                latency_seconds,
+                None,
+            );
+            result.count = active_received;
+            break result;
         }
-        let ready = requests.poll_ready();
-        let progressed = !ready.is_empty() || !admission_ready.is_empty();
-        for (_, (_, completion)) in ready {
-            process_completion(completion, args.msg_size, active_deadline, &mut latency);
-        }
-        if requests.any_pending() || admissions.any_pending() {
-            let wait_ms = if progressed {
-                0
-            } else {
-                common::poll_timeout_until(drain_deadline)
-            };
-            completion_poller
-                .wait(&mut completion_events, wait_ms)
-                .expect("request completion drain wait");
-        }
-    }
-    for (_, (_, completion)) in requests.poll_ready() {
-        process_completion(completion, args.msg_size, active_deadline, &mut latency);
-    }
-    assert!(
-        !requests.any_pending() && !admissions.any_pending(),
-        "request completion drain timed out"
-    );
-
+        active_received = result.count;
+        assert!(active_received > 0, "no active replies");
+    };
     if let Some(socket) = sockets.first() {
         match socket {
             RequestClientSocket::Dealer(socket) => common::print_multi_auto_hwm_detail(
@@ -370,7 +449,7 @@ pub fn run_client(config: ReqRepConfig) {
         &args.transport,
         args.msg_size,
         settings.duration_seconds,
-        &latency.finish(),
+        &result,
     );
     // PERF_MULTI_TEST_POLICY.md:379,386-388 / PERF_POLICY.md:483-486 - emit
     // CLIENT_DONE, keep the request completion target sockets open, and close
@@ -435,19 +514,26 @@ impl_client_common_options!(DealerSocket, RouterSocket);
 fn process_completion(
     outcome: Result<Vec<Message>, ZlinkError>,
     message_size: usize,
-    active_deadline: Instant,
+    end: u64,
+    sample_start: Option<u64>,
     latency: &mut common::LatencyStats,
-) {
+) -> u64 {
     match outcome {
         Ok(parts) => {
-            if Instant::now() < active_deadline {
-                let payload = common::message_payload(&parts);
-                common::record_active_rtt_latency(payload, message_size, latency);
-            }
+            let observed = common::now_ns();
+            let payload = common::message_payload(&parts);
+            u64::from(common::record_measurement_receive(
+                payload,
+                message_size,
+                observed,
+                end,
+                sample_start,
+                2.0,
+                latency,
+            ))
         }
-        // Request-domain completion failures are terminal outcomes; keep
-        // driving the active window after accounting for them.
-        Err(ZlinkError::Request(_)) => {}
+        // Request-domain failures are terminal outcomes.
+        Err(ZlinkError::Request(_)) => 0,
         Err(error) => panic!("request failed: {error}"),
     }
 }

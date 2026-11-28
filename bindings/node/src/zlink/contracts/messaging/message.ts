@@ -13,6 +13,8 @@ const EMPTY_BUFFER = Buffer.alloc(0);
 const MESSAGE_WRAPPER_POOL_CAPACITY = 64;
 const messageWrapperPool: Message[] = [];
 
+type MessageLifecycle = 'open' | 'consumed' | 'released';
+
 type MutableMessageState = {
   _buffer: Buffer | undefined;
   _refCount: number;
@@ -20,7 +22,7 @@ type MutableMessageState = {
   _metadata: Readonly<Map<number, Buffer>>;
   _nativeMessage?: unknown;
   _nativeReadOnly: boolean;
-  _released: boolean;
+  _lifecycle: MessageLifecycle;
 };
 
 /** @internal */
@@ -81,10 +83,9 @@ function normalizeBufferLike(value: BufferLike, label = 'value'): Buffer {
  * A message payload owned by this wrapper. The payload can use a JavaScript
  * Buffer or native storage. A successful synchronous submit consumes the
  * message. Managed async SEND also consumes it after taking a back-pressure
- * snapshot, which can happen before the admission stage resolves. `close`
- * releases it.
- * Do not use a reference after ownership transfers or after `close`, because
- * the runtime may reuse the returned wrapper identity.
+ * snapshot, which can happen before the admission stage resolves. A consumed
+ * message reads as empty and cannot be submitted again. `close` returns the
+ * wrapper to the runtime, which may reuse its identity.
  */
 export class Message {
   private _buffer!: Buffer | undefined;
@@ -94,8 +95,7 @@ export class Message {
   private _nativeMessage?: unknown;
   /** True when a received frame remains movable until data() exposes it. */
   private _nativeReadOnly!: boolean;
-  /** True after ownership has ended and this facade has entered the pool. */
-  private _released!: boolean;
+  private _lifecycle!: MessageLifecycle;
 
   /**
    * Create a message holding an independent copy of `buffer` (a buffer-like
@@ -141,6 +141,9 @@ export class Message {
 
   /** Return a new message sharing this native payload by reference count. */
   copy(): Message {
+    if (!isMessageOpen(this)) {
+      return Message.allocate(0);
+    }
     const operations = requireMessageNativeOperations();
     const nativeMessage = operations.copy(this.ensureNativeMessage());
     const state = this as unknown as MutableMessageState;
@@ -166,7 +169,7 @@ export class Message {
     }
     const sourceState = this as unknown as MutableMessageState;
     const destinationState = destination as unknown as MutableMessageState;
-    if (sourceState._released || destinationState._released) {
+    if (!isMessageOpen(this) || !isMessageOpen(destination)) {
       throw new Error('cannot move a closed Message');
     }
 
@@ -292,13 +295,13 @@ export class Message {
 
   /** Release native storage and return this wrapper; do not use it afterward. */
   close(): void {
-    if (this._released) {
+    if (this._lifecycle === 'released') {
       return;
     }
-    if (this._nativeMessage !== undefined) {
-      requireMessageNativeOperations().close(this._nativeMessage);
+    endMessageOwnership(this, 'released');
+    if (messageWrapperPool.length < MESSAGE_WRAPPER_POOL_CAPACITY) {
+      messageWrapperPool.push(this);
     }
-    releaseMessageWrapper(this);
   }
 
   /** Return the payload decoded as a UTF-8 string. */
@@ -362,34 +365,35 @@ export function acquireMessageWrapper(
   state._metadata = metadata ?? EMPTY_METADATA;
   state._nativeMessage = nativeMessage;
   state._nativeReadOnly = nativeReadOnly;
-  state._released = false;
+  state._lifecycle = 'open';
   return message;
 }
 
-/** @internal Refill an exclusively owned receive wrapper without pool traffic. */
+/** @internal Refill a live receive wrapper or acquire a replacement. */
 export function refillMessageWrapper(
   message: Message,
-  buffer: Buffer,
-  nativeMessage?: unknown
+  buffer: Buffer
 ): Message {
   const state = message as unknown as MutableMessageState;
-  if (state._nativeMessage !== undefined && state._nativeMessage !== nativeMessage) {
+  if (!isMessageOpen(message)) {
+    return acquireMessageWrapper(buffer);
+  }
+  if (state._nativeMessage !== undefined) {
     requireMessageNativeOperations().close(state._nativeMessage);
   }
   state._buffer = buffer;
   state._refCount = 1;
   state._properties = EMPTY_PROPERTIES;
   state._metadata = EMPTY_METADATA;
-  state._nativeMessage = nativeMessage;
+  state._nativeMessage = undefined;
   state._nativeReadOnly = false;
-  state._released = false;
   return message;
 }
 
-function releaseMessageWrapper(message: Message): void {
+function endMessageOwnership(message: Message, lifecycle: 'consumed' | 'released'): void {
   const state = message as unknown as MutableMessageState;
-  if (state._released) {
-    return;
+  if (state._nativeMessage !== undefined) {
+    requireMessageNativeOperations().close(state._nativeMessage);
   }
   state._buffer = EMPTY_BUFFER;
   state._refCount = 0;
@@ -397,20 +401,13 @@ function releaseMessageWrapper(message: Message): void {
   state._metadata = EMPTY_METADATA;
   state._nativeMessage = undefined;
   state._nativeReadOnly = false;
-  state._released = true;
-  if (messageWrapperPool.length < MESSAGE_WRAPPER_POOL_CAPACITY) {
-    messageWrapperPool.push(message);
-  }
+  state._lifecycle = lifecycle;
 }
 
-function markMessageConsumed(message: Message): void {
+/** @internal True while the caller owns the payload. */
+export function isMessageOpen(message: Message): boolean {
   const state = message as unknown as MutableMessageState;
-  state._buffer = EMPTY_BUFFER;
-  state._refCount = 0;
-  state._properties = EMPTY_PROPERTIES;
-  state._metadata = EMPTY_METADATA;
-  state._nativeMessage = undefined;
-  state._nativeReadOnly = false;
+  return state._lifecycle === 'open';
 }
 
 /** @internal */
@@ -425,16 +422,14 @@ export function hasObservedManagedReceiveData(message: Message): boolean {
   return state._buffer !== undefined
     && state._nativeMessage === undefined
     && state._refCount > 0
-    && !state._released;
+    && isMessageOpen(message);
 }
 
 /** @internal Mark a message whose ownership transferred to an operation empty. */
 export function consumeSubmittedMessage(message: Message): void {
-  const state = message as unknown as MutableMessageState;
-  if (state._nativeMessage !== undefined) {
-    requireMessageNativeOperations().close(state._nativeMessage);
+  if (isMessageOpen(message)) {
+    endMessageOwnership(message, 'consumed');
   }
-  markMessageConsumed(message);
 }
 
 export type MessageLike = Message | BufferLike;

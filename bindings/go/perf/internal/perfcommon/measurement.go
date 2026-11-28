@@ -17,6 +17,7 @@ const (
 	PhaseWarmup      uint8  = 0
 	PhaseActive      uint8  = 1
 	PhaseCooldown    uint8  = 2
+	PhaseLatency     uint8  = 3
 )
 
 var metricSequence uint64
@@ -116,13 +117,21 @@ func NextMetricSequence() uint64 {
 }
 
 func StampPayloadPhaseAtSequence(payload []byte, phase uint8, nowNs int64, sequence uint64) {
+	stampMetricHeader(payload, len(payload), phase, nowNs, sequence)
+}
+
+func StampPhaseMarker(payload []byte, msgSize int, phase uint8) {
+	stampMetricHeader(payload, msgSize, phase, 0, 0)
+}
+
+func stampMetricHeader(payload []byte, msgSize int, phase uint8, nowNs int64, sequence uint64) {
 	if len(payload) < MetricHeaderSize {
 		Must(&invalidMetricPayloadError{Size: len(payload)})
 	}
 	binary.LittleEndian.PutUint32(payload[0:4], MetricMagic)
 	binary.LittleEndian.PutUint32(payload[4:8], MetricRunID)
 	payload[8] = phase
-	binary.LittleEndian.PutUint32(payload[9:13], uint32(len(payload)))
+	binary.LittleEndian.PutUint32(payload[9:13], uint32(msgSize))
 	binary.LittleEndian.PutUint64(payload[13:21], sequence)
 	binary.LittleEndian.PutUint64(payload[21:29], uint64(nowNs))
 }

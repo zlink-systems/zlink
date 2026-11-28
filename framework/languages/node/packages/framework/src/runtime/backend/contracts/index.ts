@@ -492,6 +492,7 @@ export interface ZLinkBackendMeshNode {
   leaveActor(
     actor: ZLinkBackendActorRef,
     expectedMembershipEpoch: bigint,
+    expectedAuthorityOwnerGeneration: bigint,
     timeoutMs?: number
   ): MeshOperationId;
   setReadyHandler(handler: (readyDomains: number) => number): void;

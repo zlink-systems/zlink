@@ -4,7 +4,6 @@
 mod common;
 
 use std::io::{self, BufRead, Write};
-use std::time::{Duration, Instant};
 use zlink::{DealerSocket, Message, POLLCOMPLETION, PollEvent, Poller, RoutingId, SocketMonitor};
 
 fn main() {
@@ -67,62 +66,55 @@ fn main() {
     }
     let mut poll_events = vec![PollEvent::default(); sockets.len().max(1)];
 
-    let deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
-    let drain_deadline = deadline + common::resolve_multi_send_drain_timeout();
-    let payload_size = args.msg_size.max(common::HEADER_SIZE);
-    let mut sequence = 1u64;
-    let mut tasks = common::ConcurrentTasks::new(sockets.len());
-    while Instant::now() < deadline || (tasks.any_pending() && Instant::now() < drain_deadline) {
-        let mut submitted = false;
-        if Instant::now() < deadline {
-            for (slot, socket) in sockets.iter().enumerate() {
-                if tasks.is_pending(slot) {
-                    continue;
-                }
-                while Instant::now() < deadline {
-                    let mut msg = Message::with_size(payload_size).expect("msg");
-                    common::encode_header(
-                        msg.data_mut(),
-                        common::PHASE_ACTIVE,
-                        args.msg_size as u32,
-                        sequence,
-                    );
-                    sequence += 1;
-                    let submission = perf_submit_measurement_async!(socket.send(), msg)
-                        .unwrap_or_else(|err| panic!("send failed: {err}"));
-                    submitted = true;
-                    if submission.result == zlink::SubmitResult::Backpressured {
-                        tasks.insert(slot, submission.admitted);
-                        break;
-                    }
-                }
-            }
-        }
-        let ready = tasks.poll_ready();
-        let progressed = submitted || !ready.is_empty();
-        for (_, result) in &ready {
-            if let Err(err) = result {
-                panic!("send failed: {err}");
-            }
-        }
-        if Instant::now() >= deadline && !tasks.any_pending() {
-            break;
-        }
-        let wait_deadline = if Instant::now() < deadline {
-            deadline
-        } else {
-            drain_deadline
-        };
-        let wait_ms = if progressed {
-            0
-        } else {
-            common::poll_timeout_until(wait_deadline)
-        };
-        poller
-            .wait(&mut poll_events, wait_ms)
-            .unwrap_or_else(|err| panic!("poller wait failed: {err}"));
-    }
-    assert!(!tasks.any_pending(), "send admission drain timed out");
+    let active_seconds = settings.duration_seconds;
+    let latency_seconds = common::latency_seconds(active_seconds);
+    let drain_ns = common::resolve_multi_send_drain_timeout().as_nanos() as u64;
+    let submit = |slot: usize, message| {
+        perf_submit_measurement_async!(sockets[slot].send(), message).expect("send")
+    };
+    let mut unused = common::LatencyStats::new();
+    let (active_sends, _) = common::run_send_phase(
+        &args,
+        &poller,
+        sockets.len(),
+        drain_ns,
+        common::SendPhase {
+            echo: false,
+            end: common::now_ns() + active_seconds * common::SECOND_NS,
+            schedule: None,
+        },
+        submit,
+        |_, _| false,
+        &mut unused,
+    );
+    send_stop(&sockets, &poller, &mut poll_events);
+    let received = common::read_phase_count("PHASE_PACED", args.msg_size);
+    let mut schedule = common::Schedule::new(common::now_ns(), received, active_seconds);
+    let end = schedule.epoch + common::SETTLE_NS + latency_seconds * common::SECOND_NS;
+    common::run_send_phase(
+        &args,
+        &poller,
+        sockets.len(),
+        drain_ns,
+        common::SendPhase {
+            echo: false,
+            end,
+            schedule: Some(&mut schedule),
+        },
+        submit,
+        |_, _| false,
+        &mut unused,
+    );
+    send_stop(&sockets, &poller, &mut poll_events);
+    let paced_received = common::read_phase_count("PHASE_COMPLETE", args.msg_size);
+    schedule.print(
+        "DEALER_DEALER",
+        args.msg_size,
+        (active_sends, received, active_seconds),
+        paced_received,
+        latency_seconds,
+        None,
+    );
     if let Some(socket) = sockets.first() {
         common::print_multi_auto_hwm_detail(
             socket,
@@ -132,6 +124,12 @@ fn main() {
             "dealer",
         );
     }
+    println!("CLIENT_DONE,{}", args.msg_size);
+    io::stdout().flush().ok();
+}
+
+fn send_stop(sockets: &[DealerSocket], poller: &Poller, poll_events: &mut [PollEvent]) {
+    let mut tasks = common::ConcurrentTasks::new(sockets.len());
     for (slot, socket) in sockets.iter().enumerate() {
         let submission = socket
             .send()
@@ -147,11 +145,8 @@ fn main() {
         }
         if tasks.any_pending() {
             poller
-                .wait(&mut poll_events, -1)
+                .wait(poll_events, -1)
                 .unwrap_or_else(|err| panic!("poller wait failed: {err}"));
         }
     }
-
-    println!("CLIENT_DONE,{}", args.msg_size);
-    io::stdout().flush().ok();
 }

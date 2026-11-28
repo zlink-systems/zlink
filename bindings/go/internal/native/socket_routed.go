@@ -24,6 +24,10 @@ func (s *routedSocket) reply(rid RoutingID, token ReplyToken, parts ...*Message)
 	if token.owner == nil || token.value == 0 || token.owner != s.replyOwner {
 		return newSubmitError(SubmitInvalidArgument, int(C.EINVAL))
 	}
+	return s.submitReply(rid, token.value, parts...)
+}
+
+func (s *socketCore) submitReply(rid RoutingID, token uint64, parts ...*Message) error {
 	handle := s.raw()
 	if handle == nil {
 		return newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
@@ -31,7 +35,7 @@ func (s *routedSocket) reply(rid RoutingID, token ReplyToken, parts ...*Message)
 	target := routingIDToC(rid)
 	return submitMultipartFromClones(parts, true, func(native *C.zlink_msg_t, count C.size_t) error {
 		rc79, errno79 := C.zlink_reply(
-			handle, &target, C.zlink_reply_token_t(token.value), native, count)
+			handle, &target, C.zlink_reply_token_t(token), native, count)
 		return submitErrorFromCall(rc79, errno79)
 	})
 }
@@ -75,18 +79,10 @@ func (s *routedSocket) replaceRoutedReceived(
 	routeGeneration uint64,
 ) {
 	var token ReplyToken
-	var reply func([]*Message) error
 	if tokenValue != 0 {
 		token = ReplyToken{owner: s.replyOwner, value: tokenValue}
-		reply = func(parts []*Message) error { return s.reply(routingID, token, parts...) }
 	}
-	var send func(context.Context, []sendBuilderPart) (SendSubmission, error)
-	if routingID.Size() > 0 {
-		send = func(ctx context.Context, builderParts []sendBuilderPart) (SendSubmission, error) {
-			return submitManagedSend(ctx, s.socketCore, &routingID, builderParts)
-		}
-	}
-	out.replace(routingID, parts, token, reply, send, routeGeneration)
+	out.replace(routingID, parts, token, s.socketCore, routeGeneration)
 }
 
 func (s *routedSocket) Recv(out *Received, flags RecvFlags) (bool, error) {

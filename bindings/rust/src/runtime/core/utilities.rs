@@ -1,12 +1,16 @@
-use crate::contracts::core::utilities::{AtomicCounter, Stopwatch, Thread};
+use crate::contracts::eventing::poller::Pollable;
+use crate::internal::{AtomicCounterStorage, CoreUtilities, StopwatchStorage, ThreadStorage};
+use crate::runtime::errors::native_errors::check_config_rc;
+use crate::runtime::eventing::poller::pollable_handle;
+
 use crate::contracts::errors::errors::{ConfigError, ConfigResult};
 use crate::runtime::native::ffi;
-use std::ffi::c_void;
+use std::ffi::{CStr, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::ptr;
 
-impl Stopwatch {
-    pub fn start() -> Result<Self, ConfigError> {
+impl StopwatchStorage {
+    pub(crate) fn start() -> Result<Self, ConfigError> {
         let handle = unsafe { ffi::zlink_stopwatch_start() };
         if handle.is_null() {
             return Err(ConfigError::new(ConfigResult::InvalidHandle, unsafe {
@@ -16,14 +20,14 @@ impl Stopwatch {
         Ok(Self { handle })
     }
 
-    pub fn intermediate(&self) -> u64 {
+    pub(crate) fn intermediate(&self) -> u64 {
         if self.handle.is_null() {
             return 0;
         }
         unsafe { ffi::zlink_stopwatch_intermediate(self.handle) as u64 }
     }
 
-    pub fn stop(&mut self) -> u64 {
+    pub(crate) fn stop(&mut self) -> u64 {
         if self.handle.is_null() {
             return 0;
         }
@@ -32,19 +36,19 @@ impl Stopwatch {
         unsafe { ffi::zlink_stopwatch_stop(handle) as u64 }
     }
 
-    pub fn close(&mut self) {
+    pub(crate) fn close(&mut self) {
         let _ = self.stop();
     }
 }
 
-impl Drop for Stopwatch {
+impl Drop for StopwatchStorage {
     fn drop(&mut self) {
         self.close();
     }
 }
 
-impl AtomicCounter {
-    pub fn new() -> Result<Self, ConfigError> {
+impl AtomicCounterStorage {
+    pub(crate) fn new() -> Result<Self, ConfigError> {
         let handle = unsafe { ffi::zlink_atomic_counter_new() };
         if handle.is_null() {
             return Err(ConfigError::new(ConfigResult::InvalidHandle, unsafe {
@@ -54,35 +58,35 @@ impl AtomicCounter {
         Ok(Self { handle })
     }
 
-    pub fn set(&self, value: i32) {
+    pub(crate) fn set(&self, value: i32) {
         if self.handle.is_null() {
             return;
         }
         unsafe { ffi::zlink_atomic_counter_set(self.handle, value) };
     }
 
-    pub fn increment(&self) -> i32 {
+    pub(crate) fn increment(&self) -> i32 {
         if self.handle.is_null() {
             return 0;
         }
         unsafe { ffi::zlink_atomic_counter_inc(self.handle) }
     }
 
-    pub fn decrement(&self) -> i32 {
+    pub(crate) fn decrement(&self) -> i32 {
         if self.handle.is_null() {
             return 0;
         }
         unsafe { ffi::zlink_atomic_counter_dec(self.handle) }
     }
 
-    pub fn value(&self) -> i32 {
+    pub(crate) fn value(&self) -> i32 {
         if self.handle.is_null() {
             return 0;
         }
         unsafe { ffi::zlink_atomic_counter_value(self.handle) }
     }
 
-    pub fn close(&mut self) {
+    pub(crate) fn close(&mut self) {
         if self.handle.is_null() {
             return;
         }
@@ -92,7 +96,7 @@ impl AtomicCounter {
     }
 }
 
-impl Drop for AtomicCounter {
+impl Drop for AtomicCounterStorage {
     fn drop(&mut self) {
         self.close();
     }
@@ -113,8 +117,8 @@ extern "C" fn thread_entry(userdata: *mut c_void) {
     }
 }
 
-impl Thread {
-    pub fn start<F>(task: F) -> Result<Self, ConfigError>
+impl ThreadStorage {
+    pub(crate) fn start<F>(task: F) -> Result<Self, ConfigError>
     where
         F: FnOnce() + Send + 'static,
     {
@@ -137,7 +141,7 @@ impl Thread {
         })
     }
 
-    pub fn join(&mut self) {
+    pub(crate) fn join(&mut self) {
         if self.handle.is_null() {
             return;
         }
@@ -151,7 +155,7 @@ impl Thread {
         }
     }
 
-    pub fn close(&mut self) {
+    pub(crate) fn close(&mut self) {
         if self.handle.is_null() {
             return;
         }
@@ -159,7 +163,7 @@ impl Thread {
     }
 }
 
-impl Drop for Thread {
+impl Drop for ThreadStorage {
     fn drop(&mut self) {
         self.close();
         if !self.state.is_null() {
@@ -167,6 +171,53 @@ impl Drop for Thread {
                 drop(Box::from_raw(self.state.cast::<ThreadState>()));
             }
             self.state = ptr::null_mut();
+        }
+    }
+}
+
+impl CoreUtilities {
+    pub(crate) fn proxy(
+        frontend: &dyn Pollable,
+        backend: &dyn Pollable,
+        capture: Option<&dyn Pollable>,
+    ) -> Result<(), ConfigError> {
+        let frontend = pollable_handle(frontend)?;
+        let backend = pollable_handle(backend)?;
+        let capture = capture
+            .map(pollable_handle)
+            .transpose()?
+            .unwrap_or(std::ptr::null_mut());
+        check_config_rc(unsafe { ffi::zlink_proxy(frontend, backend, capture) })
+    }
+
+    pub(crate) fn sleep(seconds: i32) {
+        unsafe {
+            ffi::zlink_sleep(seconds);
+        }
+    }
+
+    /// Return the runtime library version as `(major, minor, patch)`.
+    pub(crate) fn version() -> (i32, i32, i32) {
+        let (mut major, mut minor, mut patch) = (0i32, 0i32, 0i32);
+        unsafe {
+            ffi::zlink_version(&mut major, &mut minor, &mut patch);
+        }
+        (major, minor, patch)
+    }
+
+    /// Check whether the library supports a given capability (e.g. `"ipc"`, `"tls"`).
+    pub(crate) fn has(capability: &str) -> bool {
+        let c = std::ffi::CString::new(capability).unwrap_or_default();
+        unsafe { ffi::zlink_has(c.as_ptr()) }
+    }
+
+    /// Returns the native error text for an errno value.
+    pub(crate) fn strerror(errnum: i32) -> &'static str {
+        let ptr = unsafe { ffi::zlink_strerror(errnum) };
+        if ptr.is_null() {
+            ""
+        } else {
+            unsafe { CStr::from_ptr(ptr) }.to_str().unwrap_or("")
         }
     }
 }
