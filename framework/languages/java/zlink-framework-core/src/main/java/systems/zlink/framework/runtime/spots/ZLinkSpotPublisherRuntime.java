@@ -9,6 +9,7 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
@@ -54,6 +55,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     final ThreadPoolExecutor multicastExecutor;
     final Function<Class<?>, String> contentTypeResolver;
     private final ZLinkMessageFlowTracer flow;
+    private final ZLinkTelemetryOwner.Host telemetryHost;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private volatile Map<String, ZLinkInternalSpotNode> nodesByChannel = Map.of();
 
@@ -105,6 +107,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
         this.serializer = serializer;
         this.messages = messages;
         this.flow = flow;
+        this.telemetryHost = flow == null ? null : ZLinkTelemetryOwner.hostOf(flow);
         this.contentTypeResolver =
                 Objects.requireNonNull(contentTypeResolver, "contentTypeResolver");
         this.multicastExecutor =
@@ -260,7 +263,7 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
             Optional<String> packetName,
             String contentType,
             ZLinkApplicationMetadata metadata) {
-        MulticastFuture result = new MulticastFuture(payload);
+        MulticastFuture result = new MulticastFuture(payload, telemetryHost);
         if (isClosed()) {
             result.completeRejected(new ZLinkOneWayPublishAdmission(ZLinkOneWayCalls.SHUTDOWN));
             return result;
@@ -312,9 +315,12 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
                     metadata,
                     flowState);
         } catch (RuntimeException error) {
-            LOGGER.log(
+            ZLinkTelemetryOwner.log(
+                    telemetryHost,
+                    LOGGER,
                     Level.WARNING,
-                    "Logical Multicast target processing failed after source-local admission.",
+                    () ->
+                            "Logical Multicast target processing failed after source-local admission.",
                     error);
         } finally {
             result.closePayload();
@@ -373,9 +379,11 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
     private static final class MulticastFuture
             extends CompletableFuture<ZLinkOneWayPublishAdmission> {
         private final Message payload;
+        private final ZLinkTelemetryOwner.Host telemetryHost;
 
-        MulticastFuture(Message payload) {
+        MulticastFuture(Message payload, ZLinkTelemetryOwner.Host telemetryHost) {
             this.payload = payload;
+            this.telemetryHost = telemetryHost;
         }
 
         boolean beginCommit() {
@@ -394,7 +402,12 @@ final class ZLinkSpotPublisherRuntime implements AutoCloseable {
             try {
                 payload.close();
             } catch (RuntimeException failure) {
-                LOGGER.log(Level.WARNING, "Logical Multicast payload cleanup failed", failure);
+                ZLinkTelemetryOwner.log(
+                        telemetryHost,
+                        LOGGER,
+                        Level.WARNING,
+                        () -> "Logical Multicast payload cleanup failed",
+                        failure);
             }
         }
 

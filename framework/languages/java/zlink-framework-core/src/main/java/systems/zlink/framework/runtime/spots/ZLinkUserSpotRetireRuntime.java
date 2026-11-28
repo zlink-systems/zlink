@@ -633,6 +633,7 @@ public final class ZLinkUserSpotRetireRuntime {
     private CompletionStage<Void> closeSourceShells(
             List<ZLinkSpotRelocationUnit> shellSpotIds, Instant deadline) {
         return ZLinkRelocationHandOff.completeSourceCleanup(
+                spots.telemetryHost(),
                 shellSpotIds.stream()
                         .<Supplier<? extends CompletionStage<Void>>>map(
                                 spotId ->

@@ -9,6 +9,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
@@ -75,6 +76,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     ZLinkSpotRetireControl.StageRequest, Map<String, Long>, CompletionStage<Void>>
             boundSessionRestorer;
     private final ZLinkSpotRuntime sourceReplies;
+    private final ZLinkTelemetryOwner.Host telemetryHost;
     private final ZLinkSpotRetireControl.Client relocationClient;
     private final ZLinkLocationRepository locations;
     private final ZLinkStandaloneActorRelocationStagingOwner actorStaging;
@@ -187,6 +189,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
         this.boundSessionRestorer =
                 Objects.requireNonNull(boundSessionRestorer, "boundSessionRestorer");
         this.sourceReplies = sourceReplies;
+        this.telemetryHost = sourceReplies == null ? null : sourceReplies.telemetryHost();
         this.relocationClient = relocationClient;
         this.locations = locations;
         this.actorStaging = actorStaging;
@@ -1741,13 +1744,19 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                         .discard(target.staged())
                                                         .exceptionally(
                                                                 failure -> {
-                                                                    LOGGER.warning(
-                                                                            "Actor Join newest-wins"
-                                                                                    + " eviction failed"
-                                                                                    + " to discard the"
-                                                                                    + " displaced"
-                                                                                    + " stage: "
-                                                                                    + failure);
+                                                                    ZLinkTelemetryOwner.log(
+                                                                            telemetryHost,
+                                                                            LOGGER,
+                                                                            java.util.logging.Level
+                                                                                    .WARNING,
+                                                                            () ->
+                                                                                    "Actor Join newest-wins"
+                                                                                            + " eviction failed"
+                                                                                            + " to discard the"
+                                                                                            + " displaced"
+                                                                                            + " stage: "
+                                                                                            + failure,
+                                                                            null);
                                                                     return null;
                                                                 });
                                             }

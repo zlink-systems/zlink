@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkCompositeRelocationBarrier;
 import systems.zlink.framework.spots.ZLinkSpotRelocationReadyOutcome;
@@ -27,6 +28,7 @@ final class ZLinkUserSpotRelocationBarrier {
     private static final Logger LOGGER =
             Logger.getLogger(ZLinkUserSpotRelocationBarrier.class.getName());
     private final Participant participant;
+    private final ZLinkTelemetryOwner.Host telemetryHost;
     private final ZLinkCompositeRelocationBarrier barrier = new ZLinkCompositeRelocationBarrier();
     final ZLinkStateLane stateLane = new ZLinkStateLane();
     private Seal active;
@@ -34,12 +36,21 @@ final class ZLinkUserSpotRelocationBarrier {
     private boolean committing;
 
     ZLinkUserSpotRelocationBarrier(
-            DefaultSpotContext context, ZLinkActorSessionCoordinator actors) {
+            DefaultSpotContext context,
+            ZLinkActorSessionCoordinator actors,
+            ZLinkTelemetryOwner.Host telemetryHost) {
         this.participant = new UserParticipant(context, actors);
+        this.telemetryHost = telemetryHost;
     }
 
-    ZLinkUserSpotRelocationBarrier(DefaultInstanceSpotContext context) {
+    ZLinkUserSpotRelocationBarrier(
+            DefaultInstanceSpotContext context, ZLinkTelemetryOwner.Host telemetryHost) {
         this.participant = new InstanceParticipant(context);
+        this.telemetryHost = telemetryHost;
+    }
+
+    ZLinkTelemetryOwner.Host telemetryHost() {
+        return telemetryHost;
     }
 
     private interface Participant {
@@ -516,9 +527,11 @@ final class ZLinkUserSpotRelocationBarrier {
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure != null) {
-                                LOGGER.log(
+                                ZLinkTelemetryOwner.log(
+                                        telemetryHost,
+                                        LOGGER,
                                         Level.WARNING,
-                                        "User Spot relocation abort completion failed",
+                                        () -> "User Spot relocation abort completion failed",
                                         failure);
                             }
                         });

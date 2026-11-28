@@ -15,6 +15,7 @@ import systems.zlink.framework.locations.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
@@ -561,6 +562,7 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                                             .executeRemote(request, NEVER)
                                             .toCompletableFuture()
                                             .join());
+                    ZLinkTelemetryTestFence.awaitIdle();
                     assertEquals(1, reports.get());
                     assertEquals(1, cleanupAttempts.get());
                     assertEquals(1, completed.get());

@@ -4,6 +4,7 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -30,15 +31,18 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 final class ZLinkSpotTimerRegistry implements AutoCloseable {
+    private static final Logger LOGGER = Logger.getLogger(ZLinkSpotTimerRegistry.class.getName());
     private final String spotId;
     private final ScheduledExecutorService executor;
     private final ZLinkHandlerInstanceOwner handlers;
     private final List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers;
     private final String sourceName;
     private final Dispatch dispatch;
+    private final ZLinkTelemetryOwner.Host telemetryHost;
     final ZLinkStateLane stateLane;
     private final Map<String, ManagedTimer> timers = new LinkedHashMap<>();
     private Object spot;
@@ -96,6 +100,27 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             String sourceName,
             Dispatch dispatch,
             ZLinkStateLane stateLane) {
+        this(
+                spotId,
+                executor,
+                handlers,
+                suspendHandlerInvokers,
+                sourceName,
+                dispatch,
+                stateLane,
+                null);
+    }
+
+    ZLinkSpotTimerRegistry(
+            String spotId,
+            ScheduledExecutorService executor,
+            ZLinkHandlerInstanceOwner handlers,
+            List<ZLinkSuspendInvocationAdapter> suspendHandlerInvokers,
+            String sourceName,
+            Dispatch dispatch,
+            ZLinkStateLane stateLane,
+            ZLinkTelemetryOwner.Host telemetryHost) {
+        this.telemetryHost = telemetryHost;
         this.spotId = spotId;
         this.executor = executor;
         this.handlers = handlers;
@@ -350,8 +375,11 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     private void publishFailure(
             ManagedTimer timer, ZLinkTimerTick tick, Throwable error, boolean stopped) {
         Throwable failure = unwrap(error);
-        Logger.getLogger(ZLinkSpotTimerRegistry.class.getName())
-                .warning(
+        ZLinkTelemetryOwner.log(
+                telemetryHost,
+                LOGGER,
+                Level.WARNING,
+                () ->
                         (stopped ? "Spot timer stopped" : "Spot timer handler failed")
                                 + ": source="
                                 + sourceName
@@ -368,7 +396,8 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                 + ", exception="
                                 + failure.getClass().getName()
                                 + ", message="
-                                + String.valueOf(failure.getMessage()));
+                                + failure.getMessage(),
+                null);
     }
 
     private static Throwable unwrap(Throwable error) {
@@ -664,11 +693,12 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         }
 
         private void reportCompletionFailure(Throwable failure) {
-            Logger.getLogger(ZLinkSpotTimerRegistry.class.getName())
-                    .log(
-                            java.util.logging.Level.WARNING,
-                            "Timer completion ownership failed",
-                            failure);
+            ZLinkTelemetryOwner.log(
+                    telemetryHost,
+                    LOGGER,
+                    Level.WARNING,
+                    () -> "Timer completion ownership failed",
+                    failure);
         }
 
         private void publishDispatchCompletion(

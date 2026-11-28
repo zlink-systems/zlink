@@ -9,6 +9,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
@@ -224,6 +225,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         SourceLeave leave =
                 new SourceLeave(actor, actor == null ? null : spots.localActorSpotSurface(actor));
         return ZLinkRelocationHandOff.completeSourceCleanup(
+                        prepared.metrics.telemetryHost(),
                         List.of(prepared::cleanupLocal, prepared::discardInitialAfterCommit))
                 .thenApply(ignored -> leave);
     }
@@ -270,9 +272,11 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                             .thenCompose(leave -> notifySourceLeft(attempt, leave))
                             .exceptionally(
                                     failure -> {
-                                        LOGGER.log(
+                                        ZLinkTelemetryOwner.log(
+                                                spots.telemetryHost(),
+                                                LOGGER,
                                                 Level.WARNING,
-                                                "Actor Join authority-loss cleanup failed:",
+                                                () -> "Actor Join authority-loss cleanup failed:",
                                                 unwrap(failure));
                                         return null;
                                     });
@@ -620,7 +624,12 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             long targetAuthorityOwnerGeneration) {
         Lane lane = lanes.get(request.targetNodeRid());
         if (lane == null) {
-            LOGGER.warning("Actor Join source leave submission has no target lane");
+            ZLinkTelemetryOwner.log(
+                    spots.telemetryHost(),
+                    LOGGER,
+                    Level.WARNING,
+                    () -> "Actor Join source leave submission has no target lane",
+                    null);
             return CompletableFuture.completedFuture(null);
         }
         var left =
@@ -637,14 +646,24 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                     .handle(
                             (ignored, failure) -> {
                                 if (failure != null) {
-                                    LOGGER.warning(
-                                            "Actor Join source leave submission failed: "
-                                                    + unwrap(failure));
+                                    ZLinkTelemetryOwner.log(
+                                            spots.telemetryHost(),
+                                            LOGGER,
+                                            Level.WARNING,
+                                            () ->
+                                                    "Actor Join source leave submission failed: "
+                                                            + unwrap(failure),
+                                            null);
                                 }
                                 return null;
                             });
         } catch (RuntimeException failure) {
-            LOGGER.warning("Actor Join source leave submission failed: " + failure);
+            ZLinkTelemetryOwner.log(
+                    spots.telemetryHost(),
+                    LOGGER,
+                    Level.WARNING,
+                    () -> "Actor Join source leave submission failed: " + failure,
+                    null);
             return CompletableFuture.completedFuture(null);
         }
     }

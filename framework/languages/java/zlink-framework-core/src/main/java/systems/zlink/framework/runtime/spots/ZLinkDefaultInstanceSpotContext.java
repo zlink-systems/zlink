@@ -193,7 +193,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
     }
 
     ZLinkUserSpotRelocationBarrier relocationBarrier() {
-        return new ZLinkUserSpotRelocationBarrier(this);
+        return new ZLinkUserSpotRelocationBarrier(this, host.telemetryHost());
     }
 
     <T> CompletionStage<T> prepareRelocationTarget(Supplier<CompletionStage<T>> operation) {

@@ -8,6 +8,7 @@ import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocatableActorFactory;
@@ -41,6 +42,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import java.util.logging.Level;
 import java.util.stream.Stream;
 
 /**
@@ -368,6 +370,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                 aborted ->
                                                         aborted
                                                                 ? abortSessionRoutes(
+                                                                                context.barrier()
+                                                                                        .telemetryHost(),
                                                                                 sessionSealer,
                                                                                 context
                                                                                         .sealedSessionRoutes())
@@ -405,7 +409,8 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 new ZLinkRelocationMetricOperation(
                         meshName,
                         admission.inventory().unit().kind(),
-                        isSnapshot(admission.inventory().spot().policy()));
+                        isSnapshot(admission.inventory().spot().policy()),
+                        relocationReplies == null ? null : relocationReplies.relocationFlow());
         ZLinkUserSpotRelocationBarrier barrier = admission.barrier();
         return barrier.sealForRelocation(
                         preview -> {
@@ -636,6 +641,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             .thenCompose(
                                                     ignored ->
                                                             abortSessionRoutes(
+                                                                    barrier.telemetryHost(),
                                                                     sessionSealer,
                                                                     sealedSessions.get()));
                             return release.handle((ignored, releaseFailure) -> releaseFailure)
@@ -929,7 +935,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
      * does not change the relocation result.
      */
     private static CompletionStage<Void> abortSessionRoutes(
-            ZLinkSessionRelocationPeerClient sessionSealer, List<SealedSessionRoute> contexts) {
+            ZLinkTelemetryOwner.Host telemetryHost,
+            ZLinkSessionRelocationPeerClient sessionSealer,
+            List<SealedSessionRoute> contexts) {
         if (contexts.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
@@ -946,12 +954,15 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             .handle(
                                                     (aborted, failure) -> {
                                                         if (failure != null) {
-                                                            LOGGER.log(
-                                                                    java.util.logging.Level.WARNING,
-                                                                    "session-route-abort-submit-failed"
-                                                                            + " actor="
-                                                                            + context.route()
-                                                                                    .actorId(),
+                                                            ZLinkTelemetryOwner.log(
+                                                                    telemetryHost,
+                                                                    LOGGER,
+                                                                    Level.WARNING,
+                                                                    () ->
+                                                                            "session-route-abort-submit-failed"
+                                                                                    + " actor="
+                                                                                    + context.route()
+                                                                                            .actorId(),
                                                                     unwrapCompletion(failure));
                                                         }
                                                         return null;
@@ -1739,7 +1750,12 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                             source.ownerId(),
                                             source.ownerLeaseGeneration(),
                                             () -> false))
-                    .thenCompose(ignored -> abortSessionRoutes(sessionSealer, sealedSessionRoutes));
+                    .thenCompose(
+                            ignored ->
+                                    abortSessionRoutes(
+                                            metrics.telemetryHost(),
+                                            sessionSealer,
+                                            sealedSessionRoutes));
         }
 
         CompletionStage<Void> discardInitialAfterCommit() {

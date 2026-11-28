@@ -43,6 +43,7 @@ final class ZLinkUserSpotRetireScheduler {
         return switch (settlement.outcome()) {
             case TARGET_COMMITTED -> {
                 yield ZLinkRelocationHandOff.completeSourceCleanup(
+                        source.metrics.telemetryHost(),
                         List.of(
                                 () -> source.completeSourceBarrierCommit(settlement.target()),
                                 () -> request.sourceCleanup().cleanup(),

@@ -27,6 +27,7 @@ import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanner;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
@@ -144,10 +145,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
+import java.util.logging.Level;
 import java.util.stream.Collectors;
 
 public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         implements ZLinkSpotManager, AutoCloseable {
+    private static final java.util.logging.Logger LOGGER =
+            java.util.logging.Logger.getLogger(ZLinkSpotRuntime.class.getName());
     private final ZLinkSpotManagerCalls callFactories = new ZLinkSpotManagerCalls(() -> this);
 
     public static Set<Class<?>> prepareConstruction(
@@ -597,6 +601,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.routeMessages = new ZLinkSpotRouteMessages(this.serializer);
         this.handlerFactory = handlerFactory;
+        if (!registration.meshNodes().isEmpty()) ZLinkTelemetryOwner.prepare();
         this.handlerExecutor =
                 ZLinkFlowContext.propagating(
                         Objects.requireNonNull(
@@ -2246,8 +2251,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         try {
             countChanged.run();
         } catch (RuntimeException failure) {
-            java.util.logging.Logger.getLogger(ZLinkSpotRuntime.class.getName())
-                    .log(java.util.logging.Level.WARNING, "Spot count observer failed", failure);
+            ZLinkTelemetryOwner.log(
+                    telemetryHost(),
+                    LOGGER,
+                    Level.WARNING,
+                    () -> "Spot count observer failed",
+                    failure);
         }
     }
 
@@ -5871,7 +5880,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 });
                     }
                 },
-                timerStateLaneFactory.get());
+                timerStateLaneFactory.get(),
+                telemetryHost());
+    }
+
+    @Override
+    ZLinkTelemetryOwner.Host telemetryHost() {
+        return ZLinkTelemetryOwner.hostOf(relocationFlow());
     }
 
     @Override

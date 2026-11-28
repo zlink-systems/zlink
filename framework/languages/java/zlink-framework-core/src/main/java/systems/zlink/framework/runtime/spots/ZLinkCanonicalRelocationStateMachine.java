@@ -5,6 +5,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
@@ -63,6 +64,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /** Owns the exact prepare/ready/state/data/cutover relocation attempt state. */
@@ -86,6 +88,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private final ZLinkRelocationPayloadTransfer.Options transferOptions;
     private final ZLinkRelocationPayloadTransfer.Budget budget;
     private final ZLinkDispatchErrorReporter dispatchErrors;
+    private final ZLinkTelemetryOwner.Host telemetryHost;
     private final RoutingId localNodeRid;
     private final long localNodeGeneration;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
@@ -376,6 +379,7 @@ final class ZLinkCanonicalRelocationStateMachine
         this.delayScheduler = Objects.requireNonNull(delayScheduler, "delayScheduler");
         this.transferOptions = Objects.requireNonNull(transferOptions, "transferOptions");
         this.dispatchErrors = dispatchErrors;
+        this.telemetryHost = dispatchErrors == null ? null : dispatchErrors.flow().telemetryHost();
         this.budget =
                 new ZLinkRelocationPayloadTransfer.Budget(
                         transferOptions.chunkLimitBytes(),
@@ -916,7 +920,7 @@ final class ZLinkCanonicalRelocationStateMachine
                             if (existing != null)
                                 return new java.util.AbstractMap.SimpleImmutableEntry<>(
                                         existing, null);
-                            TargetAttempt created = new TargetAttempt(prepare);
+                            TargetAttempt created = new TargetAttempt(prepare, telemetryHost);
                             MeshNodeState state = node.status().state();
                             if (shutdownAdmissionSealed.getAsBoolean()
                                     || state == MeshNodeState.DRAINING
@@ -934,7 +938,12 @@ final class ZLinkCanonicalRelocationStateMachine
                     && java.util.Arrays.equals(
                             terminal.encodedPrepare(),
                             ZLinkCanonicalRelocationProtocol.encodePrepare(prepare))) {
-                LOGGER.warning("Late or duplicate canonical PREPARE is a no-op: " + fence.id());
+                ZLinkTelemetryOwner.log(
+                        telemetryHost,
+                        LOGGER,
+                        Level.WARNING,
+                        () -> "Late or duplicate canonical PREPARE is a no-op: " + fence.id(),
+                        null);
                 return request
                         ? CompletableFuture.completedFuture(encodeReady(prepare))
                         : CompletableFuture.completedFuture(null);
@@ -969,15 +978,7 @@ final class ZLinkCanonicalRelocationStateMachine
             if (request) {
                 return replyReady(fence, attempt);
             }
-            publishReady(fence, attempt, transportSource)
-                    .exceptionally(
-                            failure -> {
-                                LOGGER.warning(
-                                        "Canonical relocation READY publication "
-                                                + "failed: "
-                                                + unwrap(failure));
-                                return null;
-                            });
+            submitReady(fence, attempt, transportSource);
             return CompletableFuture.completedFuture(null);
         }
 
@@ -994,11 +995,16 @@ final class ZLinkCanonicalRelocationStateMachine
                                                     true)
                                             .exceptionally(
                                                     publicationFailure -> {
-                                                        LOGGER.warning(
-                                                                "Canonical relocation failure reply"
-                                                                        + " could not be sent: "
-                                                                        + unwrap(
-                                                                                publicationFailure));
+                                                        ZLinkTelemetryOwner.log(
+                                                                telemetryHost,
+                                                                LOGGER,
+                                                                Level.WARNING,
+                                                                () ->
+                                                                        "Canonical relocation failure reply"
+                                                                                + " could not be sent: "
+                                                                                + unwrap(
+                                                                                        publicationFailure),
+                                                                null);
                                                         return null;
                                                     });
                                 }
@@ -1086,15 +1092,24 @@ final class ZLinkCanonicalRelocationStateMachine
         if (request) {
             return replyReady(fence, attempt);
         }
-        publishReady(fence, attempt, transportSource)
+        submitReady(fence, attempt, transportSource);
+        return CompletableFuture.completedFuture(null);
+    }
+
+    private void submitReady(Fence fence, TargetAttempt attempt, RoutingId source) {
+        publishReady(fence, attempt, source)
                 .exceptionally(
                         failure -> {
-                            LOGGER.warning(
-                                    "Canonical relocation READY publication failed: "
-                                            + unwrap(failure));
+                            ZLinkTelemetryOwner.log(
+                                    telemetryHost,
+                                    LOGGER,
+                                    Level.WARNING,
+                                    () ->
+                                            "Canonical relocation READY publication failed: "
+                                                    + unwrap(failure),
+                                    null);
                             return null;
                         });
-        return CompletableFuture.completedFuture(null);
     }
 
     private void reportTargetPreparationFailure(
@@ -1339,10 +1354,15 @@ final class ZLinkCanonicalRelocationStateMachine
                             if (cleanupFailure != null) {
                                 Throwable cause = unwrap(cleanupFailure);
                                 failure.addSuppressed(cause);
-                                LOGGER.warning(
-                                        "Canonical relocation failed-stage cleanup "
-                                                + "could not complete; sending FAILED reply: "
-                                                + cause);
+                                ZLinkTelemetryOwner.log(
+                                        telemetryHost,
+                                        LOGGER,
+                                        Level.WARNING,
+                                        () ->
+                                                "Canonical relocation failed-stage cleanup "
+                                                        + "could not complete; sending FAILED reply: "
+                                                        + cause,
+                                        null);
                                 return cause;
                             }
                             return null;
@@ -1457,7 +1477,12 @@ final class ZLinkCanonicalRelocationStateMachine
         }
         if (attempt.receivedCutover() != null) {
             //  A resent batch after the verified cutover is a late duplicate.
-            LOGGER.warning("Late canonical relay DATA after a verified CUTOVER is a no-op");
+            ZLinkTelemetryOwner.log(
+                    telemetryHost,
+                    LOGGER,
+                    Level.WARNING,
+                    () -> "Late canonical relay DATA after a verified CUTOVER is a no-op",
+                    null);
             return CompletableFuture.completedFuture(null);
         }
         //  The pre-boundary section is staged only after the cutover verifies it,
@@ -1478,7 +1503,12 @@ final class ZLinkCanonicalRelocationStateMachine
                             || java.util.Arrays.equals(
                                     terminal.encodedCutover(),
                                     ZLinkCanonicalRelocationProtocol.encodeCutover(cutover)))) {
-                LOGGER.warning("Late or duplicate canonical CUTOVER is a no-op: " + fence.id());
+                ZLinkTelemetryOwner.log(
+                        telemetryHost,
+                        LOGGER,
+                        Level.WARNING,
+                        () -> "Late or duplicate canonical CUTOVER is a no-op: " + fence.id(),
+                        null);
                 return CompletableFuture.completedFuture(null);
             }
             return failed(new IllegalStateException("canonical target relocation is unavailable"));
@@ -1496,7 +1526,12 @@ final class ZLinkCanonicalRelocationStateMachine
         CompletableFuture<Void> publication = new CompletableFuture<>();
         PublicationClaim claim = attempt.claimPublication(publication, cutover);
         if (!claim.owner()) {
-            LOGGER.warning("Late or duplicate canonical CUTOVER is a no-op: " + fence.id());
+            ZLinkTelemetryOwner.log(
+                    telemetryHost,
+                    LOGGER,
+                    Level.WARNING,
+                    () -> "Late or duplicate canonical CUTOVER is a no-op: " + fence.id(),
+                    null);
             return CompletableFuture.completedFuture(null);
         }
         return publishTarget(fence, attempt, claim.verifiedBatch(), publication);
@@ -1514,10 +1549,15 @@ final class ZLinkCanonicalRelocationStateMachine
                     if (attempt.publication() != null) {
                         return;
                     }
-                    LOGGER.warning(
-                            "cutover_timeout: relay-ready wait elapsed without a verified"
-                                    + " CUTOVER; target CAS and dispatch stay closed: "
-                                    + fence.id());
+                    ZLinkTelemetryOwner.log(
+                            telemetryHost,
+                            LOGGER,
+                            Level.WARNING,
+                            () ->
+                                    "cutover_timeout: relay-ready wait elapsed without a verified"
+                                            + " CUTOVER; target CAS and dispatch stay closed: "
+                                            + fence.id(),
+                            null);
                     ZLinkRuntimeMetrics.increment(
                             ZLinkRuntimeMetrics.Metric.RELOCATION_CUTOVER_TIMEOUT.metricName(),
                             unitTags(attempt.prepare()));
@@ -2709,6 +2749,7 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     static final class TargetAttempt {
+        private final ZLinkTelemetryOwner.Host telemetryHost;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private final ZLinkCanonicalRelocationProtocol.Prepare prepare;
         private final ZLinkRelocationPayloadTransfer.Assembler assembler;
@@ -2728,7 +2769,10 @@ final class ZLinkCanonicalRelocationStateMachine
         private volatile long committedNanos;
         byte[] receivedCutover;
 
-        TargetAttempt(ZLinkCanonicalRelocationProtocol.Prepare prepare) {
+        TargetAttempt(
+                ZLinkCanonicalRelocationProtocol.Prepare prepare,
+                ZLinkTelemetryOwner.Host telemetryHost) {
+            this.telemetryHost = telemetryHost;
             this.prepare = prepare;
             this.assembler = new ZLinkRelocationPayloadTransfer.Assembler(prepare.manifest());
         }
@@ -2824,10 +2868,15 @@ final class ZLinkCanonicalRelocationStateMachine
                                             cutover.boundaryRecordCount(),
                                             cutover.boundaryChecksumCrc32c());
                             if (batch.isEmpty()) {
-                                LOGGER.severe(
-                                        "Canonical CUTOVER boundary record count or checksum"
-                                                + " differs from the received relay section: "
-                                                + prepare.id());
+                                ZLinkTelemetryOwner.log(
+                                        telemetryHost,
+                                        LOGGER,
+                                        Level.SEVERE,
+                                        () ->
+                                                "Canonical CUTOVER boundary record count or checksum"
+                                                        + " differs from the received relay section: "
+                                                        + prepare.id(),
+                                        null);
                                 throw new IllegalStateException(
                                         "canonical relocation cutover boundary differs");
                             }

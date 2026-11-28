@@ -5,6 +5,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
@@ -26,6 +27,7 @@ import java.util.logging.Logger;
 
 final class ZLinkSpotRoutedOutbound {
 
+    private static final Logger LOGGER = Logger.getLogger(ZLinkSpotRoutedOutbound.class.getName());
     private final ZLinkChannelRuntime channels;
     private final ZLinkSpotRouteMessages messages;
     private final ZLinkSpotDirectOutbound directOutbound;
@@ -112,12 +114,12 @@ final class ZLinkSpotRoutedOutbound {
                                     (ignored, error) -> {
                                         ZLinkFrameworkMultipartView.closeAll(parts);
                                         if (error != null) {
-                                            Logger.getLogger(
-                                                            ZLinkSpotRoutedOutbound.class.getName())
-                                                    .log(
-                                                            Level.SEVERE,
-                                                            "one-way routed SPOT submission failed",
-                                                            error);
+                                            ZLinkTelemetryOwner.log(
+                                                    ZLinkTelemetryOwner.hostOf(flow),
+                                                    LOGGER,
+                                                    Level.SEVERE,
+                                                    () -> "one-way routed SPOT submission failed",
+                                                    error);
                                         }
                                     }));
         } catch (RuntimeException error) {

@@ -1045,7 +1045,9 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
         return inRelocationStateLane(
                 () -> {
                     if (relocationBarrier == null) {
-                        relocationBarrier = new ZLinkUserSpotRelocationBarrier(this, actors);
+                        relocationBarrier =
+                                new ZLinkUserSpotRelocationBarrier(
+                                        this, actors, host.telemetryHost());
                     }
                     return relocationBarrier;
                 });

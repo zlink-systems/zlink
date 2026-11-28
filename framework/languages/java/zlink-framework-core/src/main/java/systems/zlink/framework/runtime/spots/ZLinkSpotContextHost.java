@@ -4,6 +4,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -40,6 +41,10 @@ abstract class ZLinkSpotContextHost {
             ZLinkSpotTimerRegistry.Dispatch dispatch);
 
     abstract ZLinkHandlerInstanceOwner createHandlerInstances();
+
+    ZLinkTelemetryOwner.Host telemetryHost() {
+        return null;
+    }
 
     abstract CompletionStage<Void> destroyActorFromEntry(RoutingId nodeRid, ZLinkActor actor);
 

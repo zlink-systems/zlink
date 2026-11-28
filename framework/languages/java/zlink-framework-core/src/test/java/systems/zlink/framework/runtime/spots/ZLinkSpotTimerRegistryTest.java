@@ -17,6 +17,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -47,6 +48,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Supplier;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
@@ -84,6 +86,7 @@ final class ZLinkSpotTimerRegistryTest {
 
                     public void close() {}
                 };
+        ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(observer);
         var leaseExecutor = new ScheduledThreadPoolExecutor(1);
         var now = new AtomicLong();
@@ -136,6 +139,7 @@ final class ZLinkSpotTimerRegistryTest {
             var due = executor.due.poll(2, TimeUnit.SECONDS);
             assertNotNull(due);
             due.run();
+            ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(0, errors.get(), "admission rejection is not a handler failure");
             assertEquals(0, calls.size());
             assertFalse(timer.isDisposed());
@@ -160,6 +164,7 @@ final class ZLinkSpotTimerRegistryTest {
             queuedCompletion.complete(null);
             assertEquals(List.of(preserved), calls);
             assertEquals(1, calls.getFirst().deliveryIndex());
+            ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(0, errors.get());
             assertTrue(runtime.renewOwnerLeaseOnce().toCompletableFuture().join());
             assertEquals(1, calls.size());
@@ -957,8 +962,71 @@ final class ZLinkSpotTimerRegistryTest {
     }
 
     @Test
+    void slowFailureObserverDoesNotDelayTimerCompletion() throws Exception {
+        var executor = new ZLinkRelocatedTimerRebindTest.ManualScheduler();
+        var registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        ignored -> new ThrowingTimerHandler(new AtomicInteger()),
+                        List.of(),
+                        "slow-observer",
+                        (timerName, operation) -> operation.get());
+        registry.setSpot(new TestSpot());
+        var logger = Logger.getLogger(ZLinkSpotTimerRegistry.class.getName());
+        var delivered = new CompletableFuture<Thread>();
+        var delay = Duration.ofMillis(500);
+        var observer =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        if (!record.getMessage().contains("source=slow-observer")) return;
+                        long end = System.nanoTime() + delay.toNanos();
+                        long remaining;
+                        while ((remaining = end - System.nanoTime()) > 0) {
+                            LockSupport.parkNanos(remaining);
+                        }
+                        delivered.complete(Thread.currentThread());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(observer);
+        try {
+            var timer =
+                    registry.add(
+                                    "timer",
+                                    Duration.ofMillis(1),
+                                    ThrowingTimerHandler.class,
+                                    new ZLinkTimerOptions(
+                                            ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1, true))
+                            .toCompletableFuture()
+                            .join();
+            var due = executor.due.poll(2, TimeUnit.SECONDS);
+            assertNotNull(due);
+            long start = System.nanoTime();
+            due.run();
+            var elapsed = Duration.ofNanos(System.nanoTime() - start);
+            System.out.println("Timer completion elapsed: " + elapsed);
+            assertTrue(timer.isDisposed());
+            assertTrue(
+                    elapsed.compareTo(Duration.ofMillis(250)) < 0,
+                    () -> "timer completion took " + elapsed + " with a " + delay + " JUL handler");
+            assertEquals("zlink-process-telemetry", delivered.get(2, TimeUnit.SECONDS).getName());
+        } finally {
+            logger.removeHandler(observer);
+            registry.close();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void failureObserverCanFreezeTheNextLogicalTimerAction() throws Exception {
-        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        var executor = new ZLinkRelocatedTimerRebindTest.ManualScheduler();
         CompletableFuture<ZLinkSpotTimerRegistry.FrozenTimers> frozen = new CompletableFuture<>();
         ZLinkSpotTimerRegistry registry =
                 new ZLinkSpotTimerRegistry(
@@ -991,6 +1059,9 @@ final class ZLinkSpotTimerRegistryTest {
         logger.addHandler(observer);
         try {
             registry.add("timer", Duration.ofMillis(1), ThrowingTimerHandler.class, null);
+            var due = executor.due.poll(2, TimeUnit.SECONDS);
+            assertNotNull(due);
+            due.run();
             var timers = frozen.get(2, TimeUnit.SECONDS).timers();
             assertEquals(1, timers.size());
             assertTrue(timers.getFirst().nextScheduledAt().isPresent());
@@ -1004,7 +1075,7 @@ final class ZLinkSpotTimerRegistryTest {
 
     @Test
     void failureObserverSeesStoppedTimerRemoved() throws Exception {
-        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        var executor = new ZLinkRelocatedTimerRebindTest.ManualScheduler();
         CompletableFuture<ZLinkSpotTimerRegistry.FrozenTimers> frozen = new CompletableFuture<>();
         ZLinkSpotTimerRegistry registry =
                 new ZLinkSpotTimerRegistry(
@@ -1041,6 +1112,9 @@ final class ZLinkSpotTimerRegistryTest {
                     Duration.ofMillis(1),
                     ThrowingTimerHandler.class,
                     new ZLinkTimerOptions(ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1, true));
+            var due = executor.due.poll(2, TimeUnit.SECONDS);
+            assertNotNull(due);
+            due.run();
             assertTrue(frozen.get(2, TimeUnit.SECONDS).timers().isEmpty());
         } finally {
             logger.removeHandler(observer);

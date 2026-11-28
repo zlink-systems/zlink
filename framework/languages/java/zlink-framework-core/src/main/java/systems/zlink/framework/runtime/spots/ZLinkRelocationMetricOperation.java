@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
@@ -19,6 +20,7 @@ final class ZLinkRelocationMetricOperation {
     private final Map<String, String> startTags;
     private final Map<String, String> unitTags;
     private final ZLinkMessageFlowTracer flow;
+    private final ZLinkTelemetryOwner.Host telemetryHost;
     private final ZLinkFlowContext.State flowContext;
     private final String actorId;
 
@@ -66,6 +68,7 @@ final class ZLinkRelocationMetricOperation {
                 kind == ZLinkPlacementObjectKind.ACTOR && flow != null && flow.captureEnabled()
                         ? flow
                         : null;
+        telemetryHost = flow == null ? null : ZLinkTelemetryOwner.hostOf(flow);
         flowContext = this.flow == null ? null : ZLinkFlowContext.current();
         this.actorId = actorId;
         ZLinkRuntimeMetrics.increment(
@@ -97,6 +100,10 @@ final class ZLinkRelocationMetricOperation {
                 return ZLinkPlacementObjectKind.USER_SPOT;
         }
         return ZLinkPlacementObjectKind.ACTOR;
+    }
+
+    ZLinkTelemetryOwner.Host telemetryHost() {
+        return telemetryHost;
     }
 
     void sealed(long nanos) {

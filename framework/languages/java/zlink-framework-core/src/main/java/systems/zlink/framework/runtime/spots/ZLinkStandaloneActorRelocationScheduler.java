@@ -58,6 +58,7 @@ final class ZLinkStandaloneActorRelocationScheduler {
         return switch (settlement) {
             case TARGET_COMMITTED -> {
                 yield ZLinkRelocationHandOff.completeSourceCleanup(
+                        source.metrics.telemetryHost(),
                         List.of(
                                 source::completeSourceQueueCommit,
                                 source::cleanupHostLocal,

@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.spots.ZLinkRelocationTransitionClient.AuthoritySettlement;
 
@@ -31,13 +32,16 @@ final class ZLinkRelocationHandOff {
 
     /** Reports source cleanup failures without changing the confirmed target owner. */
     static CompletionStage<Void> completeSourceCleanup(
+            ZLinkTelemetryOwner.Host telemetryHost,
             List<? extends Supplier<? extends CompletionStage<Void>>> operations) {
         return ZLinkHandlerStages.completeAll(operations)
                 .exceptionally(
                         failure -> {
-                            LOGGER.log(
+                            ZLinkTelemetryOwner.log(
+                                    telemetryHost,
+                                    LOGGER,
                                     Level.WARNING,
-                                    "Relocation source cleanup failed:",
+                                    () -> "Relocation source cleanup failed:",
                                     unwrap(failure));
                             return null;
                         });
@@ -248,11 +252,16 @@ final class ZLinkRelocationHandOff {
                                         if (failure != null
                                                 && !(unwrap(failure)
                                                         instanceof CancellationException)) {
-                                            LOGGER.warning(
-                                                    "Relocation relay or CUTOVER submit"
-                                                            + " failed; authority settlement"
-                                                            + " decides the unit: "
-                                                            + unwrap(failure));
+                                            ZLinkTelemetryOwner.log(
+                                                    metrics.telemetryHost(),
+                                                    LOGGER,
+                                                    Level.WARNING,
+                                                    () ->
+                                                            "Relocation relay or CUTOVER submit"
+                                                                    + " failed; authority settlement"
+                                                                    + " decides the unit: "
+                                                                    + unwrap(failure),
+                                                    null);
                                         }
                                     });
                             return settlement
