@@ -31,6 +31,12 @@ use zlink::{
 
 const DEFAULT_TIMEOUT_MS: usize = 200;
 
+/// Socket timeout option from a Core-style millisecond value: negative waits
+/// indefinitely (`None`), zero or more is that many milliseconds.
+pub fn timeout_ms(ms: i32) -> Option<std::time::Duration> {
+    u64::try_from(ms).ok().map(std::time::Duration::from_millis)
+}
+
 pub const STOP_TOKEN: &[u8] = b"__zlink_perf_stop__";
 pub const HEADER_SIZE: usize = 29;
 pub const PHASE_WARMUP: u8 = 0;

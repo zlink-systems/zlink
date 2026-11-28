@@ -16,7 +16,7 @@ fn main() {
     common::apply_multi_hwm(&pub_sock, &settings);
     pub_sock
         .common_options()
-        .set_send_timeout(settings.send_timeout_ms)
+        .set_send_timeout(common::timeout_ms(settings.send_timeout_ms))
         .expect("sndtimeo");
     if matches!(args.transport.as_str(), "tls" | "wss") {
         let tls = common::resolve_perf_tls_paths().expect("TLS certs not found");

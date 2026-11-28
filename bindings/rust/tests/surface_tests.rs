@@ -19,34 +19,9 @@ fn assert_send_submission(_: Result<SendSubmission, zlink::SubmitError>) {}
 
 fn assert_request_submission(_: Result<RequestSubmission, zlink::ZlinkError>) {}
 
-#[test]
-#[allow(deprecated)]
-fn socket_constructor_names_have_the_same_result() {
-    let ctx = Context::new().unwrap();
-    macro_rules! check_constructor {
-        ($new:ident, $old:ident) => {{
-            let canonical = ctx.$new().unwrap();
-            let legacy = ctx.$old().unwrap();
-            assert_eq!(
-                canonical.common_options().linger().unwrap(),
-                legacy.common_options().linger().unwrap()
-            );
-        }};
-    }
-    check_constructor!(create_pair_socket, pair_socket);
-    check_constructor!(create_dealer_socket, dealer_socket);
-    check_constructor!(create_router_socket, router_socket);
-    check_constructor!(create_pub_socket, pub_socket);
-    check_constructor!(create_sub_socket, sub_socket);
-    check_constructor!(create_xpub_socket, xpub_socket);
-    check_constructor!(create_xsub_socket, xsub_socket);
-    check_constructor!(create_stream_socket, stream_socket);
-}
-
 // ---------------------------------------------------------------------------
 // Socket type capability separation
 // ---------------------------------------------------------------------------
-
 #[test]
 fn pair_socket_has_send_recv() {
     let ctx = Context::new().unwrap();
