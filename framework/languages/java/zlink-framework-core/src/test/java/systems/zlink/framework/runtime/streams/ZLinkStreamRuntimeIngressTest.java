@@ -266,8 +266,12 @@ final class ZLinkStreamRuntimeIngressTest {
         }
         clock.addAndGet(Duration.ofSeconds(5).toNanos());
         List<String> reasons = new ArrayList<>();
-        try (AutoCloseable ignored = installClosedMetricSink(reasons)) {
+        CountDownLatch closeMetricRecorded = new CountDownLatch(1);
+        try (AutoCloseable ignored =
+                installClosedMetricSink(reasons, closeMetricRecorded::countDown)) {
             runLivenessTimers(runtime);
+            assertTrue(stream.sessionClosingSendsLatch.await(5, TimeUnit.SECONDS));
+            assertTrue(closeMetricRecorded.await(5, TimeUnit.SECONDS));
             assertEquals(1, stream.sessionClosingSends.get());
             assertEquals(List.of("heartbeat_timeout"), reasons);
         }
@@ -406,6 +410,7 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(0, stream.sessionClosingSends.get());
         clock.set(Duration.ofSeconds(9).toNanos());
         runLivenessTimers(runtime);
+        assertTrue(stream.sessionClosingSendsLatch.await(5, TimeUnit.SECONDS));
         assertEquals(1, stream.sessionClosingSends.get());
     }
 
@@ -2466,9 +2471,9 @@ final class ZLinkStreamRuntimeIngressTest {
             assertTrue(stream.sessionClosingSendsLatch.await(5, TimeUnit.SECONDS));
             assertEquals(1, stream.sessionClosingSends.get());
             assertTrue(session.replacementCompletion.complete(0L));
-            assertTrue(callbackDeadline.future().isCancelled());
             ManualScheduledExecutor.ScheduledCommand delayedClose =
                     replyRetryExecutor.takeScheduledCommand();
+            assertTrue(callbackDeadline.future().isCancelled());
             assertEquals(TimeUnit.MILLISECONDS.toNanos(100), delayedClose.delayNanos());
             assertEquals(0, stream.disconnectCalls.get());
             delayedClose.command().run();
@@ -3615,12 +3620,18 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     static AutoCloseable installClosedMetricSink(List<String> closeReasons) {
+        return installClosedMetricSink(closeReasons, () -> {});
+    }
+
+    private static AutoCloseable installClosedMetricSink(
+            List<String> closeReasons, Runnable closeReasonRecorded) {
         return ZLinkRuntimeMetrics.install(
                 new ZLinkRuntimeMetrics.Sink() {
                     @Override
                     public void increment(String name, Map<String, String> tags) {
                         if ("zlink.stream.connections.closed".equals(name)) {
                             closeReasons.add(tags.get("close_reason"));
+                            closeReasonRecorded.run();
                         }
                     }
                 });
