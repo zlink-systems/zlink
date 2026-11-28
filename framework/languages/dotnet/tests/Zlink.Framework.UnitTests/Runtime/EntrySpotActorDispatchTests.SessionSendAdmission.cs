@@ -77,27 +77,35 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    [Fact]
-    public async Task SessionSendAdmission_ClosedMailboxRejectsSendWithLiveBinding()
+    [Theory]
+    [InlineData(null)]
+    [InlineData(ZLinkUserSpotExecutionMode.PerActor)]
+    public async Task SessionSendAdmission_ClosedMailboxRejectsSendWithLiveBinding(
+        ZLinkUserSpotExecutionMode? userSpotMode
+    )
     {
         var probe = new DispatchProbe();
-        var (runtime, bound, state) = await CreateSessionSendFixtureAsync(probe);
+        var (runtime, bound, state) = await CreateSessionSendFixtureAsync(
+            probe,
+            userSpotMode: userSpotMode
+        );
         try
         {
             var barrier = state._dispatchMailbox.CloseAdmissionAndReserveLifecycleBarrier();
+            ZLinkFrameworkException error;
             using (await barrier.ClaimAsync())
             {
                 Assert.True(
                     runtime.TryGetSessionActorBinding(bound.ActorId, bound.BindingToken, out _)
                 );
-                var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
                     RelaySessionSend(bound, "second")
                 );
-                Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
-                Assert.Empty(probe.Events);
             }
             await barrier.Completion;
             state._dispatchMailbox.ReopenAdmission();
+            Assert.Equal(ZLinkFrameworkErrorKind.Rejected, error.Kind);
+            Assert.Empty(probe.Events);
         }
         finally
         {

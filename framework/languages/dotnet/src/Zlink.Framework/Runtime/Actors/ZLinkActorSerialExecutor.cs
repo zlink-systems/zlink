@@ -102,7 +102,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
         var waiter = AwaitStateLane(
             _lane.RunAsync(() =>
             {
-                EnsureAdmissionOpen();
+                EnsureAdmissionOpen(ZLinkFrameworkErrorKind.NotFound);
                 return PostWaiterOnLane(lane, cancellationToken, countAsPendingRequest);
             })
         );
@@ -118,7 +118,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
         cancellationToken.ThrowIfCancellationRequested();
         return _lane.RunAsync(() =>
         {
-            EnsureAdmissionOpen();
+            EnsureAdmissionOpen(ZLinkFrameworkErrorKind.Rejected);
             PostOnLane(
                 ZLinkSerialWorkLane.Application,
                 operation,
@@ -146,11 +146,11 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
         });
     }
 
-    private void EnsureAdmissionOpen()
+    private void EnsureAdmissionOpen(ZLinkFrameworkErrorKind closedKind)
     {
         if (_admissionClosed)
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
+                closedKind,
                 "Actor dispatch admission is closed for a terminal lifecycle transition."
             );
     }
