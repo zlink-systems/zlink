@@ -594,16 +594,12 @@ build_go_perf_binary() {
     fi
     return
   fi
-  go build -o "${GO_MULTI_BIN}" ./perf/multi
+  local build_dir
+  build_dir="$(cd "${BUILD_DIR}" && pwd)"
+  go -C "${SCRIPT_DIR}" build -o "${build_dir}/${GO_MULTI_BIN##*/}" ./multi
 }
 
 run_go_perf() {
-  local package="$1"
-  shift
-  if [[ "${package}" != "./perf/multi" ]]; then
-    echo "Error: unsupported Go perf package: ${package}" >&2
-    return 1
-  fi
   if [[ "${PIN_CPU}" != "on" ]]; then
     exec "${GO_MULTI_BIN}" "$@"
     return
@@ -1246,7 +1242,7 @@ run_multi_process_case() {
   server_fifo="$(mktemp -u "${TMP_DIR}/server_fifo.XXXXXX")"
   mkfifo "${server_fifo}"
 
-  GOMAXPROCS="${case_gomaxprocs}" run_go_perf ./perf/multi \
+  GOMAXPROCS="${case_gomaxprocs}" run_go_perf \
     --role server \
     --pattern "${pattern}" \
     --transport "${transport}" \
@@ -1280,7 +1276,7 @@ run_multi_process_case() {
   if [[ "${pattern}" == "DEALER_DEALER" || "${pattern}" == "PUBSUB" ]]; then
     client_fifo="$(mktemp -u "${TMP_DIR}/client_fifo.XXXXXX")"
     mkfifo "${client_fifo}"
-    GOMAXPROCS="${case_gomaxprocs}" run_go_perf ./perf/multi \
+    GOMAXPROCS="${case_gomaxprocs}" run_go_perf \
       --role client \
       --pattern "${pattern}" \
       --transport "${transport}" \
@@ -1314,7 +1310,7 @@ run_multi_process_case() {
     reqrep_client=1
     client_fifo="$(mktemp -u "${TMP_DIR}/client_fifo.XXXXXX")"
     mkfifo "${client_fifo}"
-    run_go_perf ./perf/multi \
+    run_go_perf \
       --role client \
       --pattern "${pattern}" \
       --transport "${transport}" \
@@ -1368,7 +1364,7 @@ run_multi_process_case() {
     fi
     exec {client_control_fd}>&- || true
   else
-    run_go_perf ./perf/multi \
+    run_go_perf \
       --role client \
       --pattern "${pattern}" \
       --transport "${transport}" \

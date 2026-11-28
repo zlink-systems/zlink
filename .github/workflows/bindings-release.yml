@@ -369,6 +369,7 @@ jobs:
         run: |
           cd bindings/go
           go test ./...
+          go -C perf test ./...
 
       - name: Package source archive
         run: |
