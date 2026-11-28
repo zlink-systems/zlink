@@ -1,7 +1,8 @@
 package systems.zlink.framework.runtime.channels;
 
-import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
 import static org.junit.jupiter.api.Assertions.*;
+
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
 
 import org.junit.jupiter.api.Test;
 
