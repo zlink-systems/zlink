@@ -10,12 +10,15 @@ const {
   ZLinkRuntimeTaskRunner
 } = require('../../packages/framework/dist/runtime/execution');
 
-for (const cancel of [false, true]) {
-  test(`Spot context Close join after authority release (cancel=${cancel})`, async (t) => {
+for (const scenario of ['success', 'failure', 'cancel']) {
+  const cancel = scenario === 'cancel';
+  const fail = scenario === 'failure';
+  test(`Spot context Close join after activation detach (${scenario})`, async (t) => {
     const releaseEntered = deferred();
     const finishRelease = deferred();
     const caller = new AbortController();
     const events = [];
+    const closeFailure = new Error('injected shared Close failure');
     class Room {
       onClosing() {
         events.push('OnClosing');
@@ -35,6 +38,7 @@ for (const cancel of [false, true]) {
             events.push('authority released');
             releaseEntered.resolve();
             await finishRelease.promise;
+            if (fail) throw closeFailure;
           }
         };
       }
@@ -50,10 +54,6 @@ for (const cancel of [false, true]) {
       closeAdmission();
       assert.ok(serial.applicationAdmissionRefusal(false));
       events.push('Spot stopped');
-      if (cancel) {
-        caller.abort();
-        events.push('caller aborted');
-      }
     });
 
     const owner = context.close();
@@ -62,20 +62,29 @@ for (const cancel of [false, true]) {
       assert.deepEqual(events, ['OnClosing', 'authority released']);
       const joined = context.close(caller.signal);
       events.push('join submitted');
-      const outcome = cancel ? assert.rejects(joined, ZLinkAbortError) : joined;
+      if (cancel) {
+        caller.abort();
+        events.push('caller aborted');
+      }
+      const outcome = cancel
+        ? assert.rejects(joined, ZLinkAbortError)
+        : fail
+          ? assert.rejects(joined, closeFailure)
+          : joined;
       finishRelease.resolve();
-      if (cancel) await outcome;
+      if (cancel || fail) await outcome;
       else assert.equal(await outcome, true);
     } finally {
       finishRelease.resolve();
-      assert.equal(await owner, true);
+      if (fail) await assert.rejects(owner, closeFailure);
+      else assert.equal(await owner, true);
       assert.equal(manager.closeOperations.size, 0);
       assert.deepEqual(events, [
         'OnClosing',
         'authority released',
         'join submitted',
-        'Spot stopped',
-        ...(cancel ? ['caller aborted'] : [])
+        ...(cancel ? ['caller aborted'] : []),
+        ...(fail ? [] : ['Spot stopped'])
       ]);
     }
   });

@@ -10,10 +10,14 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwn
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.function.Supplier;
 
 abstract class ZLinkSpotContextHost {
+    private final ConcurrentHashMap<DefaultSpotContext, CompletableFuture<Boolean>> contextCloses =
+            new ConcurrentHashMap<>();
+
     void ensureOwnerAdmissionOpen() {}
 
     systems.zlink.framework.runtime.locations.ZLinkLocationRuntime.Execution execution(
@@ -48,14 +52,22 @@ abstract class ZLinkSpotContextHost {
     abstract CompletionStage<Boolean> closeSpot(String spotId, long objectGeneration);
 
     final CompletionStage<Boolean> closeSpot(DefaultSpotContext context) {
+        CompletableFuture<Boolean> current = contextCloses.get(context);
+        if (current != null) return current.copy();
         CompletableFuture<Boolean> result = new CompletableFuture<>();
-        return context.enqueueClose(
-                        () -> closeSpotOnLifecycle(context).thenAccept(result::complete))
-                .whenComplete(
-                        (ignored, failure) -> {
-                            if (failure != null) result.completeExceptionally(failure);
-                        })
-                .thenCompose(ignored -> result);
+        current = contextCloses.putIfAbsent(context, result);
+        if (current != null) return current.copy();
+        result.whenComplete((ignored, failure) -> contextCloses.remove(context, result));
+        try {
+            context.enqueueClose(() -> closeSpotOnLifecycle(context).thenAccept(result::complete))
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null) result.completeExceptionally(failure);
+                            });
+        } catch (RuntimeException failure) {
+            result.completeExceptionally(failure);
+        }
+        return result.copy();
     }
 
     CompletionStage<Boolean> closeSpotOnLifecycle(DefaultSpotContext context) {
