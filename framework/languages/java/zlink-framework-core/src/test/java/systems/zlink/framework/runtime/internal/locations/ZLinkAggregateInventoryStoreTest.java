@@ -23,19 +23,27 @@ import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
+import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 import systems.zlink.framework.spots.ZLinkSpotKind;
+import systems.zlink.framework.testing.ZLinkLocationStoreTestAdapter;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.stream.Stream;
 
 final class ZLinkAggregateInventoryStoreTest {
@@ -147,6 +155,159 @@ final class ZLinkAggregateInventoryStoreTest {
                                 .toCompletableFuture()
                                 .join());
         assertEquals(fence, prepared.fence());
+    }
+
+    @Test
+    void spotWideSealMatchesGolden() throws java.io.IOException {
+        var vector = GOLDEN.required("spotWideSeal");
+        assertEquals(vector.required("expected"), spotWideSeal(vector.required("input")));
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "ZLINK_SPOT_WIDE_SEAL_GOLDEN_OUTPUT", matches = ".+")
+    void exportSpotWideSealGolden() throws java.io.IOException {
+        Files.writeString(
+                Path.of(System.getenv("ZLINK_SPOT_WIDE_SEAL_GOLDEN_OUTPUT")),
+                spotWideSeal(GOLDEN.required("spotWideSeal").required("input")).toPrettyString()
+                        + "\n");
+    }
+
+    private static JsonNode spotWideSeal(JsonNode input) throws java.io.IOException {
+        var source = input.required("source");
+        var spot = input.required("spot");
+        var rid = RoutingId.from(HEX.parseHex(source.required("routingIdHex").asText()));
+        String mesh = source.required("meshName").asText();
+        String owner = source.required("ownerId").asText();
+        long lease = source.required("ownerLeaseGeneration").asLong();
+        long nodeGeneration = source.required("nodeGeneration").asLong();
+        String spotId = spot.required("id").asText();
+        long spotGeneration = spot.required("objectGeneration").asLong();
+        String spotKey = ZLinkAuthorityKeyCodec.spot(spotId);
+        var descriptor = new ZLinkMeshNodeDescriptorKey(mesh, rid);
+        var snapshots = new LinkedHashMap<String, ZLinkAuthoritySnapshot>();
+        for (var row : Stream.concat(Stream.of(spot), nodes(input.required("actors"))).toList()) {
+            String id = row.required("id").asText();
+            String stableType = row.required("stableType").asText();
+            boolean isSpot = row == spot;
+            var kind = isSpot ? ZLinkPlacementObjectKind.USER_SPOT : ZLinkPlacementObjectKind.ACTOR;
+            var allocation =
+                    new ZLinkPlacementAllocation(
+                            ZLinkPlacementAllocationState.ACTIVE,
+                            kind,
+                            stableType,
+                            descriptor,
+                            nodeGeneration,
+                            isSpot
+                                    ? ZLinkPlacementCapacityBundle.spot(kind, stableType, 1)
+                                    : ZLinkPlacementCapacityBundle.actor(1));
+            byte[] payload =
+                    isSpot
+                            ? new ZLinkServiceAuthorityPayloadCodec()
+                                    .encodeUser(
+                                            ZLinkServiceAuthorityPayloadCodec.State.READY,
+                                            stableType,
+                                            id,
+                                            owner,
+                                            lease,
+                                            mesh,
+                                            rid,
+                                            nodeGeneration)
+                            : new ZLinkActorAuthorityPayloadCodec()
+                                    .encode(
+                                            ZLinkActorAuthorityPayloadCodec.State.READY,
+                                            stableType,
+                                            id,
+                                            spotId,
+                                            spotGeneration,
+                                            ZLinkSpotKind.USER.value(),
+                                            owner,
+                                            lease,
+                                            mesh,
+                                            rid,
+                                            nodeGeneration);
+            snapshots.put(
+                    isSpot ? spotKey : ZLinkAuthorityKeyCodec.actor(id),
+                    new ZLinkAuthoritySnapshot(
+                            row.required("expectedStoreVersion").asText(),
+                            payload,
+                            row.required("objectGeneration").asLong(),
+                            row.required("authorityOwnerGeneration").asLong(),
+                            owner,
+                            lease,
+                            allocation,
+                            Instant.EPOCH));
+        }
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var store = new ZLinkAggregateInventoryStore(provider);
+        var fence =
+                ZLinkAggregateFence.forRelocation(
+                        UUID.fromString(input.required("relocationId").asText()));
+        var cancellation = (ZLinkStoreCancellation) () -> false;
+        var repository =
+                new ZLinkLocationStoreTestAdapter() {
+                    @Override
+                    public CompletionStage<ZLinkAuthorityReadResult> read(
+                            String key, ZLinkStoreCancellation ignored) {
+                        return CompletableFuture.completedFuture(snapshots.get(key));
+                    }
+
+                    @Override
+                    public CompletionStage<byte[]> sealAggregateInventory(
+                            ZLinkAggregateFence key,
+                            List<ZLinkAggregateParticipant> participants,
+                            ZLinkStoreCancellation token) {
+                        return store.store(key, participants, token::isCancellationRequested);
+                    }
+                };
+        var participants =
+                snapshots.entrySet().stream()
+                        .map(
+                                entry ->
+                                        new ZLinkAggregateRelocationCoordinator.ExpectedParticipant(
+                                                entry.getKey(), entry.getValue().objectGeneration(),
+                                                entry.getValue().authorityOwnerGeneration(),
+                                                        entry.getValue().storeVersion()))
+                        .toList();
+        new ZLinkAggregateRelocationCoordinator(repository)
+                .sealSource(
+                        participants, spotKey, fence, ZLinkAuthoritySnapshot::payload, cancellation)
+                .toCompletableFuture()
+                .join();
+
+        var mapper = new ObjectMapper();
+        var root = mapper.readTree(read(provider, ZLinkAggregateInventoryStore.rootKey(fence)));
+        var digest = root.required("digestSha256").asText();
+        var stored =
+                store.load(
+                                fence,
+                                snapshots.size(),
+                                HEX.parseHex(digest),
+                                cancellation::isCancellationRequested)
+                        .toCompletableFuture()
+                        .join();
+        var result = mapper.createObjectNode();
+        var participantRecords = result.putArray("participants");
+        for (var participant : stored) {
+            participantRecords
+                    .addObject()
+                    .put("authorityKey", participant.authorityKey())
+                    .put("authorityPayloadHex", HEX.formatHex(participant.authorityPayload()))
+                    .put("membershipMutationHex", HEX.formatHex(participant.membershipMutation()))
+                    .put("authorityPayloadSha256", sha256(participant.authorityPayload()))
+                    .put("membershipMutationSha256", sha256(participant.membershipMutation()));
+        }
+        return result.put(
+                        "pageSha256",
+                        root.required("topPages").required(0).required("sha256").asText())
+                .put("rootDigestSha256", digest);
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            return HEX.formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (java.security.NoSuchAlgorithmException failure) {
+            throw new IllegalStateException(failure);
+        }
     }
 
     @Test

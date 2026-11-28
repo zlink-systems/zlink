@@ -179,6 +179,139 @@ test('§8.3 standalone Actor commit matches golden', () => {
   );
 });
 
+test('§8.3 SpotWide source seal matches golden', async () => {
+  const { createHash } = require('node:crypto');
+  const {
+    encodeActorAuthorityIdentity
+  } = require('../../packages/framework/dist/runtime/actors/actor-authority-publication');
+  const {
+    encodeServiceUserSpotAuthorityPayload
+  } = require('../../packages/framework/dist/runtime/foundation/service-authority-payload-codec');
+  const { decodeRoutingId } = require('../../packages/framework/dist/runtime/routing-id');
+  const { ZLinkSpotKind } = require('../../packages/framework/dist/contracts/Spots/SpotKind');
+  const { input, expected } = golden.spotWideSeal;
+  const { source, spot, actors } = input;
+  const nodeRid = decodeRoutingId('', source.routingIdHex);
+  const nodeGeneration = BigInt(source.nodeGeneration);
+  const leaseGeneration = BigInt(source.ownerLeaseGeneration);
+  const spotGeneration = BigInt(spot.objectGeneration);
+  const spotKey = encodeAuthorityKey('user_spot', spot.id).value;
+  const spotPayload = encodeServiceUserSpotAuthorityPayload({
+    state: 'ready',
+    stableType: spot.stableType,
+    spotId: spot.id,
+    ownerId: source.ownerId,
+    ownerLeaseGeneration: leaseGeneration,
+    ownerMeshName: source.meshName,
+    ownerNodeRid: nodeRid,
+    ownerNodeGeneration: nodeGeneration
+  });
+  const snapshot = (row, objectKind, payload) => ({
+    kind: 'snapshot',
+    allocation: { objectKind, stableType: row.stableType },
+    objectGeneration: BigInt(row.objectGeneration),
+    authorityOwnerGeneration: BigInt(row.authorityOwnerGeneration),
+    storeVersion: { value: row.expectedStoreVersion },
+    ownerId: source.ownerId,
+    ownerLeaseGeneration: leaseGeneration,
+    payload
+  });
+  const authorities = new Map([
+    [spotKey, snapshot(spot, 'user_spot', spotPayload)],
+    ...actors.map((actor) => [
+      encodeAuthorityKey('actor', actor.id).value,
+      snapshot(
+        actor,
+        'actor',
+        encodeActorAuthorityIdentity({
+          actorType: actor.stableType,
+          actor: {
+            actorId: actor.id,
+            objectGeneration: BigInt(actor.objectGeneration),
+            meshName: source.meshName,
+            nodeRid
+          },
+          meshName: source.meshName,
+          ownerNodeGeneration: nodeGeneration,
+          owner: { ownerId: source.ownerId, leaseGeneration },
+          spotId: spot.id,
+          spotGeneration,
+          spotKind: ZLinkSpotKind.User
+        })
+      )
+    ])
+  ]);
+  const provider = new ZLinkInMemoryProviderLocationStore();
+  const inventory = new ZLinkAggregateInventoryStore(provider);
+  const beforeTargetSelection = new Error('Stop at the target selection boundary');
+  let seal;
+  const recreate = { relocation: { kind: 'recreate' } };
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    registration: {
+      spotNodes: new Map([
+        [
+          source.meshName,
+          {
+            spotFactoryRegistrations: { [spot.stableType]: recreate },
+            actorFactoryRegistrations: Object.fromEntries(
+              actors.map(({ stableType }) => [stableType, recreate])
+            )
+          }
+        ]
+      ])
+    },
+    locationStore: () => ({
+      readAuthority: async ({ value }) => authorities.get(value),
+      async storeAggregateInventory(request, signal) {
+        const { aggregateId, aggregateGeneration } = request;
+        seal = {
+          fence: { aggregateId, aggregateGeneration },
+          digest: await inventory.store(request, signal)
+        };
+        return seal.digest;
+      }
+    }),
+    meshNode: () => {
+      assert(seal, 'The inventory must be stored before the runtime chooses a target');
+      throw beforeTargetSelection;
+    }
+  });
+  await assert.rejects(
+    runtime.relocateSpotAggregate(
+      source.meshName,
+      { spotId: spot.id, serial: { executeControlLifecycleOperation: (operation) => operation() } },
+      'user_spot',
+      actors.map((actor) => ({
+        actorId: actor.id,
+        meshName: source.meshName,
+        spotMembershipEpoch: BigInt(actor.membershipEpoch)
+      })),
+      undefined,
+      undefined
+    ),
+    (error) => error === beforeTargetSelection
+  );
+  const { fence, digest } = seal;
+  const prefix = `${PROVIDER_STORAGE_NAMESPACE_PREFIX}aggregate-inventory:${fence.aggregateId.value}:${fence.aggregateGeneration}:`;
+  const page = await provider.read(storeKey(`${prefix}page:0:0`));
+  assert.equal(page.kind, 'found');
+  const participants = await inventory.read(fence, Buffer.from(digest, 'hex'));
+  assert.deepEqual(
+    {
+      participants: participants.map((record) => ({
+        authorityKey: record.authorityKey,
+        authorityPayloadHex: Buffer.from(record.authorityPayload).toString('hex'),
+        membershipMutationHex: Buffer.from(record.membershipMutation).toString('hex'),
+        authorityPayloadSha256: record.authorityPayloadSha256,
+        membershipMutationSha256: record.membershipMutationSha256
+      })),
+      pageSha256: createHash('sha256').update(page.value.bytes).digest('hex'),
+      rootDigestSha256: digest
+    },
+    expected
+  );
+});
+
 test('§8.3 storage keys match golden', async () => {
   const { caseName, input, expected } = golden.storageKeys;
   const hex = input.aggregateId.replaceAll('-', '');

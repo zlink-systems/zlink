@@ -36,6 +36,155 @@ nlohmann::json aggregate_storage_golden ()
     return nlohmann::json::parse (fixture);
 }
 
+// Enable after the #5354 C++ port moves SpotWide projection out of the target-dependent seal.
+TEST (AuthorityAggregateRelocation, DISABLED_SpotWideSourceSealMatchesGolden)
+{
+    const auto vector = aggregate_storage_golden ().at ("spotWideSeal");
+    const auto &input = vector.at ("input");
+    const auto &expected = vector.at ("expected");
+    const auto &source = input.at ("source");
+    const auto &spot = input.at ("spot");
+    const auto text = [] (const nlohmann::json &value, const char *key) {
+        return value.at (key).get<std::string> ();
+    };
+    const auto number = [&] (const nlohmann::json &value, const char *key) {
+        return static_cast<std::uint64_t> (std::stoull (text (value, key)));
+    };
+    const auto mesh = text (source, "meshName");
+    const auto rid = zlink::routing_id_t::from_hex (text (source, "routingIdHex")).to_string ();
+    const auto node = node_rid_t::from_string (rid);
+    const auto node_generation = number (source, "nodeGeneration");
+    const auto owner = text (source, "ownerId");
+    const auto lease = number (source, "ownerLeaseGeneration");
+    const auto spot_id = text (spot, "id");
+    const auto spot_generation = number (spot, "objectGeneration");
+
+    in_memory_location_store_t provider;
+    provider_location_repository_t repository (provider);
+    public_authority_store_adapter_t adapter (repository);
+    std::vector<object_ref_t> participants;
+    const auto seed = [&] (const nlohmann::json &row, bool is_spot) {
+        const auto id = text (row, "id");
+        const auto type = text (row, "stableType");
+        const auto payload =
+          is_spot
+            ? encode_user_spot_authority_payload ({.state = user_spot_authority_state_t::ready,
+                                                   .stable_type = type,
+                                                   .spot_id = id,
+                                                   .owner_id = owner,
+                                                   .owner_lease_generation = lease,
+                                                   .mesh_name = mesh,
+                                                   .node_rid = node,
+                                                   .node_generation = node_generation})
+            : encode_actor_authority_payload (
+                {.stable_type = type,
+                 .actor_id = id,
+                 .current_spot_id = spot_id,
+                 .current_spot_generation = spot_generation,
+                 .current_spot_kind = actor_authority_spot_kind_t::user,
+                 .owner_id = owner,
+                 .owner_lease_generation = lease,
+                 .mesh_name = mesh,
+                 .node_rid = node,
+                 .node_generation = node_generation});
+        const auto kind = is_spot ? "userSpot" : "actor";
+        const nlohmann::json allocation{
+          {"state", "active"},
+          {"objectKind", kind},
+          {"stableType", type},
+          {"descriptor", {{"meshName", mesh}, {"routingIdHex", source.at ("routingIdHex")}}},
+          {"descriptorLifecycleGeneration", source.at ("nodeGeneration")},
+          {"capacity",
+           {{"actors", is_spot ? 0 : 1},
+            {"spots", is_spot ? 1 : 0},
+            {"spotType",
+             is_spot ? nlohmann::json{{"objectKind", kind}, {"stableType", type}, {"count", 1}}
+                     : nlohmann::json (nullptr)}}}};
+        const nlohmann::json authority{
+          {"recordVersion", 1},
+          {"payload", zlink::framework::detail::base64_encode (payload)},
+          {"objectGeneration", row.at ("objectGeneration")},
+          {"authorityOwnerGeneration", row.at ("authorityOwnerGeneration")},
+          {"ownerId", owner},
+          {"ownerLeaseGeneration", source.at ("ownerLeaseGeneration")},
+          {"allocation", allocation},
+          {"pendingCreation", nullptr}};
+        const auto key = is_spot ? spot_authority_key (id) : actor_authority_key (id);
+        const store_key_t storage_key{
+          (is_spot ? std::string ("authority\0spot\0", 15) : std::string ("authority\0actor\0", 16))
+          + id};
+        ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+          provider.write ({{}, {store_put_t{storage_key, bytes (authority.dump ()), {}}}})
+            .result ()
+            .value ()));
+        const auto loaded = repository.read_authority (key).result ().value ();
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&loaded);
+        ASSERT_NE (snapshot, nullptr);
+        ASSERT_EQ (snapshot->store_version, text (row, "expectedStoreVersion"));
+        participants.push_back ({is_spot ? object_kind_t::user_spot : object_kind_t::actor, id,
+                                 number (row, "objectGeneration"),
+                                 number (row, "authorityOwnerGeneration"), mesh, rid});
+    };
+    ASSERT_NO_FATAL_FAILURE (seed (spot, true));
+    for (const auto &actor : input.at ("actors"))
+        ASSERT_NO_FATAL_FAILURE (seed (actor, false));
+
+    const auto claimed = repository.claim_owner_lease (owner, 30s).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<owner_lease_claimed_t> (claimed));
+    ASSERT_EQ (std::get<owner_lease_claimed_t> (claimed).token.lease_generation, lease);
+    const auto relocation_id = text (input, "relocationId");
+    auto hex_id = relocation_id;
+    std::erase (hex_id, '-');
+    const zlink::framework::runtime::protocol::relocation_id_t relocation{
+      std::stoull (hex_id.substr (0, 16), nullptr, 16),
+      std::stoull (hex_id.substr (16), nullptr, 16)};
+    const relocation_authority_fence_t fence{
+      .kind = object_kind_t::user_spot,
+      .key = spot_id,
+      .expected_store_version = text (spot, "expectedStoreVersion"),
+      .source_owner = {owner, static_cast<std::int64_t> (lease)},
+      .target_owner = {"candidate-owner", 2},
+      .relocation = relocation,
+      .source_node_routing_id = {rid.begin (), rid.end ()},
+      .source_node_generation = node_generation};
+    ASSERT_TRUE (
+      adapter.begin_source_capture (participants, fence, "candidate", 4, 1).result ().value ());
+
+    const auto prefix = "zlink:v11:aggregate-inventory:" + relocation_id + ":1:";
+    const auto page = provider.read ({prefix + "page:0:0"}).result ().value ();
+    const auto root = provider.read ({prefix + "root"}).result ().value ();
+    const auto *page_row = std::get_if<store_found_t> (&page);
+    const auto *root_row = std::get_if<store_found_t> (&root);
+    ASSERT_NE (page_row, nullptr);
+    ASSERT_NE (root_row, nullptr);
+    const auto decoded_page = nlohmann::json::parse (page_row->value.bytes);
+    const auto decoded_root = nlohmann::json::parse (root_row->value.bytes);
+    EXPECT_EQ (zlink::framework::detail::encode_hex (sha256 (page_row->value.bytes)),
+               text (expected, "pageSha256"));
+    EXPECT_EQ (decoded_root.at ("digestSha256"), expected.at ("rootDigestSha256"));
+
+    const auto &expected_participants = expected.at ("participants");
+    const auto &entries = decoded_page.at ("entries");
+    ASSERT_EQ (entries.size (), expected_participants.size ());
+    for (std::size_t index = 0; index < entries.size (); ++index) {
+        const auto &record = expected_participants.at (index);
+        SCOPED_TRACE (text (record, "authorityKey"));
+        EXPECT_EQ (entries.at (index).at ("authorityKey"), record.at ("authorityKey"));
+        for (const auto kind : {"authorityPayload", "membershipMutation"}) {
+            const auto value =
+              provider.read ({prefix + "participant:" + std::to_string (index) + ":" + kind})
+                .result ()
+                .value ();
+            const auto *found = std::get_if<store_found_t> (&value);
+            ASSERT_NE (found, nullptr);
+            EXPECT_EQ (zlink::framework::detail::encode_hex (found->value.bytes),
+                       record.at (std::string (kind) + "Hex"));
+            EXPECT_EQ (entries.at (index).at (std::string (kind) + "Sha256"),
+                       record.at (std::string (kind) + "Sha256"));
+        }
+    }
+}
+
 TEST (AuthorityAggregateRelocation, ProviderSealMatchesAggregateStorageGolden)
 {
     const auto golden = aggregate_storage_golden ();

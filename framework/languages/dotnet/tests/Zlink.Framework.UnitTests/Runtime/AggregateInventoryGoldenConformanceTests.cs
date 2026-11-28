@@ -1,14 +1,187 @@
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class AggregateInventoryGoldenConformanceTests
 {
+    [Fact]
+    public async Task SpotWideSourceSealMatchesGolden()
+    {
+        using var fixture = LoadFixture();
+        var vector = fixture.RootElement.GetProperty("spotWideSeal");
+        var input = vector.GetProperty("input");
+        var expected = vector.GetProperty("expected");
+        var source = input.GetProperty("source");
+        var spot = input.GetProperty("spot");
+        var spotId = spot.GetProperty("id").GetString()!;
+        var spotGeneration = ulong.Parse(spot.GetProperty("objectGeneration").GetString()!);
+        var mesh = source.GetProperty("meshName").GetString()!;
+        var rid = RoutingId.FromHex(source.GetProperty("routingIdHex").GetString()!);
+        var nodeGeneration = ulong.Parse(source.GetProperty("nodeGeneration").GetString()!);
+        var owner = source.GetProperty("ownerId").GetString()!;
+        var lease = long.Parse(source.GetProperty("ownerLeaseGeneration").GetString()!);
+        var descriptor = new ZLinkMeshNodeDescriptorKey(mesh, rid);
+        var authorities = new Dictionary<ZLinkAuthorityKey, ZLinkAuthoritySnapshot>();
+        void AddSourceAuthority(JsonElement row, bool isSpot)
+        {
+            var id = row.GetProperty("id").GetString()!;
+            var type = row.GetProperty("stableType").GetString()!;
+            var kind = isSpot ? ZLinkPlacementObjectKind.UserSpot : ZLinkPlacementObjectKind.Actor;
+            var payload = isSpot
+                ? ZLinkUserSpotAuthorityPayloadCodec.Encode(
+                    new(
+                        ZLinkUserSpotAuthorityState.Ready,
+                        type,
+                        id,
+                        owner,
+                        (ulong)lease,
+                        mesh,
+                        rid,
+                        nodeGeneration
+                    )
+                )
+                : ZLinkActorAuthorityPayloadCodec.Encode(
+                    new(
+                        ZLinkActorAuthorityState.Ready,
+                        type,
+                        id,
+                        spotId,
+                        spotGeneration,
+                        ZLinkSpotKind.User,
+                        owner,
+                        (ulong)lease,
+                        mesh,
+                        rid,
+                        nodeGeneration
+                    )
+                );
+            authorities.Add(
+                isSpot
+                    ? ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(id)
+                    : ZLinkActorAuthorityPayloadCodec.AuthorityKey(id),
+                new(
+                    row.GetProperty("expectedStoreVersion").GetString()!,
+                    payload,
+                    ulong.Parse(row.GetProperty("objectGeneration").GetString()!),
+                    ulong.Parse(row.GetProperty("authorityOwnerGeneration").GetString()!),
+                    owner,
+                    lease,
+                    new(
+                        ZLinkPlacementAllocationState.Active,
+                        kind,
+                        type,
+                        descriptor,
+                        nodeGeneration,
+                        isSpot ? new(0, 1, new(kind, type, 1)) : new(1, 0, null)
+                    ),
+                    null,
+                    DateTimeOffset.UnixEpoch
+                )
+            );
+        }
+
+        var actors = input.GetProperty("actors").EnumerateArray().ToArray();
+        AddSourceAuthority(spot, true);
+        foreach (var actor in actors)
+            AddSourceAuthority(actor, false);
+
+        ZLinkUserSpotActivation? activation = null;
+        var trace = new RelocationBehaviorTrace
+        {
+            InitializeTarget = (context, _) =>
+            {
+                activation = Assert.IsType<ZLinkUserSpotActivation>(context);
+                return ValueTask.CompletedTask;
+            },
+        };
+        await using var host = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            new ZLinkInMemoryProviderLocationStore(),
+            new SynchronizedRelocationStore(),
+            registerTargetSpot: true,
+            relocateSpots: true
+        );
+        await host
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate(spotId, RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Async();
+        Assert.NotNull(activation);
+
+        var actorManager = host.Services.GetRequiredService<IZLinkActorManager>();
+        foreach (var actor in actors)
+        {
+            var actorId = actor.GetProperty("id").GetString()!;
+            await actorManager
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+                .InMesh(RelocationBehaviorHost.MeshName)
+                .Request(new BehaviorCreate(0))
+                .Async();
+            var state = host.Runtime.GetOrCreateActorState(actorId);
+            Assert.NotNull(state.Actor);
+            await activation.PrepareTransferredActorJoinAndReplayAsync(state.Actor, state, default);
+        }
+
+        var boundary = new SpotWideSealBoundary(authorities);
+        var scheduler = new ZLinkSpotRetireScheduler(boundary, boundary, host.Runtime);
+        var result = await scheduler.TryRelocateAsync(
+            activation,
+            false,
+            default,
+            DateTimeOffset.UtcNow.AddSeconds(10),
+            _ => throw new InvalidOperationException("No target reserved the Spot."),
+            default
+        );
+        Assert.Equal(ZLinkRelocationUnitOutcome.Pending, result.Outcome);
+        const string prefix = SpotWideSealBoundary.Prefix;
+        var fence = boundary.Fence;
+        Assert.Equal(1UL, fence.AggregateGeneration);
+        var store = boundary.Store;
+        var digest = boundary.Digest;
+        Assert.NotNull(digest);
+        var page = Assert.IsType<ZLinkStoreReadResult.Found>(
+            await store.ReadAsync(ZLinkAggregateInventory.PageKey(prefix, fence, 0, 0))
+        );
+        var actual = await ZLinkAggregateInventory.ReadAsync(store, prefix, fence, digest, default);
+        Assert.Equal(
+            expected
+                .GetProperty("participants")
+                .EnumerateArray()
+                .Select(record =>
+                    (
+                        record.GetProperty("authorityKey").GetString(),
+                        record.GetProperty("authorityPayloadHex").GetString(),
+                        record.GetProperty("membershipMutationHex").GetString(),
+                        record.GetProperty("authorityPayloadSha256").GetString(),
+                        record.GetProperty("membershipMutationSha256").GetString()
+                    )
+                ),
+            actual.Select(record =>
+                (
+                    record.Entry.AuthorityKey,
+                    Convert.ToHexString(record.Payload.Span).ToLowerInvariant(),
+                    Convert.ToHexString(record.Mutation.Span).ToLowerInvariant(),
+                    record.Entry.AuthorityPayloadSha256,
+                    record.Entry.MembershipMutationSha256
+                )
+            )
+        );
+        Assert.Equal(
+            expected.GetProperty("pageSha256").GetString(),
+            ZLinkAggregateInventory.Hash(page.Value.Bytes.Span)
+        );
+        Assert.Equal(expected.GetProperty("rootDigestSha256").GetString(), digest);
+    }
+
     [Fact]
     public void StandaloneActorCommitMatchesGolden()
     {
@@ -382,6 +555,78 @@ public sealed class AggregateInventoryGoldenConformanceTests
         root.GetProperty(group)
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == name);
+
+    private sealed class SpotWideSealBoundary(
+        IReadOnlyDictionary<ZLinkAuthorityKey, ZLinkAuthoritySnapshot> authorities
+    ) : ZLinkLocationStoreTestDouble, IZLinkSpotRetireTarget
+    {
+        internal const string Prefix = "golden:";
+        internal ZLinkInMemoryProviderLocationStore Store { get; } = new();
+        internal ZLinkAggregateFence Fence { get; private set; }
+        internal string? Digest { get; private set; }
+
+        public override ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
+            ZLinkAuthorityKey key,
+            CancellationToken cancellationToken = default
+        ) =>
+            ValueTask.FromResult<ZLinkAuthorityReadResult>(
+                new ZLinkAuthorityReadResult.Found(authorities[key])
+            );
+
+        public override async ValueTask<string> SealAggregateInventoryAsync(
+            ZLinkAggregateFence fence,
+            IReadOnlyList<ZLinkAggregateParticipant> participants,
+            CancellationToken cancellationToken
+        )
+        {
+            Fence = fence;
+            Digest = await ZLinkAggregateInventory.SealAsync(
+                Store,
+                Prefix,
+                fence,
+                participants,
+                cancellationToken
+            );
+            return Digest;
+        }
+
+        public ValueTask<ZLinkSpotRetireReservation?> TryReserveAsync(
+            ZLinkSpotRetireInventory inventory,
+            ZLinkRelocationTargetSelection selection,
+            CancellationToken cancellationToken
+        )
+        {
+            Assert.NotNull(Digest);
+            return ValueTask.FromResult<ZLinkSpotRetireReservation?>(null);
+        }
+
+        public ValueTask StageAsync(
+            ZLinkSpotRetireReservation reservation,
+            ZLinkPreparedSpotRetireStaging relocation,
+            Func<ValueTask<IReadOnlyList<ZLinkRelocationQueuedJob>>> freezeBoundary,
+            DateTimeOffset deadline,
+            CancellationToken cancellationToken
+        ) => throw new NotSupportedException();
+
+        public ValueTask<ulong> PublishAsync(
+            ZLinkSpotRetireReservation reservation,
+            ZLinkAggregateRelocationPublished relocation,
+            DateTimeOffset restoreDeadline,
+            CancellationToken cancellationToken
+        ) => throw new NotSupportedException();
+
+        public ValueTask AbortAsync(
+            ZLinkSpotRetireReservation reservation,
+            ZLinkAggregateFence? fence
+        ) => throw new NotSupportedException();
+
+        public ValueTask RelayCommittedAsync(
+            ZLinkSpotRetireReservation reservation,
+            ZLinkAggregateRelocationPublished relocation,
+            IReadOnlyList<ZLinkAcceptedWorkRecord> held,
+            CancellationToken cancellationToken
+        ) => throw new NotSupportedException();
+    }
 
     private static JsonDocument LoadFixture() =>
         JsonDocument.Parse(
