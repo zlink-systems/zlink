@@ -115,7 +115,11 @@ def _as_bytes_view(data):
 
 
 def _send_buffer(data):
-    """Return a ctypes pointer for bytes or a normalized byte view."""
+    """Return a ctypes pointer for bytes or a byte view.
+
+    The caller normalizes the input to ``bytes`` or a ``memoryview`` first
+    (``_as_bytes_view``); other buffer types are not accepted here.
+    """
     if isinstance(data, bytes):
         size = len(data)
         if size == 0:
