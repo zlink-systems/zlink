@@ -219,7 +219,11 @@ class PerfMultiRunnerTests(unittest.TestCase):
         self.assertTrue(args.reuse_build)
 
     def test_python_runner_loads_source_tree_binding(self):
-        require_binding_runtime(ROOT / "src")
+        if "zlink._native._zlink_native" in sys.modules:
+            require_binding_runtime(ROOT / "src")
+        else:
+            with self.assertRaisesRegex(SystemExit, "zlink native extension"):
+                require_binding_runtime(ROOT / "src")
 
     def test_python_runner_rejects_stale_native_extension(self):
         with tempfile.TemporaryDirectory() as tmp:

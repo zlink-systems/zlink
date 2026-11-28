@@ -101,7 +101,7 @@ contains only the shared part container behavior.
 | | `close()` | closes every owned part |
 | `Received extends ReceivedMultipart` | `send()` | starts the shared `SendOp` builder (Sockets category), addressed to this envelope's captured source route; raises `SubmitError` if the envelope carries no send context |
 | | `routing_id` / `reply_token` | source route and optional socket-owned, one-shot `ReplyToken` capability |
-| | `reply()` | starts the shared `ReplyOp` builder; raises `SubmitError` unless the envelope is replyable |
+| | `reply()` | Starts the shared `ReplyOp` builder. Raises `SubmitError` if the reply context is absent. Submitting after the source socket closes raises `SubmitError` with `SubmitResult.TERMINATED`. |
 
 **Completion result.** All members are synchronous. Both support sync/async context-manager
 protocols.

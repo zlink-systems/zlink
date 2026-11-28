@@ -44,6 +44,11 @@ with socket:
 **When to use.** Every concrete socket type below extends this Protocol and adds its own
 `connect`/`disconnect`/send/recv surface.
 
+On raw sockets other than STREAM, `connection_attempts_snapshot()` returns one
+`ConnectionAttempt` per outbound connection registration. Watch for changes with
+`PollEventFlag.POLLCONNECT`. A successful snapshot clears readiness unless a newer
+change occurred during the query.
+
 ---
 
 ## `CommonSocketOptions` and per-type extensions
@@ -72,11 +77,8 @@ socket.options.submit_retry_mode = SubmitRetryMode.LOCAL_FAILURE
 | `max_message_size` | maximum size in bytes of a single accepted message |
 | `backlog` | pending-connection queue length for a listening socket |
 | `reconnect_interval_ms` / `reconnect_interval_max_ms` | delay between reconnect attempts / cap on that delay |
-| `submit_retry_mode` | whether a failed submit retries automatically on local back-pressure |
+| `submit_retry_mode` | Uses `SubmitRetryMode.OFF` or `SubmitRetryMode.LOCAL_FAILURE`. |
 | `submit_retry_timeout_ms` / `submit_retry_attempts` | retry timeout/attempt cap when `submit_retry_mode` requests it |
-| `heartbeat_interval_ms` | interval between heartbeat pings on an idle connection — **no other language covered so far exposes this property** |
-| `heartbeat_ttl_ms` | how long the remote keeps the connection alive without a heartbeat — same exclusivity |
-| `heartbeat_timeout_ms` | how long to wait for a heartbeat reply before treating the connection as dead — same exclusivity |
 
 **Options — per-type extensions.**
 
@@ -88,13 +90,13 @@ socket.options.submit_retry_mode = SubmitRetryMode.LOCAL_FAILURE
 | `RouterSocketOptions` | `mandatory` | error instead of silent drop on an unknown route |
 | | `handover` | convenience wrapper over `rid_duplicate_policy` |
 | | `probe` | sends an empty probe on connect |
-| | `connect_routing_id` | the *only* routing-id-shaped surface anywhere in this binding's socket contracts — see the README's note that no socket type has `set_routing_id`/`get_routing_id` of its own |
+| | `connect_routing_id` | Sets the peer routing ID for the next outbound connection. |
 | | `weight` / `request_timeout_ms` | both directions |
 | `StreamSocketOptions` | `notify` | delivers peer connect/disconnect as application messages when enabled |
 | `PubSocketOptions` | `verbose` / `verboser` | deliver every (un)subscribe message, including duplicates |
 | | `manual` / `manual_last_value` | subscriptions require `approve_subscribe`/`reject_subscribe`; `manual_last_value` also replays the last cached message per topic to a newly accepted subscriber |
 | | `no_drop` | error instead of silent drop on back-pressure |
-| | `welcome_message` | sent automatically to each newly connected subscriber |
+| | `welcome_message` | Sends automatically to new subscribers. The current getter raises `ConfigError` for values longer than 256 bytes. |
 | | `topics_count` | read-only, active subscription count |
 | | `approve_subscribe(routing_id)` / `reject_subscribe(routing_id)` | set-only, no getters |
 | `SubSocketOptions` | `topics_count` | read-only — the only per-type option this socket has |
@@ -102,9 +104,7 @@ socket.options.submit_retry_mode = SubmitRetryMode.LOCAL_FAILURE
 **Completion result.** Every property read/write is synchronous.
 
 **When to use.** Set `send_high_water_mark`/`receive_high_water_mark` and `linger_ms` before the
-socket starts exchanging messages when the defaults don't fit the deployment. Use the three
-`heartbeat_*` properties to tune ZMTP-level liveness detection independent of the transport's own
-TCP keep-alive.
+socket starts exchanging messages when the defaults don't fit the deployment.
 
 ---
 
@@ -148,7 +148,7 @@ submission = dealer.request().message(b"payload").timeout(5.0).submit()
 reply = await submission.reply
 ```
 
-**Options.** **No `set_routing_id`/`get_routing_id` at all** — see the README's note.
+**Options.** Use `set_routing_id` and `get_routing_id` to set and read the DEALER socket's own routing ID.
 
 | Member | Meaning |
 | --- | --- |
@@ -317,7 +317,7 @@ received.reply().message(b"ok").submit()
 | `PublishOp.submit()` | Completes publication synchronously. |
 | `ReplyOp.submit()` | Submits the reply synchronously. |
 
-A submitted `Message` is consumed when Core admits it. A synchronous rejection leaves it with the caller. When an asynchronous send or request returns `BACKPRESSURED` with a wait token, the binding consumes the original once it has secured its own copy for resubmission. A consumed `Message` reports empty data and size zero. To keep using the payload, make a copy with `Message.copy()` before submitting.
+A submitted `Message` is consumed when Core admits it. A synchronous rejection leaves it with the caller. When an asynchronous send or request returns `BACKPRESSURED` with a wait token, the binding consumes the original once it has secured its own copy for resubmission. A consumed `Message` reports empty data and size zero. Submitting it again raises `ConfigError` with `ConfigResult.INVALID_HANDLE`. To keep using the payload, make a copy with `Message.copy()` before submitting.
 
 Register the socket for `PollEventFlag.POLLCOMPLETION` before submitting an asynchronous request
 or a send that may wait for admission. Call [`Poller.wait()`](04-eventing.en.md#poller) while
