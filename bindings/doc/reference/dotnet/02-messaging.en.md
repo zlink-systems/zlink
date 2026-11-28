@@ -39,10 +39,12 @@ using Message fromString = Message.From("hello", Encoding.UTF8);
 | `ToArray()` / `GetString()` / `GetString(Encoding)` | — | independent managed copy |
 | `CopyTo(Span<byte>)` / `CopyTo(IBufferWriter<byte>)` / `TryCopyTo(Span<byte>, out int)` | — | copy into caller buffer |
 
-**Completion result.** All synchronous. `Message` is `IDisposable`/`IAsyncDisposable` — disposal
-releases payload storage. A submit that consumes this message (Sockets/Messaging builder shape
-below) leaves the managed instance empty afterward; reading its payload then throws, but disposing
-it stays safe and is still required.
+**Completion result.** All synchronous. `Message` implements `IDisposable` and
+`IAsyncDisposable`. Once a submit consumes a message or the caller disposes it,
+`Size` and `RefCount` return 0, payload reads return empty results, and
+`Copy()` and `Clone()` return new empty messages. Submitting the closed message throws
+`ZlinkSubmitException` (`InvalidHandle`). Dispose each message you own, including
+messages consumed by submit and the empty messages returned by copying.
 
 **When to use.** A sized or snapshot-copy constructor/factory to build an outbound payload;
 `AsSpan()`/`AsReadOnlySpan()` to read or write in place without an extra copy; `ToArray()`/

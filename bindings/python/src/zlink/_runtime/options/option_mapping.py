@@ -4,7 +4,7 @@ import ctypes
 import errno
 
 from ...contracts.core.routing_id import RoutingId
-from ...contracts.sockets.codes import RidDuplicatePolicy, StreamRecvMode
+from ...contracts.sockets.codes import RidDuplicatePolicy, StreamRecvMode, SubmitRetryMode
 from ...contracts.errors.codes import ConfigResult
 from ...contracts.errors.errors import ConfigError
 from ..native_codes import RouterOption, SocketOption
@@ -119,30 +119,6 @@ class CommonSocketOptions:
         self._socket._set_common_int_option(SocketOption.TCP_KEEPALIVE, value)
 
     @property
-    def heartbeat_interval_ms(self):
-        return self._socket._get_common_int_option(SocketOption.HEARTBEAT_IVL)
-
-    @heartbeat_interval_ms.setter
-    def heartbeat_interval_ms(self, value):
-        self._socket._set_common_int_option(SocketOption.HEARTBEAT_IVL, value)
-
-    @property
-    def heartbeat_ttl_ms(self):
-        return self._socket._get_common_int_option(SocketOption.HEARTBEAT_TTL)
-
-    @heartbeat_ttl_ms.setter
-    def heartbeat_ttl_ms(self, value):
-        self._socket._set_common_int_option(SocketOption.HEARTBEAT_TTL, value)
-
-    @property
-    def heartbeat_timeout_ms(self):
-        return self._socket._get_common_int_option(SocketOption.HEARTBEAT_TIMEOUT)
-
-    @heartbeat_timeout_ms.setter
-    def heartbeat_timeout_ms(self, value):
-        self._socket._set_common_int_option(SocketOption.HEARTBEAT_TIMEOUT, value)
-
-    @property
     def max_message_size(self):
         return _read_int64(self._socket._get_raw_option(
             lib().zlink_get_option,
@@ -184,7 +160,9 @@ class CommonSocketOptions:
 
     @property
     def submit_retry_mode(self):
-        return self._socket._get_common_int_option(SocketOption.SUBMIT_RETRY_MODE)
+        return SubmitRetryMode(
+            self._socket._get_common_int_option(SocketOption.SUBMIT_RETRY_MODE)
+        )
 
     @submit_retry_mode.setter
     def submit_retry_mode(self, value):

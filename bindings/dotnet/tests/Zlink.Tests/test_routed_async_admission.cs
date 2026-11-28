@@ -233,8 +233,8 @@ public sealed class test_routed_async_admission
         using Message tail = Message.Allocate(0);
         Task admission = dealer.Send().Message(payload).Message(tail).Async().Admitted;
 
-        Assert.Throws<ObjectDisposedException>(() => _ = payload.Size);
-        Assert.Throws<ObjectDisposedException>(() => _ = tail.Size);
+        Assert.Equal(0, payload.Size);
+        Assert.Equal(0, tail.Size);
         await admission.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.True(admission.IsCompletedSuccessfully);
 
@@ -264,7 +264,8 @@ public sealed class test_routed_async_admission
         {
             SendSubmitOperation operation = sender.Send().Messages(parts);
             Action submit = () => _ = operation.Async().Admitted;
-            Assert.Throws<ObjectDisposedException>(submit);
+            var error = Assert.Throws<ZlinkSubmitException>(submit);
+            Assert.Equal(ZlinkSubmitException.ErrorCode.InvalidHandle, error.Result);
 
             for (var index = 0; index < parts.Length - 1; index++)
                 Assert.Equal(expected[index], parts[index].GetString());

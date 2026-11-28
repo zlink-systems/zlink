@@ -47,6 +47,8 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--pin-cpu", action="store_true")
     ap.add_argument("--duration", type=int, default=0)
+    ap.add_argument("--latency-duration", type=int)
+    ap.add_argument("--monitor-hwm-bytes", type=int)
     ap.add_argument("--results-dir", default="")
     ap.add_argument("--results-tag", default="")
     ap.add_argument("--result-file", default="")
@@ -78,6 +80,10 @@ def main(argv: List[str]) -> int:
         cmd.extend(["--results-tag", args.results_tag])
     if args.duration > 0:
         cmd.extend(["--duration", str(args.duration)])
+    if args.latency_duration is not None:
+        cmd.extend(["--latency-duration", str(args.latency_duration)])
+    if args.monitor_hwm_bytes is not None:
+        cmd.extend(["--monitor-hwm-bytes", str(args.monitor_hwm_bytes)])
     # PERF_POLICY.md § "runs median": --runs must reach the suite runner, or a
     # runs>1 request silently degrades to a single run.
     if args.runs > 0:

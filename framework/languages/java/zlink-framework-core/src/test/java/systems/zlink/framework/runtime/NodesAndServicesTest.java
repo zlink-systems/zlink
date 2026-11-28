@@ -301,8 +301,9 @@ final class NodesAndServicesTest {
         DefaultZLinkFrameworkOptions options = optionsWithSpotNodeAndActorFactory();
 
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             ZLinkActorCreateResult result =
                     runtime.actorManager()
                             .create("player-1", "player")
@@ -327,8 +328,9 @@ final class NodesAndServicesTest {
         DefaultZLinkFrameworkOptions options = optionsWithSpotNodeAndActorFactory();
 
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             ActorRef first =
                     ((ZLinkActorCreateResult.Created)
                                     runtime.actorManager()
@@ -385,9 +387,9 @@ final class NodesAndServicesTest {
                         factory -> factory.disableRelocation());
 
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
-            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
+            assertTrue(runtime.isReady());
             CompletionStage<ZLinkActorCreateResult> first =
                     runtime.actorManager().getOrCreate("player-serial", "blocking-player").submit();
             CompletionStage<ZLinkActorCreateResult> second =
@@ -467,8 +469,9 @@ final class NodesAndServicesTest {
                 .addSpotFactory("client", ClientSpot.class, factory -> factory.disableRelocation());
 
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             runtime.spotManager()
                     .getOrCreate(roomRid.toString(), "room")
                     .submit()

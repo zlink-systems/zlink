@@ -25,7 +25,7 @@ def test_native_submission_preserves_mixed_public_parts(part_count):
                     expected = [value.to_bytes() if value is owned else bytes(value) for value in payloads]
                     await sender.send().messages(*payloads).submit().admitted
                     choices[1][:] = b"changed"
-                    assert owned.to_bytes() == b"owned"
+                    assert owned.to_bytes() == b""
                     with zlink.create_received() as received:
                         assert receiver.recv_into(received)
                         assert received.to_bytes_list() == expected
@@ -38,6 +38,7 @@ def test_native_submission_preserves_mixed_public_parts(part_count):
     asyncio.run(exercise())
 
 
+@pytest.mark.skipif(native_support._native_extension is None, reason="checks C extension clone")
 def test_completion_clones_survive_source_close():
     import ctypes
     from zlink._native.ffi import ZlinkCompletion, ZlinkMsg

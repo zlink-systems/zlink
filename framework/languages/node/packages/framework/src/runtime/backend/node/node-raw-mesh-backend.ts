@@ -1664,11 +1664,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   leaveActor(
     actor: ZLinkBackendActorRef,
     expectedMembershipEpoch: bigint,
+    expectedAuthorityOwnerGeneration: bigint,
     timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorLeave,
-      this.requireStateful().leaveActor(actor, expectedMembershipEpoch, timeoutMs)
+      this.requireStateful().leaveActor(
+        actor,
+        expectedMembershipEpoch,
+        expectedAuthorityOwnerGeneration,
+        timeoutMs
+      )
     );
   }
 

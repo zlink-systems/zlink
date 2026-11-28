@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 
+import errno
 import ctypes
 from typing import Optional
 
@@ -12,6 +13,7 @@ from ..._runtime.handles.native_support import (
     _internal_errno,
     _init_msg_from_buffer,
     _clone_native_msg,
+    _msg_data_ptr,
     _msg_refcnt,
     _msg_size,
     _msg_to_bytes,
@@ -139,7 +141,12 @@ class _BaseReceived:
 
     @staticmethod
     def _build_parts(owner):
-        return _native_extension.build_received_parts(owner, ReceivedMessage)
+        if _native_extension is not None:
+            return _native_extension.build_received_parts(owner, ReceivedMessage)
+        return tuple(
+            ReceivedMessage._from_owner(owner, index)
+            for index in range(owner._part_count)
+        )
 
     def _close_current_owner(self):
         if self._owner is not None:
@@ -177,7 +184,7 @@ class _BaseReceived:
 
     def first_part(self):
         if not self.parts:
-            raise RecvError(RecvResult.NO_DATA, 0)
+            raise RecvError(RecvResult.INVALID_STATE, errno.EINVAL)
         return self.parts[0]
 
     def single_part_or_throw(self):
@@ -404,6 +411,8 @@ class SubscriptionEvent:
 
 
 class Message:
+    _data_view_cache = None
+
     def __init__(self, size: Optional[int] = None):
         self._msg = ZlinkMsg()
         self._valid = False
@@ -448,7 +457,19 @@ class Message:
     def data(self):
         if not self._valid:
             return memoryview(b"")
-        return _native_extension.message_data(self, ctypes.c_ubyte)
+        if _native_extension is not None:
+            return _native_extension.message_data(self, ctypes.c_ubyte)
+        size = _msg_size(self._msg)
+        if not size:
+            return memoryview(b"")
+        address = _msg_data_ptr(self._msg)
+        # Same rule as the native path: reuse the view only for the same storage.
+        cached = self._data_view_cache
+        if cached is None or cached[0] != address or cached[1] != size:
+            storage = (ctypes.c_ubyte * size).from_address(address)
+            cached = (address, size, memoryview(storage).cast("B"))
+            self._data_view_cache = cached
+        return cached[2]
 
     def to_bytes(self):
         return _msg_to_bytes(self._msg) if self._valid else b""
@@ -506,7 +527,11 @@ class Message:
     def close(self):
         if not self._valid:
             return
-        rc, internal_errno = _native_extension.msg_close(self._msg)
+        if _native_extension is not None:
+            rc, internal_errno = _native_extension.msg_close(self._msg)
+        else:
+            rc = lib().zlink_msg_close(ctypes.byref(self._msg))
+            internal_errno = _internal_errno() if rc != 0 else 0
         if rc != 0:
             _raise_result_error(CloseError, CloseResult, rc, internal_errno)
         self._valid = False

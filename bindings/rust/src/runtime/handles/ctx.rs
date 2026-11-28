@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString, c_void};
+use std::ffi::{CString, c_void};
 use std::time::Duration;
 
 use crate::contracts::core::context::{
@@ -291,7 +291,7 @@ impl ContextStorage {
         let ms = self.get_int_option(
             ffi::zlink_ctx_option_t::ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS as i32,
         )?;
-        Ok(Duration::from_millis(ms.max(0) as u64))
+        duration_from_millis(ms)
     }
 
     /// Set the auto HWM recalculation debounce interval.
@@ -371,44 +371,23 @@ impl Drop for ContextStorage {
 }
 
 // ---------------------------------------------------------------------------
-// Version helper
-// ---------------------------------------------------------------------------
-
-/// Return the runtime library version as `(major, minor, patch)`.
-pub fn version() -> (i32, i32, i32) {
-    let (mut major, mut minor, mut patch) = (0i32, 0i32, 0i32);
-    unsafe {
-        ffi::zlink_version(&mut major, &mut minor, &mut patch);
-    }
-    (major, minor, patch)
-}
-
-/// Check whether the library supports a given capability (e.g. `"ipc"`, `"tls"`).
-pub fn has(capability: &str) -> bool {
-    let c = std::ffi::CString::new(capability).unwrap_or_default();
-    unsafe { ffi::zlink_has(c.as_ptr()) }
-}
-
-/// Returns the native error text for an errno value.
-pub fn strerror(errnum: i32) -> &'static str {
-    let ptr = unsafe { ffi::zlink_strerror(errnum) };
-    if ptr.is_null() {
-        ""
-    } else {
-        unsafe { CStr::from_ptr(ptr) }.to_str().unwrap_or("")
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Duration → millis helper (with overflow check per Boundary Cost Policy)
 // ---------------------------------------------------------------------------
 
 pub(crate) fn duration_to_millis(d: Duration) -> Result<i32, ConfigError> {
-    let ms = d.as_millis();
-    if ms > i32::MAX as u128 {
-        return Err(config_validation_error());
-    }
-    Ok(ms as i32)
+    exact_millis(d)
+        .and_then(|ms| i32::try_from(ms).ok())
+        .ok_or_else(config_validation_error)
+}
+
+pub(crate) fn exact_millis(duration: Duration) -> Option<u128> {
+    (duration.subsec_nanos() % 1_000_000 == 0).then_some(duration.as_millis())
+}
+
+pub(crate) fn duration_from_millis(ms: i32) -> Result<Duration, ConfigError> {
+    u64::try_from(ms)
+        .map(Duration::from_millis)
+        .map_err(|_| config_validation_error())
 }
 
 pub(crate) fn context_handle(ctx: &Context) -> *mut c_void {

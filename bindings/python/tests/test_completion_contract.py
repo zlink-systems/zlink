@@ -7,6 +7,7 @@ import socket as py_socket
 import struct
 import time
 import uuid
+from contextlib import nullcontext
 from unittest.mock import patch
 
 import pytest
@@ -23,6 +24,7 @@ from zlink._native.ffi import (
     ZlinkMsg,
 )
 from zlink._runtime.eventing.poller import NativePoller
+from zlink._runtime.handles.native_support import _native_extension
 from zlink._runtime.messaging.routed_async import (
     CompletionOwner,
     _CompletionEntry,
@@ -130,11 +132,6 @@ def test_stream_packet_resets_closes_and_reuses_storage():
     assert first_body.closed == 1
     packet._finish_receive()
 
-    packet._begin_receive()
-    with pytest.raises(zlink.RecvError) as raised:
-        packet._begin_receive()
-    assert raised.value.result == zlink.RecvResult.BUSY
-    packet._finish_receive()
     packet.close()
     assert packet.is_empty
 
@@ -242,7 +239,8 @@ def test_cancelled_wait_keeps_native_operation_and_late_completion_cleans_once()
             patch("zlink._runtime.messaging.routed_async.lib", return_value=closer),
             patch("zlink._runtime.messaging.routed_async.Message", FakeMessage),
             patch("zlink._runtime.messaging.routed_async._clone_native_msg", side_effect=clone),
-            patch("zlink._runtime.messaging.routed_async._native_extension.completion_messages", side_effect=clone_completion),
+            patch.object(_native_extension, "completion_messages", side_effect=clone_completion)
+            if _native_extension is not None else nullcontext(),
         ):
             entry.capture(completion)
         await asyncio.sleep(0)

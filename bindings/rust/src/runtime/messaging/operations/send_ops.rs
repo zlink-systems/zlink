@@ -24,13 +24,13 @@ impl crate::internal::SocketStorage {
             .expect("socket completion owner")
             .clone();
         SendOp {
-            inner: SendOpStorage {
+            inner: Ok(SendOpStorage {
                 handle,
                 routed: None,
                 completion_owner,
                 target: None,
                 parts: MessageParts::default(),
-            },
+            }),
             _state: std::marker::PhantomData,
         }
     }
@@ -45,13 +45,13 @@ impl crate::internal::SocketStorage {
             .expect("DEALER completion owner")
             .clone();
         SendOp {
-            inner: SendOpStorage {
+            inner: Ok(SendOpStorage {
                 handle: routed.handle(),
                 routed: Some(routed),
                 completion_owner,
                 target: None,
                 parts: MessageParts::default(),
-            },
+            }),
             _state: std::marker::PhantomData,
         }
     }
@@ -64,13 +64,13 @@ impl SendOpStorage {
         target: crate::RoutingId,
     ) -> SendOp<Empty> {
         SendOp {
-            inner: SendOpStorage {
+            inner: Ok(SendOpStorage {
                 handle: routed.handle(),
                 routed: Some(routed),
                 completion_owner,
                 target: Some(target),
                 parts: MessageParts::default(),
-            },
+            }),
             _state: std::marker::PhantomData,
         }
     }
@@ -83,13 +83,13 @@ impl SendOpStorage {
         target: crate::RoutingId,
     ) -> SendOp<Empty> {
         SendOp {
-            inner: SendOpStorage {
+            inner: Ok(SendOpStorage {
                 handle,
                 routed: None,
                 completion_owner,
                 target: Some(target),
                 parts: MessageParts::default(),
-            },
+            }),
             _state: std::marker::PhantomData,
         }
     }
@@ -519,10 +519,10 @@ fn submit_send_attempt(
     if is_writable_wait(rc, errno, completion_id) {
         return Ok(SendAttempt::Waiting(completion_id));
     }
-    if completion_id != 0 || rc == SubmitResult::Backpressured as i32 {
+    if completion_id != 0 {
         return Err(SendAttemptError {
             error: SubmitError::new(SubmitResult::InternalError, libc::EPROTO),
-            live_token: (completion_id != 0).then_some(completion_id),
+            live_token: Some(completion_id),
         });
     }
     Err(SendAttemptError::without_token(submit_error_from_rc(
@@ -536,10 +536,7 @@ fn live_handle(op: &SendOpStorage) -> Result<*mut c_void, SubmitError> {
         .as_ref()
         .map_or(op.handle, |routed| routed.handle());
     if handle.is_null() {
-        Err(SubmitError::new(
-            SubmitResult::InternalError,
-            libc::ECANCELED,
-        ))
+        Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN))
     } else {
         Ok(handle)
     }

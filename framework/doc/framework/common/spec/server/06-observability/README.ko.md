@@ -30,6 +30,8 @@ handler 분배, lifecycle 결정을 바꾸지 않는다. Application, 운영 도
 | Provider | Structured logger, metric exporter와 telemetry provider를 구성한다. 처리 지연이나 결과 변경은 금지된다. |
 | 운영 도구 | 등록하지 않은 process 내부로 개입하지 않고, 공개 조회·구독·structured log만으로 process 상태를 판단한다. |
 
+**Framework가 스스로 내는 진단 기록도 처리를 지연시키지 않는다.** I/O·수신·lane·Store 완료를 진행하는 실행 자원에서 Framework가 만드는 log·진단 레코드는 그 자원에서 provider(파일 sink, 콜백, 언어 기본 logger인 JUL·`ILogger`·`console` 등 포함)를 동기로 호출하지 않고 process 수명의 진단 전달 worker에 넘긴다. 전달 큐는 상한이 있으며 가득 차면 새 레코드를 버리고 유실 수를 metric으로 남긴다. 종료하는 host의 남은 레코드는 그 host의 lease가 끝나면 버린다. 레코드를 넘기는 일은 할당·복사 외의 대기를 만들지 않는다.
+
 ## 2. 이 주제의 문서
 
 | 주제 안 문서 | 소유 범위 |

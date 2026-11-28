@@ -1,5 +1,6 @@
 project = 'zlink Python Binding'
-extensions = ['sphinx.ext.autodoc', 'sphinx.ext.viewcode']
+extensions = ['sphinx.ext.autodoc', 'sphinx.ext.napoleon', 'sphinx.ext.viewcode']
+napoleon_use_ivar = True
 autodoc_member_order = 'bysource'
 autodoc_mock_imports = ['zlink._ffi', 'zlink._native', 'zlink.native']
 

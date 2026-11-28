@@ -511,6 +511,7 @@ if(ZLINK_CPP_BUILD_TESTS)
 
   set(ZLINK_CPP_CONTRACT_TEST_SOURCES
     test_cpp_contract_message.cpp
+    test_cpp_contract_first_part.cpp
     test_cpp_contract_socket.cpp
     test_cpp_contract_request_reply.cpp
     test_cpp_contract_submit_result_terminal.cpp
@@ -549,6 +550,12 @@ if(ZLINK_CPP_BUILD_TESTS)
   )
 
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_cpp_contract_test(test_cpp_contract_consumed_message
+      "tests/contract/test_cpp_contract_consumed_message.cpp")
+    target_link_options(test_cpp_contract_consumed_message PRIVATE
+      "LINKER:--wrap=zlink_send" "LINKER:--wrap=zlink_send_rid"
+      "LINKER:--wrap=zlink_request" "LINKER:--wrap=zlink_reply"
+      "LINKER:--wrap=zlink_publish")
     add_cpp_contract_test(test_cpp_contract_subscription_at
       "tests/contract/test_cpp_contract_subscription_at.cpp")
     target_link_options(test_cpp_contract_subscription_at PRIVATE
@@ -567,6 +574,13 @@ if(ZLINK_CPP_BUILD_TESTS)
       "LINKER:--wrap=zlink_send" "LINKER:--wrap=zlink_request"
       "LINKER:--wrap=zlink_reply" "LINKER:--wrap=zlink_publish"
       "LINKER:--wrap=zlink_close" "LINKER:--wrap=zlink_completion_recv")
+    add_cpp_contract_test(test_cpp_contract_send_without_wait_token
+      "tests/contract/test_cpp_contract_send_without_wait_token.cpp")
+    target_include_directories(test_cpp_contract_send_without_wait_token PRIVATE
+      ${CMAKE_CURRENT_LIST_DIR}/src)
+    target_link_options(test_cpp_contract_send_without_wait_token PRIVATE
+      "LINKER:--wrap=zlink_send" "LINKER:--wrap=zlink_send_rid"
+      "LINKER:--wrap=zlink_completion_recv")
     foreach(test_name IN ITEMS
         test_cpp_contract_writable_token_delivery
         test_cpp_contract_completion_drain_order)

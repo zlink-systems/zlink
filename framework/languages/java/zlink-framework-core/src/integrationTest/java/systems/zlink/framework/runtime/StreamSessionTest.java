@@ -66,7 +66,7 @@ final class StreamSessionTest {
     private static final int REPLACEMENT_ATTEMPTS = 1000;
     private static final int OVERLAPPING_CLOSE_ATTEMPTS = 200;
     private static final int PARALLEL_RELAYS = 64;
-    private static final int CLIENT_TIMEOUT_MILLIS = 3000;
+    static final int CLIENT_TIMEOUT_MILLIS = 3000;
     private static final String PARALLEL_SEND_PACKET = "StreamActorParallelSend";
     private static final String PARALLEL_REQUEST_PACKET = "StreamActorParallelRequest";
     private static final String HEARTBEAT_PING_PACKET = "$zlink.heartbeat.ping";
@@ -760,6 +760,10 @@ final class StreamSessionTest {
     }
 
     private static ZLinkFrameworkRuntime startActorRelayRuntime() {
+        return startActorRelayRuntime(ActorRelaySession.class);
+    }
+
+    static ZLinkFrameworkRuntime startActorRelayRuntime(Class<? extends ZLinkSession> sessionType) {
         Zlink.version();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.configureDispatch()
@@ -782,7 +786,7 @@ final class StreamSessionTest {
             var stream = options.addStreamNode("gateway");
             stream.bind("tcp://127.0.0.1:0");
             stream.enableActorDispatch();
-            stream.registerSession(ActorRelaySession.class);
+            stream.registerSession(sessionType);
         }
         var runtime =
                 RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
@@ -1113,7 +1117,7 @@ final class StreamSessionTest {
         }
     }
 
-    public static final class ActorRelaySession implements ZLinkSession {
+    public static class ActorRelaySession implements ZLinkSession {
         static volatile ActorRelaySession lastConnected;
         static volatile CompletableFuture<Void> parallelRelayCompleted;
         final CompletableFuture<Void> disconnected = new CompletableFuture<>();
@@ -1199,12 +1203,12 @@ final class StreamSessionTest {
         }
     }
 
-    private static int streamPort(ZLinkFrameworkRuntime runtime) {
+    static int streamPort(ZLinkFrameworkRuntime runtime) {
         return URI.create(runtime.listenerStatus(ZLinkListenerKind.STREAM, "gateway").endpoint())
                 .getPort();
     }
 
-    private static byte[] requestHeader(long requestSeq, String packetName) {
+    static byte[] requestHeader(long requestSeq, String packetName) {
         return ZLinkStreamHeaderCodec.encode(
                 new ZLinkStreamHeader(
                         ZLinkStreamMessageKind.REQUEST,
@@ -1216,7 +1220,7 @@ final class StreamSessionTest {
                         Optional.empty()));
     }
 
-    private static byte[] frame(byte[] header, byte[] body) {
+    static byte[] frame(byte[] header, byte[] body) {
         ByteBuffer buffer = ByteBuffer.allocate(6 + header.length + body.length);
         buffer.putShort((short) header.length);
         buffer.putInt(body.length);
@@ -1231,8 +1235,7 @@ final class StreamSessionTest {
         return bytes;
     }
 
-    private static void assertReply(Socket client, long requestSeq, String expectedBody)
-            throws Exception {
+    static void assertReply(Socket client, long requestSeq, String expectedBody) throws Exception {
         var frame = ZLinkStreamTestFrames.readSkippingHeartbeatPings(client);
         byte[] header = frame.headerBytes();
         byte[] body = frame.body();
@@ -1249,7 +1252,7 @@ final class StreamSessionTest {
         assertEquals(expectedBody, new String(body, StandardCharsets.UTF_8));
     }
 
-    private static void assertBoundControl(Socket client, String actorId) throws Exception {
+    static void assertBoundControl(Socket client, String actorId) throws Exception {
         var frame = ZLinkStreamTestFrames.readSkippingHeartbeatPings(client);
         var header = frame.header();
         byte[] body = frame.body();
@@ -1327,7 +1330,7 @@ final class StreamSessionTest {
         assertTrue(condition.getAsBoolean());
     }
 
-    private static byte[] bytes(String value) {
+    static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
     }
 }

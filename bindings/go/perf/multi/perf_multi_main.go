@@ -34,13 +34,18 @@ func multiSendDrainTimeout() time.Duration {
 // a backpressured send remains unavailable until its exact WRITABLE retry
 // completes through the harness-owned public completion poller.
 type multiSendTurnCoordinator struct {
-	pending []zlink.SendSubmission
-	count   int
-	next    int
+	pending  []zlink.SendSubmission
+	count    int
+	next     int
+	burst    int
+	schedule *multiSchedule
+	due      []time.Time
+	accepted uint64
+	stopAt   time.Time
 }
 
 func newMultiSendTurnCoordinator(socketCount int) *multiSendTurnCoordinator {
-	return &multiSendTurnCoordinator{pending: make([]zlink.SendSubmission, socketCount)}
+	return &multiSendTurnCoordinator{pending: make([]zlink.SendSubmission, socketCount), due: make([]time.Time, socketCount)}
 }
 
 func (c *multiSendTurnCoordinator) submitRound(
@@ -50,15 +55,18 @@ func (c *multiSendTurnCoordinator) submitRound(
 	if len(c.pending) == 0 {
 		return 0, nil
 	}
-	start := c.next
-	c.next = (c.next + 1) % len(c.pending)
+	c.stopAt = stopAt
 	submitted := 0
-	for attempt := 0; attempt < len(c.pending); attempt++ {
-		if !time.Now().Before(stopAt) {
+	for visited := 0; visited < len(c.pending); {
+		now := time.Now()
+		if !now.Before(stopAt) || (c.schedule != nil && !c.schedule.due(now)) {
 			break
 		}
-		index := (start + attempt) % len(c.pending)
-		if c.pending[index] != nil {
+		index := c.next
+		if c.pending[index] != nil || c.burst >= maxBurstPerSender {
+			c.next = (index + 1) % len(c.pending)
+			c.burst = 0
+			visited++
 			continue
 		}
 		submission, err := submit(index)
@@ -66,11 +74,16 @@ func (c *multiSendTurnCoordinator) submitRound(
 			return submitted, err
 		}
 		submitted++
+		c.burst++
 		if submission == nil {
 			return submitted, fmt.Errorf("multi send returned no submission")
 		}
+		if c.schedule != nil {
+			c.due[index] = c.schedule.reserve()
+		}
 		switch submission.Result() {
 		case zlink.SubmitOK:
+			c.recordAdmission(index)
 		case zlink.SubmitBackpressured:
 			c.pending[index] = submission
 			c.count++
@@ -79,6 +92,15 @@ func (c *multiSendTurnCoordinator) submitRound(
 		}
 	}
 	return submitted, nil
+}
+
+func (c *multiSendTurnCoordinator) recordAdmission(index int) {
+	now := time.Now()
+	if c.schedule != nil {
+		c.schedule.admit(c.due[index], now)
+	} else if now.Before(c.stopAt) {
+		c.accepted++
+	}
 }
 
 // resumeReady observes admission only after the public completion poller has
@@ -100,6 +122,7 @@ func (c *multiSendTurnCoordinator) resumeReady() (bool, error) {
 		if err != nil {
 			return progressed, err
 		}
+		c.recordAdmission(index)
 	}
 	return progressed, nil
 }
@@ -144,73 +167,66 @@ func waitMultiSendAdmission(
 func runMultiSendTurns(
 	socketCount int,
 	window perfcommon.BenchmarkWindow,
+	schedule *multiSchedule,
 	label string,
 	submit func(int) (zlink.SendSubmission, error),
-	progress func(time.Duration) error,
+	progress func(time.Duration, func() error) error,
 	onSubmitted func(int),
 	hasDrainWork func() bool,
-) error {
-	if progress == nil {
-		return fmt.Errorf("%s requires a public completion poller", label)
-	}
+) (uint64, error) {
 	coordinator := newMultiSendTurnCoordinator(socketCount)
-	for time.Now().Before(window.StopAt) {
-		submitted, err := coordinator.submitRound(window.StopAt, submit)
+	coordinator.schedule = schedule
+	submitDue := func() (bool, error) {
+		resumed, err := coordinator.resumeReady()
 		if err != nil {
-			return err
+			return false, err
 		}
+		n, err := coordinator.submitRound(window.StopAt, submit)
 		if onSubmitted != nil {
-			onSubmitted(submitted)
+			onSubmitted(n)
 		}
-		if err := progress(multiSendTurnWait(window.StopAt, submitted > 0)); err != nil {
-			return err
+		return resumed || n > 0, err
+	}
+	interleave := func() error {
+		_, err := submitDue()
+		return err
+	}
+	for time.Now().Before(window.StopAt) {
+		progressed, err := submitDue()
+		if err != nil {
+			return 0, err
 		}
-		if _, err := coordinator.resumeReady(); err != nil {
-			return err
+		now := time.Now()
+		until := window.StopAt
+		if schedule != nil && !schedule.due(now) && schedule.next().Before(until) {
+			until = schedule.next()
+		}
+		wait := multiWait(now, until)
+		if progressed {
+			wait = 0
+		}
+		if err := progress(wait, interleave); err != nil {
+			return 0, err
 		}
 	}
-
 	drainWindow := multiSendDrainTimeout()
 	if hasDrainWork != nil {
-		// C echo client (perf_multi_client_helpers.hpp): the teardown window is
-		// max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS, 3 s per active second) because
-		// small messages can fill every per-client Core queue.
-		if active := window.StopAt.Sub(window.ActiveAt); active > 0 {
-			if scaled := 3 * active; scaled > drainWindow {
-				drainWindow = scaled
-			}
-		}
+		drainWindow = max(drainWindow, 3*window.StopAt.Sub(window.ActiveAt))
 	}
-	drainDeadline := time.Now().Add(drainWindow)
+	deadline := time.Now().Add(drainWindow)
 	for coordinator.count > 0 || (hasDrainWork != nil && hasDrainWork()) {
-		if coordinator.count == 0 && (hasDrainWork == nil || !hasDrainWork()) {
-			break
+		now := time.Now()
+		if !now.Before(deadline) {
+			return 0, fmt.Errorf("%s send drain timed out", label)
 		}
-		if !time.Now().Before(drainDeadline) {
-			return fmt.Errorf("%s send drain timed out", label)
-		}
-		if err := progress(multiSendTurnWait(drainDeadline, false)); err != nil {
-			return err
+		if err := progress(multiWait(now, deadline), func() error { return nil }); err != nil {
+			return 0, err
 		}
 		if _, err := coordinator.resumeReady(); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return nil
-}
-
-func multiSendTurnWait(deadline time.Time, progressed bool) time.Duration {
-	if progressed {
-		return 0
-	}
-	wait := time.Until(deadline)
-	if wait > 50*time.Millisecond {
-		return 50 * time.Millisecond
-	}
-	if wait < 0 {
-		return 0
-	}
-	return wait
+	return coordinator.accepted, nil
 }
 
 var (
@@ -322,7 +338,7 @@ func printMultiResult(cfg multiConfig, result perfcommon.Result) {
 	// perf_multi_client_helpers.hpp run_one_way_duration /
 	// run_echo_duration / run_recv_duration: recv==0 or lat_count==0
 	// returns false -> FAIL (no RESULT line, nonzero exit).
-	if !result.Valid {
+	if !result.Valid && result.LatencyInvalid == "" {
 		perfcommon.PrintFail(cfg.pattern, cfg.transport, cfg.msgSize)
 		os.Exit(1)
 	}

@@ -248,40 +248,39 @@ impl crate::internal::SocketStorage {
         get_u64_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_RCVHWM)
     }
 
-    pub(crate) fn set_linger(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(
-            self.handle,
-            ffi::zlink_option_t::ZLINK_OPT_LINGER,
-            milliseconds,
-        )
+    pub(crate) fn set_linger(&self, duration: Option<Duration>) -> Result<(), ConfigError> {
+        set_optional_duration_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_LINGER, duration)
     }
 
-    pub(crate) fn linger(&self) -> Result<i32, ConfigError> {
-        get_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_LINGER)
+    pub(crate) fn linger(&self) -> Result<Option<Duration>, ConfigError> {
+        get_optional_duration_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_LINGER)
     }
 
-    pub(crate) fn set_send_timeout(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(
+    pub(crate) fn set_send_timeout(&self, duration: Option<Duration>) -> Result<(), ConfigError> {
+        set_optional_duration_opt(
             self.handle,
             ffi::zlink_option_t::ZLINK_OPT_SNDTIMEO,
-            milliseconds,
+            duration,
         )
     }
 
-    pub(crate) fn send_timeout(&self) -> Result<i32, ConfigError> {
-        get_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_SNDTIMEO)
+    pub(crate) fn send_timeout(&self) -> Result<Option<Duration>, ConfigError> {
+        get_optional_duration_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_SNDTIMEO)
     }
 
-    pub(crate) fn set_receive_timeout(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(
+    pub(crate) fn set_receive_timeout(
+        &self,
+        duration: Option<Duration>,
+    ) -> Result<(), ConfigError> {
+        set_optional_duration_opt(
             self.handle,
             ffi::zlink_option_t::ZLINK_OPT_RCVTIMEO,
-            milliseconds,
+            duration,
         )
     }
 
-    pub(crate) fn receive_timeout(&self) -> Result<i32, ConfigError> {
-        get_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_RCVTIMEO)
+    pub(crate) fn receive_timeout(&self) -> Result<Option<Duration>, ConfigError> {
+        get_optional_duration_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_RCVTIMEO)
     }
 
     pub(crate) fn set_reconnect_interval(&self, d: Duration) -> Result<(), ConfigError> {
@@ -810,6 +809,23 @@ impl crate::internal::SocketStorage {
                 self.handle,
                 opt,
                 &mut value as *mut u32 as *mut c_void,
+                &mut len,
+            )
+        })?;
+        Ok(value)
+    }
+
+    pub(crate) fn get_dealer_i32_opt(
+        &self,
+        opt: ffi::zlink_dealer_option_t,
+    ) -> Result<i32, ConfigError> {
+        let mut value: i32 = 0;
+        let mut len = std::mem::size_of::<i32>();
+        check_config_rc(unsafe {
+            ffi::zlink_get_dealer_option(
+                self.handle,
+                opt,
+                &mut value as *mut i32 as *mut c_void,
                 &mut len,
             )
         })?;

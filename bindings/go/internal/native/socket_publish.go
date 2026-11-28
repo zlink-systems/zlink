@@ -9,8 +9,30 @@ package native
 */
 import "C"
 
+import "unsafe"
+
 type publishSocket struct {
 	*connectionSocket
+}
+
+func (s *publishSocket) Publish(topic string) PublishOp {
+	return newPublishBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
+		if s.isClosed() {
+			return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
+		}
+		if err := validateCString(topic); err != nil {
+			return err
+		}
+
+		// Core copies the NUL-terminated topic during this call.
+		terminated := make([]byte, len(topic)+1)
+		copy(terminated, topic)
+		return submitMultipartFromBuilderParts(parts, func(native *C.zlink_msg_t, count C.size_t) error {
+			result, cerr := C.zlink_publish(
+				s.raw(), (*C.char)(unsafe.Pointer(&terminated[0])), native, count, C.zlink_send_flags_t(flags))
+			return submitErrorFromCall(result, cerr)
+		})
+	})
 }
 
 func (s *publishSocket) SetNoDrop(value bool) error {
