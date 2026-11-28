@@ -23,6 +23,29 @@
 namespace
 {
 
+void test_sender_rotation_limits_each_burst ()
+{
+    perf_multi_measurement::sender_rotation_t rotation (3);
+    for (size_t sender = 0; sender < 3; ++sender) {
+        for (size_t accepted = 0; accepted < 63; ++accepted) {
+            assert (rotation.index () == sender);
+            assert (!rotation.accepted ());
+        }
+        assert (rotation.index () == sender);
+        assert (rotation.accepted ());
+        assert (rotation.index () == (sender + 1) % 3);
+    }
+
+    // A blocked sender yields the rest of its burst.
+    assert (!rotation.accepted ());
+    rotation.advance ();
+    assert (rotation.index () == 1);
+    for (size_t accepted = 0; accepted < 63; ++accepted)
+        assert (!rotation.accepted ());
+    assert (rotation.accepted ());
+    assert (rotation.index () == 2);
+}
+
 void test_paced_wait_rule ()
 {
     using perf_multi_measurement::ns_per_ms;
@@ -770,6 +793,7 @@ void test_stream_async_send_uses_writable_retry_loop ()
 
 int main ()
 {
+    test_sender_rotation_limits_each_burst ();
     test_paced_wait_rule ();
     test_phase_gate_isolates_receipts ();
     test_phase_end_marker_and_done_parser ();

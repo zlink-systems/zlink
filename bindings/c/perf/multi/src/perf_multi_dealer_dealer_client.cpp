@@ -227,9 +227,8 @@ inline send_status_t send_one_message (dd_send_slot_t *slot,
     }
 
     slot->retained_payload.resize (payload_size);
-    if (!perf_multi_metric::stamp_payload (
-          slot->retained_payload.data (), payload_size, run_id, phase, msg_size,
-          seq, perf_multi_metric::now_ns ())) {
+    if (!perf_multi_metric::stamp_payload (slot->retained_payload.data (), payload_size, run_id,
+                                           phase, msg_size, seq, perf_multi_metric::now_ns ())) {
         slot->retained_payload.clear ();
         return send_status_fatal;
     }
@@ -438,59 +437,62 @@ inline bool run_send_window (dd_send_state_t *state,
                   << " send begin msg_size=" << msg_size << std::endl;
     }
 
-    size_t rr = 0;
+    perf_multi_measurement::sender_rotation_t senders (state->slots.size ());
     while (!g_stop_requested.load (std::memory_order_acquire)
            && std::chrono::steady_clock::now () < deadline) {
         bool submitted = false;
-        const size_t start = rr;
-        for (size_t attempts = 0; attempts < state->slots.size (); ++attempts) {
-            dd_send_slot_t &slot = state->slots[(start + attempts) % state->slots.size ()];
-            // A WRITABLE token may arrive before its absolute slot is due.
-            // Revisit that retained request here without waiting for a second event.
-            if (schedule && slot.retry_ready && schedule->due (perf_multi_metric::now_ns ())
-                && !drain_dd_writable (state, &slot))
-                return false;
-            if (slot.retained)
+        for (size_t visited = 0; visited < state->slots.size ();) {
+            if (g_stop_requested.load (std::memory_order_acquire))
+                break;
+            const uint64_t now_ns = perf_multi_metric::now_ns ();
+            if (now_ns >= active_deadline_ns || (schedule && !schedule->due (now_ns)))
+                break;
+
+            dd_send_slot_t &slot = state->slots[senders.index ()];
+            if (slot.retained) {
+                // Revisit a retained send whose WRITABLE arrived before it was due.
+                if (schedule && slot.retry_ready) {
+                    if (!drain_dd_writable (state, &slot))
+                        return false;
+                    if (!slot.retained) {
+                        submitted = true;
+                        if (senders.accepted ())
+                            ++visited;
+                        continue;
+                    }
+                }
+                senders.advance ();
+                ++visited;
                 continue;
-            while (!g_stop_requested.load (std::memory_order_acquire)
-                   && std::chrono::steady_clock::now () < deadline
-                   && !slot.retained) {
-                const uint64_t now_ns = schedule ? perf_multi_metric::now_ns () : 0;
-                if (schedule && now_ns >= active_deadline_ns)
-                    break;
-                if (schedule && !schedule->due (now_ns)) {
-                    const int wait_ms = schedule->wait_ms (now_ns, active_deadline_ns);
-                    if (wait_ms > 0 && perf_socket_poll (NULL, 0, wait_ms) < 0
-                        && zlink_errno () != EINTR)
-                        return false;
-                    continue;
-                }
-                const perf_multi_metric::phase_t phase =
-                  !schedule ? perf_multi_metric::phase_active
-                            : (perf_multi_measurement::latency_sample (now_ns, schedule->epoch_ns,
-                                                                       duration_seconds - 0.5)
-                                 ? perf_multi_metric::phase_latency
-                                 : perf_multi_metric::phase_warmup);
-                const send_status_t send_rc =
-                  send_one_message (&slot, payload_size, run_id, phase, msg_size, *seq);
-                if (send_rc == send_status_ok) {
-                    ++(*seq);
-                    submitted = true;
-                    continue;
-                }
-                if (send_rc == send_status_blocked) {
-                    // Keep the rejected bytes and sequence until the exact
-                    // WRITABLE token permits their resubmission.
-                    ++(*seq);
-                    if (!update_dd_slot_events (state, &slot))
-                        return false;
-                    errno = EAGAIN;
-                    break;
-                }
-                return false;
             }
+
+            const perf_multi_metric::phase_t phase =
+              !schedule ? perf_multi_metric::phase_active
+                        : (perf_multi_measurement::latency_sample (now_ns, schedule->epoch_ns,
+                                                                   duration_seconds - 0.5)
+                             ? perf_multi_metric::phase_latency
+                             : perf_multi_metric::phase_warmup);
+            const send_status_t send_rc =
+              send_one_message (&slot, payload_size, run_id, phase, msg_size, *seq);
+            if (send_rc == send_status_ok) {
+                ++(*seq);
+                submitted = true;
+                if (senders.accepted ())
+                    ++visited;
+                continue;
+            }
+            if (send_rc != send_status_blocked)
+                return false;
+
+            // Keep the rejected bytes and sequence until the exact
+            // WRITABLE token permits their resubmission.
+            ++(*seq);
+            if (!update_dd_slot_events (state, &slot))
+                return false;
+            errno = EAGAIN;
+            senders.advance ();
+            ++visited;
         }
-        rr = (start + 1) % state->slots.size ();
 
         int timeout_ms = submitted ? 0 : dd_wait_ms (deadline, perf_multi_measurement::max_wait_ms);
         if (schedule) {

@@ -1225,6 +1225,17 @@ is the baseline.
   [common request completion surface](async-coroutine-policy.en.md#6-per-language-terminal-interfaces). It does not provide a
   direct receive callback.
 
+#### Subscription Query
+
+- `subscription_at(index)` on SUB and XSUB calls `zlink_subscription_at` once with a buffer the
+  binding owns. An OK result, including an empty filter, ends the query.
+- Only `ZLINK_CONFIG_BUFFER_TOO_SMALL` (`ENOBUFS`) is retried, once, with the length Core returned.
+  No other result is retried.
+- An out-of-range index (`ZLINK_CONFIG_NOT_FOUND`, `ENOENT`) is reported as no entry, not as an
+  error. Every other failure is the language's configuration error.
+- Each language spec names the "no entry" value (`None`, `Ok(None)`, `std::nullopt`, `null`, or a
+  `false` found flag) and links here instead of restating the rule.
+
 #### Socket Readiness Snapshots
 
 - A binding projects the `ROUTER` selected-route snapshot (`zlink_router_routes_snapshot()`) and
