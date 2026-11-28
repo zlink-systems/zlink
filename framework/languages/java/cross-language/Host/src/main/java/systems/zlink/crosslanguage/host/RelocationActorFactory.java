@@ -8,14 +8,16 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 
 public final class RelocationActorFactory implements ZLinkActorFactory {
     private final EventSink sink;
+    private final SealedJoinObservation sealedJoin;
 
-    public RelocationActorFactory(EventSink sink) {
+    public RelocationActorFactory(EventSink sink, SealedJoinObservation sealedJoin) {
         this.sink = sink;
+        this.sealedJoin = sealedJoin;
     }
 
     @Override
     public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
         return CompletableFuture.completedFuture(
-            new RelocationActor(context.actorId(), context, sink));
+            new RelocationActor(context.actorId(), context, sink, sealedJoin));
     }
 }

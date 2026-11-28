@@ -248,8 +248,13 @@ if (sub.subscribe(msg)) { /* ... */ }
 | --- | --- |
 | `options` | `SubSocketOptions` |
 | `setSubscription(filter: string)` / `unsetSubscription(filter: string)` | adds/removes a topic filter; subscriptions accumulate |
-| `subscriptionAt(index: number)` | `SubscriptionEntry \| null` — the filter at that index |
+| `subscriptionAt(index: number)` | `SubscriptionEntry \| null` — Returns the filter and whether it is a pattern. Returns `null` if the index has no entry. |
 | `subscribe(result: TopicMessage, flags?: RecvFlags)` | populates `result` with the next matching publish |
+
+`subscriptionAt` calls Core once with a buffer owned by the binding. An empty
+filter is a successful result. Only `BUFFER_TOO_SMALL` triggers a second call,
+with the length returned by Core. `NOT_FOUND` returns no entry. The binding
+throws `ConfigError` for other failure results. See the [common Subscription Query](../../spec/README.en.md#subscription-query).
 
 `XSubSocket` adds nothing at all — every member is the inherited `SubSocket` surface, unchanged.
 
