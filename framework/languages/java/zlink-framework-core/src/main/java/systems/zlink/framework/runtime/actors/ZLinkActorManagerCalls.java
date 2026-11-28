@@ -9,7 +9,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.runtime.internal.backend.*;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceCompletionDispatcher;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -52,11 +52,13 @@ public final class ZLinkActorManagerCalls implements ZLinkActorManager {
 
     private <T> CompletionStage<T> terminal(
             java.util.function.Function<ZLinkActorRuntime, CompletionStage<T>> operation) {
+        CompletionStage<T> result;
         try {
-            return operation.apply(access.get());
+            result = operation.apply(access.get());
         } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
+            result = CompletableFuture.failedFuture(failure);
         }
+        return ZLinkServiceCompletionDispatcher.deliverLifecycle(result);
     }
 
     private abstract class ActorCreationCall implements Runnable {
@@ -119,9 +121,17 @@ public final class ZLinkActorManagerCalls implements ZLinkActorManager {
             CompletionStage<ZLinkActorCreateResult> failure =
                     systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.beginOneWay(
                             submitted, this);
-            if (failure != null) return failure;
-            return runtime.submitCreate(
-                    actorId, actorType, request, getOrCreate, selectedMesh, timeout);
+            CompletionStage<ZLinkActorCreateResult> result =
+                    failure != null
+                            ? failure
+                            : runtime.submitCreate(
+                                    actorId,
+                                    actorType,
+                                    request,
+                                    getOrCreate,
+                                    selectedMesh,
+                                    timeout);
+            return ZLinkServiceCompletionDispatcher.deliverLifecycle(result);
         }
 
         final CompletionStage<ZLinkActorCreateResult> yieldOperation() {

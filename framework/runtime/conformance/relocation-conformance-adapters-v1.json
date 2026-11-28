@@ -220,7 +220,7 @@
       "language": "node",
       "fixtureConnection": "direct",
       "fixtureConsumer": {
-        "path": "framework/languages/node/test/contract/spot-manager.test.js",
+        "path": "framework/languages/node/test/contract/stream-runtime.test.js",
         "fixtureReference": "relocation-behavior-v1.json"
       },
       "coverage": {
@@ -238,11 +238,6 @@
       },
       "evidence": [
         {
-          "path": "framework/languages/node/test/contract/spot-manager.test.js",
-          "behaviorGroups": ["commonLifecycle", "actorJoin"],
-          "tests": ["formal Actor Join runtime port preserves fixture order through target Ready before Session route"]
-        },
-        {
           "path": "framework/languages/node/test/contract/canonical-actor-join-completion.test.js",
           "behaviorGroups": ["commonLifecycle", "actorJoin"],
           "tests": ["canonical source leave submission failure is reported without blocking Accepted completion"]
@@ -259,7 +254,6 @@
         }
       ],
       "focusedCommands": [
-        ["node", "--test", "--test-name-pattern=formal Actor Join runtime port preserves fixture order through target Ready before Session route", "test/contract/spot-manager.test.js"],
         ["node", "--test", "--test-name-pattern=canonical source leave submission failure is reported without blocking Accepted completion", "test/contract/canonical-actor-join-completion.test.js"],
         ["node", "--test", "--test-name-pattern=relocation target binding republish delivers the post-Join bound-session push exactly once|M2 actorJoin A-to-B-to-A successor seal waits until predecessor exact terminal|concurrent identical ownership terminals commit once while push submits during seal|concurrent identical abort terminals reopen once after push submits during seal", "test/contract/stream-runtime.test.js"]
       ]

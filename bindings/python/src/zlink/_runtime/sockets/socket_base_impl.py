@@ -71,11 +71,6 @@ _native_publisher_send_op_func = (
     if _native_extension is not None
     else None
 )
-_native_router_recv_owner_func = (
-    getattr(_native_extension, "router_recv_owner", None)
-    if _native_extension is not None
-    else None
-)
 _native_router_routes_snapshot_func = (
     getattr(_native_extension, "router_routes_snapshot", None)
     if _native_extension is not None
@@ -480,20 +475,18 @@ class RouterSocket(
                 self._handle, target, native_parts, 0, 0, None,
                 _reply_token_value(token),
             )
-            if rc != int(SubmitResult.OK):
-                _raise_result_error(SubmitError, SubmitResult, rc, internal_errno)
-            return
-        native_rid = _copy_routing_id(routing_id)
-        rc, internal_errno = _submit_parts(
-            native_parts,
-            lambda parts_ptr, part_count: lib().zlink_reply(
-                self._handle,
-                ctypes.byref(native_rid),
-                ctypes.c_uint64(_reply_token_value(token)),
-                parts_ptr,
-                part_count,
-            ),
-        )
+        else:
+            native_rid = _copy_routing_id(routing_id)
+            rc, internal_errno = _submit_parts(
+                native_parts,
+                lambda parts_ptr, part_count: lib().zlink_reply(
+                    self._handle,
+                    ctypes.byref(native_rid),
+                    ctypes.c_uint64(_reply_token_value(token)),
+                    parts_ptr,
+                    part_count,
+                ),
+            )
         if rc != int(SubmitResult.OK):
             _raise_result_error(SubmitError, SubmitResult, rc, internal_errno)
 
@@ -551,20 +544,6 @@ class RouterSocket(
                 self._socket_handle.handle, int(flags), received,
                 ReceivedMessage, RoutingId, self, _reply_token_from_native,
             )
-        if _native_router_recv_owner_func is not None:
-            result = _native_router_recv_owner_func(
-                int(self._socket_handle.handle), int(flags)
-            )
-            if result is False:
-                return False
-            rc, err, routing, token_value, owner, route_generation = result
-            if int(rc) != 0:
-                _raise_result_error(RecvError, RecvResult, rc, err)
-            routing_id = RoutingId.from_(routing) if routing is not None else None
-            self._replace_router_received(
-                received, owner, routing_id, int(token_value), int(route_generation)
-            )
-            return True
         try:
             source_rid = ctypes.POINTER(ZlinkRoutingId)()
             token_value = ctypes.c_uint64()

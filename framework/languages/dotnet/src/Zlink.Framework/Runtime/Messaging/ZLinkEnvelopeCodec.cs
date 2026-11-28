@@ -1002,6 +1002,11 @@ internal static class ZLinkEnvelopeCodec
                 header,
                 "ZLink envelope channel name is missing."
             );
+        ValidateDispatchPacketHeader(header);
+    }
+
+    public static void ValidateDispatchPacketHeader(ZLinkEnvelopeHeader header)
+    {
         if (string.IsNullOrWhiteSpace(header.MessageName))
             throw new ZLinkEnvelopeProtocolException(
                 header,

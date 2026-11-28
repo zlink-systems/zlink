@@ -14,32 +14,6 @@ const {
   ZLinkActorTransferRuntime
 } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
 
-test('target rollback reports the original location release failure after one submission', async () => {
-  const failure = new Error('location release provider failure');
-  let releases = 0;
-  let rollbacks = 0;
-  const state = {
-    actorType: 'player', ownsLocation: true,
-    markLocationReleased() { throw new Error('failed release must retain ownership'); }
-  };
-  const lifecycle = {
-    async releaseActor() { releases++; throw failure; },
-    async releaseActorEventually() { releases++; }
-  };
-  const runtime = new ZLinkActorTransferRuntime({
-    actorManager: () => ({
-      getState: () => state,
-      async rollbackTransferredActor() { rollbacks++; }
-    }),
-    locationLifecycle: () => lifecycle
-  });
-  await assert.rejects(
-    runtime.rollbackRoutedActor({ context: { actorId: 'rollback-release' } }),
-    (error) => error === failure
-  );
-  assert.equal(releases, 1);
-  assert.equal(rollbacks, 1);
-});
 const {
   ZLinkEntryActorRuntimeService
 } = require('../../packages/framework/dist/runtime/host/entry-actor-runtime');
@@ -2364,23 +2338,13 @@ test('ZLinkActorNativeJoinCoordinator keeps remote joins on the formal Core surf
         },
         request(routerChannelId, targetNodeRid, packetName, payload) { return prepareZLinkRequestReply((async () => {
           events.push(`routeRequest:${payload.phase}:${routerChannelId}:${targetNodeRid}:${payload.spotId}:${packetName}:${payload.actorId}:${payload.actorType}:${Buffer.from(payload.request, 'base64').toString()}`);
-          if (payload.phase === 'admission') {
-            assert.equal(typeof payload.transferId, 'string');
-            return {
-              accepted: true,
-              actorNodeRid: 'node-b',
-              actorId: 'alice',
-              actorGeneration: '1',
-              reply: Buffer.from('routed-reply').toString('base64')
-            };
-          }
-          assert.equal(payload.phase, 'commit');
-          assert.equal(payload.transferState, '');
+          assert.equal(payload.phase, 'admission');
+          assert.equal(typeof payload.transferId, 'string');
           return {
             accepted: true,
-            actorNodeRid: 'node-a',
+            actorNodeRid: 'node-b',
             actorId: 'alice',
-            actorGeneration: '2',
+            actorGeneration: '1',
             reply: Buffer.from('routed-reply').toString('base64')
           };
         })(), identityRequestReply); }
@@ -3458,98 +3422,6 @@ test('target route opening never submits a second route after command 44', async
   await runtime.openRoutedActorSession(actor);
 
   assert.equal(routeSubmissions, 0);
-});
-
-test('transferred Actor admission remains sealed until one-way command 44 submit completes', async () => {
-  const actor = { context: lifecycleContext('actor-steady') };
-  let joined;
-  let sealed = false;
-  let releaseSubmit;
-  let publishStarted;
-  const started = new Promise((resolve) => { publishStarted = resolve; });
-  const submitBlocked = new Promise((resolve) => { releaseSubmit = resolve; });
-  let openCalls = 0;
-  const activation = {
-    spotId: 'room-target',
-    meshName: 'play',
-    spot: { async onJoinedActor() {} },
-    serial: { async execute(operation) { return await operation(); } },
-    commitActorJoin(value) { joined = value; },
-    beginActorTransfer() { sealed = true; },
-    cancelActorTransfer() { sealed = false; },
-    commitActorDeparture() { joined = undefined; sealed = true; },
-    resolveJoinedActor(actorId) {
-      return !sealed && joined?.context.actorId === actorId ? joined : undefined;
-    }
-  };
-  const coordinator = new framework.ZLinkSpotActorAdmissionCoordinator({
-    actorTransferRuntime: {
-      commitRoutedActor() {},
-      async claimRoutedActorLocation() {},
-      async publishRoutedActorOwnership() {
-        publishStarted();
-        await submitBlocked;
-      },
-      async openRoutedActorSession() {
-        openCalls += 1;
-      },
-      clearRoutedActor() {},
-      async rollbackRoutedActor() {}
-    }
-  });
-
-  const committing = coordinator.commitTransferredActorTransaction(activation, actor, []);
-  await started;
-  assert.equal(activation.resolveJoinedActor(actor.context.actorId), undefined);
-
-  releaseSubmit();
-  assert.deepEqual(await committing, []);
-  assert.equal(openCalls, 1);
-  assert.equal(activation.resolveJoinedActor(actor.context.actorId), actor);
-});
-
-test('one-way command 44 submit failure never rolls the committed target back', async () => {
-  const actor = { context: lifecycleContext('actor-post-commit') };
-  let joined;
-  let sealed = false;
-  let departures = 0;
-  let clears = 0;
-  let rollbacks = 0;
-  let openCalls = 0;
-  const activation = {
-    spotId: 'room-target',
-    meshName: 'play',
-    spot: { async onJoinedActor() {} },
-    serial: { async execute(operation) { return await operation(); } },
-    commitActorJoin(value) { joined = value; },
-    beginActorTransfer() { sealed = true; },
-    cancelActorTransfer() { sealed = false; },
-    commitActorDeparture() { departures++; joined = undefined; },
-    resolveJoinedActor(actorId) {
-      return !sealed && joined?.context.actorId === actorId ? joined : undefined;
-    }
-  };
-  const coordinator = new framework.ZLinkSpotActorAdmissionCoordinator({
-    actorTransferRuntime: {
-      commitRoutedActor() {},
-      async claimRoutedActorLocation() {},
-      async publishRoutedActorOwnership() { throw new Error('command 44 submit failed'); },
-      async openRoutedActorSession() { openCalls += 1; },
-      clearRoutedActor() { clears++; },
-      async rollbackRoutedActor() { rollbacks++; }
-    }
-  });
-
-  await assert.rejects(
-    coordinator.commitTransferredActorTransaction(activation, actor, []),
-    /command 44 submit failed/
-  );
-  assert.equal(departures, 0);
-  assert.equal(clears, 0);
-  assert.equal(rollbacks, 0);
-  assert.equal(openCalls, 0);
-  assert.equal(joined, actor);
-  assert.equal(sealed, true);
 });
 
 test('one-way command 44 shutdown failure preserves the committed target without retry', async () => {

@@ -16,6 +16,7 @@ import systems.zlink.framework.runtime.internal.execution.ZLinkConfirmedReplay;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceRouteFence;
 import systems.zlink.framework.runtime.mesh.ZLinkActivationAdmission;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -32,6 +33,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -253,7 +255,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
     void setCommittedSpotAuthority(Staged staged, ZLinkAuthoritySnapshot snapshot) {
         requireActive(staged);
-        backend.setCommittedSpotAuthority(staged.spot, snapshot);
+        staged.spot.setCommittedAuthority(snapshot);
     }
 
     CompletionStage<Void> publishHidden(
@@ -328,6 +330,28 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                 staged.request.spotId(),
                                 false,
                                 acceptedJournalRecord.get(),
+                                reply,
+                                failure,
+                                confirmation));
+    }
+
+    boolean acceptSpotIngress(
+            Staged staged,
+            Function<InstanceRouteFence, byte[]> acceptedJournalRecord,
+            long recordSizeHint,
+            Consumer<List<Message>> reply,
+            Consumer<Throwable> failure,
+            CompletableFuture<Boolean> confirmation) {
+        return acceptIngress(
+                staged,
+                () ->
+                        new PendingIngress(
+                                "spot",
+                                spot -> {
+                                    var route = spot.committedInstanceRoute();
+                                    return () -> acceptedJournalRecord.apply(route);
+                                },
+                                recordSizeHint,
                                 reply,
                                 failure,
                                 confirmation));
@@ -485,12 +509,14 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     List<CompletableFuture<Void>> replay = new ArrayList<>();
                     for (var lane : backlog.finalRequest.acceptedJournal().entrySet()) {
                         for (var record : lane.getValue()) {
+                            var bytes = record.payload();
                             CompletionStage<Void> admitted =
                                     enqueueBacklogTurn(
                                             staged,
                                             dispatches,
                                             lane.getKey(),
-                                            record.payload(),
+                                            () -> bytes,
+                                            bytes.length,
                                             () -> backlog.replayer.replay(lane.getKey(), record),
                                             null);
                             assert (admitted =
@@ -506,15 +532,17 @@ final class ZLinkUserSpotAggregateStagingOwner {
                     }
                     int relayedIndex = 0;
                     for (PendingIngress ingress : backlog.relayed) {
+                        var record = ingress.bindRecord().apply(staged.spot);
                         CompletionStage<Void> admitted =
                                 enqueueBacklogTurn(
                                         staged,
                                         dispatches,
                                         ingress.laneId(),
-                                        ingress.record(),
+                                        record,
+                                        ingress.recordSizeHint(),
                                         () ->
                                                 backlog.replayer.replayFrozen(
-                                                        ingress.laneId(), ingress.record()),
+                                                        ingress.laneId(), record.get()),
                                         null);
                         assert (admitted =
                                         backlog.debugProbe.completeOn(
@@ -530,15 +558,17 @@ final class ZLinkUserSpotAggregateStagingOwner {
                         assert (obligation = "temporary:" + ingress.laneId() + ":" + temporaryIndex)
                                 != null;
                         temporaryIndex++;
+                        var record = ingress.bindRecord().apply(staged.spot);
                         CompletionStage<Void> admitted =
                                 enqueueBacklogTurn(
                                         staged,
                                         dispatches,
                                         ingress.laneId(),
-                                        ingress.record(),
+                                        record,
+                                        ingress.recordSizeHint(),
                                         ZLinkConfirmedReplay.after(
                                                 ingress.confirmation(),
-                                                () -> replayIngress(staged, ingress)),
+                                                () -> replayIngress(staged, ingress, record.get())),
                                         ingress);
                         assert (admitted = backlog.debugProbe.completeOn(admitted, obligation))
                                 != null;
@@ -553,12 +583,20 @@ final class ZLinkUserSpotAggregateStagingOwner {
             Staged staged,
             List<QueuedTurn> dispatches,
             String laneId,
-            byte[] record,
+            Supplier<byte[]> record,
+            long recordSizeHint,
             Supplier<CompletionStage<Void>> turn,
             PendingIngress ingress) {
         var admission = new CompletableFuture<Void>();
         try {
-            backend.enqueueIngress(staged.spot, dispatches, laneId, record, turn, admission)
+            backend.enqueueIngress(
+                            staged.spot,
+                            dispatches,
+                            laneId,
+                            record,
+                            recordSizeHint,
+                            turn,
+                            admission)
                     .whenComplete(
                             (ignored, failure) -> {
                                 if (failure != null) {
@@ -574,14 +612,15 @@ final class ZLinkUserSpotAggregateStagingOwner {
         return admission;
     }
 
-    private CompletionStage<Void> replayIngress(Staged staged, PendingIngress ingress) {
+    private CompletionStage<Void> replayIngress(
+            Staged staged, PendingIngress ingress, byte[] record) {
         CompletionStage<List<byte[]>> replay;
         try {
             if (ingress.laneId().equals("spot")) {
-                replay = replaySpot(staged, ZLinkSpotAcceptedJournal.decode(ingress.record()));
+                replay = replaySpot(staged, ZLinkSpotAcceptedJournal.decode(record));
             } else {
                 replay =
-                        replayActor(staged, ZLinkActorAcceptedJournal.decode(ingress.record()))
+                        replayActor(staged, ZLinkActorAcceptedJournal.decode(record))
                                 .thenApply(reply -> reply.stream().toList());
             }
         } catch (RuntimeException failure) {
@@ -823,11 +862,16 @@ final class ZLinkUserSpotAggregateStagingOwner {
         CompletionStage<Supplier<CompletionStage<Void>>> beginIngressHold();
 
         CompletionStage<Void> enqueue(
-                byte[] record,
+                Supplier<byte[]> record,
+                long recordSizeHint,
                 Supplier<CompletionStage<Void>> turn,
                 CompletableFuture<Void> admission);
 
         default void setCommittedAuthority(ZLinkAuthoritySnapshot snapshot) {}
+
+        default InstanceRouteFence committedInstanceRoute() {
+            throw new IllegalStateException("staged Spot is not an Instance Spot");
+        }
 
         CompletionStage<Void> publish();
 
@@ -858,9 +902,6 @@ final class ZLinkUserSpotAggregateStagingOwner {
     }
 
     interface StagingBackend {
-        default void setCommittedSpotAuthority(
-                PreparedSpot value, ZLinkAuthoritySnapshot snapshot) {}
-
         CompletionStage<PreparedSpot> prepareSpot(Request request);
 
         CompletionStage<Void> restoreSpot(
@@ -891,7 +932,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 PreparedSpot preparedSpot,
                 List<QueuedTurn> dispatches,
                 String laneId,
-                byte[] record,
+                Supplier<byte[]> record,
+                long recordSizeHint,
                 Supplier<CompletionStage<Void>> turn,
                 CompletableFuture<Void> admission);
 
@@ -1106,6 +1148,12 @@ final class ZLinkUserSpotAggregateStagingOwner {
             return inStateLane(this, debugProbe::pending);
         }
 
+        boolean hasTemporarySpotIngress(String spotId) {
+            return request.spotId().equals(spotId)
+                    && pendingDrainWork().stream()
+                            .anyMatch(item -> item.name().startsWith("temporary:spot:"));
+        }
+
         int actorCount() {
             return request.actors().size();
         }
@@ -1215,11 +1263,12 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 PreparedSpot spot,
                 List<QueuedTurn> dispatches,
                 String laneId,
-                byte[] record,
+                Supplier<byte[]> record,
+                long recordSizeHint,
                 Supplier<CompletionStage<Void>> turn,
                 CompletableFuture<Void> admission) {
             if (laneId.equals("spot")) {
-                return spot.enqueue(record, turn, admission);
+                return spot.enqueue(record, recordSizeHint, turn, admission);
             }
             if (laneId.startsWith("actor:")) {
                 var dispatch =
@@ -1237,7 +1286,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
                                                 new IllegalArgumentException(
                                                         "Actor dispatch is outside aggregate"));
                 return actors.submitActorDispatchLazyRecord(
-                        dispatch, () -> record, record.length, turn, () -> {}, admission);
+                        dispatch, record, recordSizeHint, turn, () -> {}, admission);
             }
             throw new IllegalArgumentException("unknown accepted journal lane: " + laneId);
         }
@@ -1328,14 +1377,14 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
             @Override
             public CompletionStage<Void> enqueue(
-                    byte[] record,
+                    Supplier<byte[]> record,
+                    long recordSizeHint,
                     Supplier<CompletionStage<Void>> turn,
                     CompletableFuture<Void> admission) {
                 return prepared.created()
                         .activation()
                         .context
-                        .enqueueAcceptedDispatch(
-                                () -> record, record.length, turn, () -> {}, admission);
+                        .enqueueAcceptedDispatch(record, recordSizeHint, turn, () -> {}, admission);
             }
 
             @Override
@@ -1424,19 +1473,25 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
             @Override
             public CompletionStage<Void> enqueue(
-                    byte[] record,
+                    Supplier<byte[]> record,
+                    long recordSizeHint,
                     Supplier<CompletionStage<Void>> turn,
                     CompletableFuture<Void> admission) {
                 return activation
                         .context
                         .ownerQueue()
                         .enqueueRelocatableLazyRecord(
-                                () -> record, record.length, turn, () -> {}, admission);
+                                record, recordSizeHint, turn, () -> {}, admission);
             }
 
             @Override
             public void setCommittedAuthority(ZLinkAuthoritySnapshot snapshot) {
                 runtime.setRelocatedInstanceAuthority(activation, snapshot);
+            }
+
+            @Override
+            public InstanceRouteFence committedInstanceRoute() {
+                return activation.authorityRouteFence();
             }
 
             @Override
@@ -1468,7 +1523,8 @@ final class ZLinkUserSpotAggregateStagingOwner {
 
     private record PendingIngress(
             String laneId,
-            byte[] record,
+            Function<PreparedSpot, Supplier<byte[]>> bindRecord,
+            long recordSizeHint,
             Consumer<List<Message>> reply,
             Consumer<Throwable> failure,
             CompletableFuture<Boolean> confirmation) {
@@ -1479,17 +1535,17 @@ final class ZLinkUserSpotAggregateStagingOwner {
                 Consumer<List<Message>> reply,
                 Consumer<Throwable> failure,
                 CompletableFuture<Boolean> confirmation) {
-            this(actor ? "actor:" + objectId : "spot", record, reply, failure, confirmation);
+            this(
+                    actor ? "actor:" + objectId : "spot",
+                    frozenRecord(record.clone()),
+                    record.length,
+                    reply,
+                    failure,
+                    confirmation);
         }
 
-        private PendingIngress {
-            Objects.requireNonNull(laneId, "laneId");
-            record = Objects.requireNonNull(record, "record").clone();
-        }
-
-        @Override
-        public byte[] record() {
-            return record.clone();
+        private static Function<PreparedSpot, Supplier<byte[]>> frozenRecord(byte[] record) {
+            return ignored -> () -> record;
         }
     }
 }

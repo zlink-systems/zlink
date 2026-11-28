@@ -16,6 +16,7 @@
 
 #include <zlink.h>
 
+#include <array>
 #include <cerrno>
 #include <stdexcept>
 
@@ -534,15 +535,27 @@ int socket_t::unset_subscription (const std::string &filter_)
 
 int socket_t::subscription_at (size_t index_, std::string &filter_, bool *is_pattern_)
 {
+    std::array<char, detail::default_option_buffer_size> initial_buffer;
+    std::string grown_buffer;
+    const auto handle = detail::native_handle (*this);
+    char *buffer = initial_buffer.data ();
+    size_t size = initial_buffer.size ();
     int pattern = 0;
-    const int rc = detail::read_growing_string (
-      [&] (char *buffer_, size_t, size_t *size_out_) {
-          return zlink_subscription_at (detail::native_handle (*this), index_, buffer_, size_out_,
-                                        &pattern);
-      },
-      256u, filter_);
-    if (rc != 0)
-        return rc;
+    auto result = zlink_subscription_at (handle, index_, buffer, &size, &pattern);
+    if (result == ZLINK_CONFIG_BUFFER_TOO_SMALL) {
+        grown_buffer.resize (size);
+        buffer = grown_buffer.data ();
+        result = zlink_subscription_at (handle, index_, buffer, &size, &pattern);
+    }
+    if (result != ZLINK_CONFIG_OK)
+        return result;
+
+    if (buffer == initial_buffer.data ()) {
+        filter_.assign (buffer, size);
+    } else {
+        grown_buffer.resize (size);
+        filter_ = std::move (grown_buffer);
+    }
     if (is_pattern_)
         *is_pattern_ = pattern != 0;
     return 0;
