@@ -77,7 +77,9 @@ class fixed_reconcile_authority_store_t final
              std::string = {},
              zlink::framework::runtime::protocol::relocation_id_t = {},
              zlink::framework::location_owner_token_t = {},
-             const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
+             const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr,
+             const std::optional<zlink::framework::runtime::stateful::actor_relocation_spot_t> & =
+               {}) override
     {
         return {};
     }
@@ -763,7 +765,9 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
           std::string = {},
           zlink::framework::runtime::protocol::relocation_id_t = {},
           location_owner_token_t = {},
-          const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
+          const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr,
+          const std::optional<zlink::framework::runtime::stateful::actor_relocation_spot_t> & = {})
+          override
         {
             return {};
         }

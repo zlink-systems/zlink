@@ -880,7 +880,7 @@ task_t<void> mesh_node_runtime_t::start (
             .consume_actor_join_recovery_async (frozen, target, prepare);
       },
       [spot_state] (const runtime::stateful::object_ref_t &target) {
-          return spot_node_runtime_t (spot_state).actor_relocation_authority (target);
+          return spot_node_runtime_t (spot_state).actor_relocation_target_spot (target);
       },
       [spot_state] (const std::string &stable_type, const runtime::stateful::object_ref_t &target) {
           return spot_node_runtime_t (spot_state)
@@ -1369,6 +1369,11 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
       .target_node_generation = target.lifecycle_generation,
       .application_version =
         static_cast<std::uint64_t> (std::max<std::int64_t> (0, target.application_version)),
+      .actor_target_spot = target.entry_spot_id
+                             ? std::optional{runtime::stateful::actor_relocation_spot_t{
+                                 *target.entry_spot_id, target.lifecycle_generation,
+                                 runtime::actor_authority_spot_kind_t::entry}}
+                             : std::nullopt,
       .capture_session_bindings =
         [this, source = *source, authority, target, relocation, coordinator, session_seal,
          session_checkpoint_attempted, restore_deadline] () {
@@ -3405,6 +3410,11 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       .target_node_routing_id = s->target.node_rid.to_bytes (),
       .target_node_generation = s->target.node_generation,
       .application_version = s->target_application_version,
+      .actor_target_spot =
+        runtime::stateful::actor_relocation_spot_t{s->target.spot_id, s->target.object_generation,
+                                                   s->target_entry
+                                                     ? runtime::actor_authority_spot_kind_t::entry
+                                                     : runtime::actor_authority_spot_kind_t::user},
       .session_bindings = std::move (session_bindings),
       .augment_frozen =
         [recovery,

@@ -132,6 +132,13 @@ struct relocation_participant_identity_t
                             const relocation_participant_identity_t &) = default;
 };
 
+struct actor_relocation_spot_t
+{
+    std::string id;
+    std::uint64_t generation;
+    actor_authority_spot_kind_t kind;
+};
+
 /* The authority fence of one relocation unit (01 §6.1, §10): the primary
  * authority row, the StoreVersion the target NewOwner CAS expects, and the
  * two owner tokens. Source settlement and target CAS both read this row. */
@@ -263,19 +270,29 @@ class authority_relocation_port_t
              std::string expected_store_version = {},
              protocol::relocation_id_t relocation = {},
              location_owner_token_t source_owner = {},
-             const protocol::relocation_prepare_t *prepare = nullptr) = 0;
+             const protocol::relocation_prepare_t *prepare = nullptr,
+             const std::optional<actor_relocation_spot_t> &target_spot = {}) = 0;
     virtual task_t<std::optional<std::string>>
     begin_source_capture (const std::vector<object_ref_t> &,
                           const relocation_authority_fence_t &fence,
                           const std::string &,
                           std::uint64_t,
-                          std::uint64_t)
+                          std::uint64_t,
+                          const std::optional<actor_relocation_spot_t> & = {})
     {
         co_return std::optional{fence.expected_store_version};
     }
     virtual task_t<bool> capture_source (const object_ref_t &, const std::string &)
     {
         co_return true;
+    }
+    virtual task_t<void>
+    verify_actor_target_inventory (const object_ref_t &,
+                                   const protocol::relocation_prepare_t &,
+                                   const object_creation_target_t &,
+                                   const std::optional<actor_relocation_spot_t> &)
+    {
+        co_return;
     }
     virtual task_t<bool> record_target_prepared (const object_ref_t &,
                                                  const protocol::relocation_prepare_t &)
@@ -377,6 +394,7 @@ struct eligible_relocation_unit_t
         std::vector<std::uint8_t> target_node_routing_id;
         std::uint64_t target_node_generation = 0;
         std::uint64_t application_version = 0;
+        std::optional<actor_relocation_spot_t> actor_target_spot{};
         std::vector<relocation_session_binding_t> session_bindings;
         /* Join relocation appends its canonical ZLJR saved-work record to
          * the sealed Actor snapshot before the immutable envelope is

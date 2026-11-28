@@ -135,19 +135,20 @@ settlement_authority_t::settle_source_relocation (const relocation_authority_fen
     return settled;
 }
 
-authority_publish_result_t
-settlement_authority_t::publish (const object_ref_t &,
-                                 const object_ref_t &,
-                                 zlink::framework::location_owner_token_t,
-                                 zlink::framework::object_creation_target_t,
-                                 std::string,
-                                 std::uint32_t,
-                                 inventory_digest_t,
-                                 std::vector<std::byte>,
-                                 std::string,
-                                 zlink::framework::runtime::protocol::relocation_id_t,
-                                 zlink::framework::location_owner_token_t,
-                                 const zlink::framework::runtime::protocol::relocation_prepare_t *)
+authority_publish_result_t settlement_authority_t::publish (
+  const object_ref_t &,
+  const object_ref_t &,
+  zlink::framework::location_owner_token_t,
+  zlink::framework::object_creation_target_t,
+  std::string,
+  std::uint32_t,
+  inventory_digest_t,
+  std::vector<std::byte>,
+  std::string,
+  zlink::framework::runtime::protocol::relocation_id_t,
+  zlink::framework::location_owner_token_t,
+  const zlink::framework::runtime::protocol::relocation_prepare_t *,
+  const std::optional<zlink::framework::runtime::stateful::actor_relocation_spot_t> &)
 {
     return {};
 }

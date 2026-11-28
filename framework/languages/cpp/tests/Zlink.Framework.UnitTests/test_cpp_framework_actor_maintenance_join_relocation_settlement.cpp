@@ -210,6 +210,7 @@ class join_settlement_authority_t final : public fw::runtime::stateful::authorit
     using published = fw::runtime::stateful::authority_publish_result_t;
     using reference = fw::runtime::stateful::authority_relocation_reference_t;
     using digest = fw::runtime::stateful::inventory_digest_t;
+    using actor_spot = fw::runtime::stateful::actor_relocation_spot_t;
 
   public:
     join_settlement_authority_t (fw::location_repository_t &repository,
@@ -222,10 +223,19 @@ class join_settlement_authority_t final : public fw::runtime::stateful::authorit
                           const fence &value,
                           const std::string &target_node_id,
                           std::uint64_t target_node_generation,
-                          std::uint64_t application_version) override
+                          std::uint64_t application_version,
+                          const std::optional<actor_spot> &spot) override
     {
         return _inner.begin_source_capture (participants, value, target_node_id,
-                                            target_node_generation, application_version);
+                                            target_node_generation, application_version, spot);
+    }
+    fw::task_t<void>
+    verify_actor_target_inventory (const object &source,
+                                   const fw::runtime::protocol::relocation_prepare_t &prepare,
+                                   const fw::object_creation_target_t &placement,
+                                   const std::optional<actor_spot> &spot) override
+    {
+        return _inner.verify_actor_target_inventory (source, prepare, placement, spot);
     }
     fw::task_t<bool> capture_source (const object &primary,
                                      const std::string &preparing_version) override
@@ -265,12 +275,13 @@ class join_settlement_authority_t final : public fw::runtime::stateful::authorit
                        std::string version,
                        fw::runtime::protocol::relocation_id_t relocation,
                        fw::location_owner_token_t source_owner,
-                       const fw::runtime::protocol::relocation_prepare_t *prepare) override
+                       const fw::runtime::protocol::relocation_prepare_t *prepare,
+                       const std::optional<actor_spot> &spot) override
     {
         return _inner.publish (source, target, std::move (owner), std::move (placement),
                                std::move (relocation_reference), checksum, inventory,
                                std::move (payload), std::move (version), relocation,
-                               std::move (source_owner), prepare);
+                               std::move (source_owner), prepare, spot);
     }
     bool finish_relocation (const object &target,
                             const fw::runtime::protocol::relocation_prepare_t &prepare) override

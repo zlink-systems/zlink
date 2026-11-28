@@ -1117,13 +1117,12 @@ spot_node_runtime_t::discard_actor_join_recovery_async (std::string stable_type,
 
 namespace
 {
-std::optional<runtime::actor_authority_payload_t>
-actor_relocation_authority_on_lane (const detail::spot_node_builder_state_t &state,
-                                    const runtime::stateful::object_ref_t &target)
+std::optional<runtime::stateful::actor_relocation_spot_t>
+actor_relocation_target_spot_on_lane (const detail::spot_node_builder_state_t &state,
+                                      const runtime::stateful::object_ref_t &target)
 {
     if (target.kind != runtime::stateful::object_kind_t::actor)
         return std::nullopt;
-    const auto type = state.actor_types_by_id.find (target.key);
     const auto recovery = std::find_if (
       state.actor_join_relocation_recoveries.begin (),
       state.actor_join_relocation_recoveries.end (), [&target] (const auto &candidate) {
@@ -1148,27 +1147,25 @@ actor_relocation_authority_on_lane (const detail::spot_node_builder_state_t &sta
     if (!context || !context->spot_instance)
         return std::nullopt;
     const auto &spot = *context;
-    return runtime::actor_authority_payload_t{
-      .stable_type = recovery != state.actor_join_relocation_recoveries.end ()
-                       ? std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (
-                           recovery->second.source_actor))
-                       : (type != state.actor_types_by_id.end () ? type->second : std::string{}),
-      .actor_id = target.key,
-      .current_spot_id = spot_id,
-      .current_spot_generation = recovery != state.actor_join_relocation_recoveries.end ()
-                                   ? recovery->second.target_spot_generation
-                                   : spot.object_generation,
-      .current_spot_kind = spot.is_entry_spot () ? runtime::actor_authority_spot_kind_t::entry
-                                                 : runtime::actor_authority_spot_kind_t::user,
-      .mesh_name = target.mesh_name,
-      .node_rid = node_rid_t::from_string (target.node_id)};
+    const auto kind = spot.is_entry_spot () ? runtime::actor_authority_spot_kind_t::entry
+                                            : runtime::actor_authority_spot_kind_t::user;
+    if (recovery != state.actor_join_relocation_recoveries.end ())
+        return runtime::stateful::actor_relocation_spot_t{
+          std::move (spot_id), recovery->second.target_spot_generation, kind};
+
+    // The Entry Spot descriptor uses the MeshNode lifecycle generation.
+    const auto native_node = state.native_node.lock ();
+    return runtime::stateful::actor_relocation_spot_t{
+      std::move (spot_id),
+      native_node ? native_node->status ().lifecycle_generation () : spot.object_generation, kind};
 }
 } // namespace
 
-std::optional<runtime::actor_authority_payload_t> spot_node_runtime_t::actor_relocation_authority (
+std::optional<runtime::stateful::actor_relocation_spot_t>
+spot_node_runtime_t::actor_relocation_target_spot (
   const runtime::stateful::object_ref_t &target) const
 {
-    return _state->lane.run ([&] { return actor_relocation_authority_on_lane (*_state, target); })
+    return _state->lane.run ([&] { return actor_relocation_target_spot_on_lane (*_state, target); })
       .get ();
 }
 
@@ -1246,7 +1243,7 @@ task_t<bool> spot_node_runtime_t::materialize_actor_relocation_state (
                 return false;
             resolved_target_spot = *target_spot;
         } else {
-            const auto membership = actor_relocation_authority_on_lane (*_state, target);
+            const auto membership = actor_relocation_target_spot_on_lane (*_state, target);
             if (!membership) {
                 return std::make_optional (
                   !join_recovery_identity && !_state->snapshot.entry_spot_name
@@ -1254,8 +1251,8 @@ task_t<bool> spot_node_runtime_t::materialize_actor_relocation_state (
             }
             resolved_target_spot =
               runtime::stateful::object_ref_t{runtime::stateful::object_kind_t::user_spot,
-                                              membership->current_spot_id,
-                                              membership->current_spot_generation,
+                                              membership->id,
+                                              membership->generation,
                                               0,
                                               target.mesh_name,
                                               target.node_id};

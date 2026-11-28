@@ -239,10 +239,12 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                               const stateful::relocation_authority_fence_t &fence,
                               const std::string &target_node_id,
                               std::uint64_t target_node_generation,
-                              std::uint64_t application_version) override
+                              std::uint64_t application_version,
+                              const std::optional<stateful::actor_relocation_spot_t> &spot) override
         {
             return delegate.begin_source_capture (participants, fence, target_node_id,
-                                                  target_node_generation, application_version);
+                                                  target_node_generation, application_version,
+                                                  spot);
         }
         task_t<bool> capture_source (const stateful::object_ref_t &primary,
                                      const std::string &preparing_version) override
@@ -280,12 +282,13 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                  std::string version,
                  runtime::protocol::relocation_id_t relocation,
                  location_owner_token_t source_owner,
-                 const runtime::protocol::relocation_prepare_t *prepare) override
+                 const runtime::protocol::relocation_prepare_t *prepare,
+                 const std::optional<stateful::actor_relocation_spot_t> &spot) override
         {
             return delegate.publish (source, target, std::move (owner), std::move (placement),
                                      std::move (reference), checksum, digest, std::move (payload),
                                      std::move (version), relocation, std::move (source_owner),
-                                     prepare);
+                                     prepare, spot);
         }
         bool finish_relocation (const stateful::object_ref_t &target,
                                 const runtime::protocol::relocation_prepare_t &prepare) override
