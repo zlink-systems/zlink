@@ -2780,7 +2780,8 @@ function replyActorJoinNotSupported(): SubmitResultValue {
 
 export function decodeRelocatedInstanceSpotRecord(
   frozen: import('../../foundation/service-stateful-wire-codec').ServiceWireFrozenRecord,
-  reply: NonNullable<ServiceStatefulMailboxData['reply']>
+  reply: NonNullable<ServiceStatefulMailboxData['reply']>,
+  spotTargetAdmission: NonNullable<ServiceStatefulMailboxData['spotTargetAdmission']>
 ): ReceiveRecord {
   const record = frozen.instanceSpot!;
   const payload = frozen.applicationPayload!;
@@ -2799,6 +2800,7 @@ export function decodeRelocatedInstanceSpotRecord(
         operationKind: frozen.operationKind,
         sourceSpotId: record.sourceSpotId,
         activationRecord: record,
+        spotTargetAdmission,
         applicationMetadata: frozen.metadataFrame,
         ...(record.replyRouteId === undefined ? {} : { reply })
       },
