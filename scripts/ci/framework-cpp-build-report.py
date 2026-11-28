@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report advisory C++ test source sizes and compiler-launch RSS."""
+"""Report C++ test source sizes and advisory compiler-launch RSS."""
 
 import argparse
 import html
@@ -35,7 +35,7 @@ def test_lines():
             relative = path.relative_to(ROOT)
             warning(relative, f"C++ test source has {lines:,} lines (limit: {TEST_LINE_LIMIT:,}).")
             oversized.append(table_row(relative, lines))
-    return [
+    return oversized, [
         "### C++ test sources over the line limit",
         "",
         f"Limit: {TEST_LINE_LIMIT:,} lines.",
@@ -82,14 +82,18 @@ def main():
     rss.add_argument("--limit-kib", type=int, default=TU_RSS_LIMIT_KIB)
     args = parser.parse_args()
 
-    rows = test_lines() if args.report == "test-lines" else tu_rss(args.log, args.limit_kib)
+    if args.report == "test-lines":
+        oversized, rows = test_lines()
+    else:
+        oversized, rows = [], tu_rss(args.log, args.limit_kib)
     summary = "\n".join([*rows, ""])
     if destination := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(destination, "a", encoding="utf-8", errors="backslashreplace") as output:
             output.write(summary + "\n")
     else:
         print(summary)
+    return int(bool(oversized))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

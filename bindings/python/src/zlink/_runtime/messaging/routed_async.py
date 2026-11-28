@@ -6,6 +6,7 @@ import asyncio
 import ctypes
 import errno
 import threading
+from itertools import count
 
 from ..._native.ffi import (
     ZLINK_COMPLETION_REQUEST,
@@ -38,6 +39,9 @@ from ..handles.native_support import (
 )
 from .message_materializer import Message
 from .native_parts import _consume_submitted_messages, _materialize_native_parts
+
+
+_completion_contexts = count(1)
 
 
 def _close_messages(messages):
@@ -76,6 +80,7 @@ class _CompletionEntry:
         "future",
         "admitted",
         "condition",
+        "context",
         "_published",
         "_captured",
         "_settled",
@@ -87,6 +92,12 @@ class _CompletionEntry:
         "_captured_context",
         "completion_id",
     )
+
+    def __new__(cls, *args, **kwargs):
+        entry = super().__new__(cls)
+        # Core may still echo a retired context after this entry is released.
+        entry.context = next(_completion_contexts)
+        return entry
 
     def __init__(self, kind, loop=None, *, condition=None):
         self.kind = kind
@@ -108,10 +119,6 @@ class _CompletionEntry:
         self._captured_completion_id = 0
         self._captured_context = 0
         self.completion_id = 0
-
-    @property
-    def context(self):
-        return id(self)
 
     def publish(self, completion_id):
         discarded = None
@@ -656,14 +663,14 @@ class CompletionOwner:
         self, entry, result, internal_errno, completion_id, initial_send=False
     ):
         if completion_id != 0:
-            resubmit = self._publish_writable_locked(entry, completion_id)
-            if result == SubmitResult.BACKPRESSURED:
-                if internal_errno == errno.EAGAIN:
+            if result == SubmitResult.BACKPRESSURED and internal_errno != errno.EAGAIN:
+                result, internal_errno = SubmitResult.INTERNAL_ERROR, errno.EPROTO
+            else:
+                resubmit = self._publish_writable_locked(entry, completion_id)
+                if result == SubmitResult.BACKPRESSURED:
                     if not initial_send or self._public_owner is not None:
                         return result, resubmit
                     result, internal_errno = SubmitResult.INVALID_STATE, 0
-                elif entry.kind == ZLINK_COMPLETION_SEND:
-                    result, internal_errno = SubmitResult.INTERNAL_ERROR, errno.EPROTO
         try:
             typed_result = SubmitResult(int(result))
         except ValueError:
@@ -768,9 +775,7 @@ class CompletionOwner:
         completion_id = int(completion.completion_id)
         context = int(completion.user_context or 0)
         with self._lock:
-            entry = self._entries_by_id.get(completion_id)
-            if entry is None:
-                entry = self._entries.get(context)
+            entry = self._entries.get(context)
         if entry is None:
             lib().zlink_completion_close(ctypes.byref(completion))
         elif entry.settled and entry.waiting_native:

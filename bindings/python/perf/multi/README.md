@@ -18,6 +18,10 @@ This suite must stay aligned with:
 The shell wrapper delegates directly to `run_benchmarks.py`, which orchestrates
 server and client processes without introducing a second benchmark contract.
 
+Set the latency window in positive whole seconds with `--latency-duration N`.
+The runner uses `PERF_MULTI_LATENCY_DURATION_SECONDS` when the option is omitted
+and defaults to the effective `--duration` when that variable is empty or unset.
+
 ## Patterns
 
 Canonical multi patterns are:
