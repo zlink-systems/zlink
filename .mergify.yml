@@ -44,6 +44,13 @@ queue_rules:
       - check-success=linux-x64 / Java 25
       - check-success=Framework C++ unit and contract tests
       - check-success=Framework source format
+      # Bindings PR Check (.github/workflows/bindings-pr-check.yml). A check whose
+      # binding paths did not change in the batch reports success in one line, so
+      # these never hold a batch without Rust, Go, Python or bindings doc changes.
+      - check-success=Bindings Rust
+      - check-success=Bindings Go
+      - check-success=Bindings Python
+      - check-success=Bindings document links
   - name: release
     batch_size: 8
     merge_method: merge
