@@ -166,10 +166,11 @@ internal sealed class ZLinkStreamSessionTable(
     )
     {
         const string diagnostic = "STREAM session creation failed.";
-        var logger = ZLinkMessageFlowTracer.GetLogger(services);
+        var flow = services.GetRequiredService<ZLinkFrameworkRuntime>().Flow;
         try
         {
-            logger.LogError(
+            flow.LogDiagnostic(
+                LogLevel.Error,
                 failure,
                 "STREAM session creation failed for node {NodeName}, session type {SessionType}, peer {PeerRoutingId}.",
                 livenessOptions?.StreamNodeName,
@@ -178,7 +179,6 @@ internal sealed class ZLinkStreamSessionTable(
             );
             if (firstPacket is { } packet)
             {
-                var flow = services.GetRequiredService<ZLinkFrameworkRuntime>().Flow;
                 using var scope = ZLinkFlowContext.Enter(
                     packet.FlowId,
                     packet.FlowOrigin is { } origin

@@ -30,11 +30,19 @@ async function until(predicate) {
 }
 
 async function progress() {
-  assert.equal(owner.enabled(), false, 'console diagnostics do not require an OpenTelemetry provider');
+  assert.equal(
+    owner.enabled(),
+    false,
+    'console diagnostics do not require an OpenTelemetry provider'
+  );
   const before = process.env.ZLINK_TEST_DIAGNOSTIC_BASELINE === '1';
   const suffix = before ? '.before-5996.cjs' : '.js';
-  const { ZLinkRouteMeshRuntimeCoordinator } = require(join(runtime, `host/route-mesh-runtime${suffix}`));
-  const { ZLinkHostServiceRelocationRuntime } = require(join(runtime, `host/service-relocation-host-runtime${suffix}`));
+  const { ZLinkRouteMeshRuntimeCoordinator } = require(
+    join(runtime, `host/route-mesh-runtime${suffix}`)
+  );
+  const { ZLinkHostServiceRelocationRuntime } = require(
+    join(runtime, `host/service-relocation-host-runtime${suffix}`)
+  );
   const lease = delivery.openTelemetryLease();
   const markers = [
     '[zlink.runtime.relocation.drain_failed]',
@@ -56,12 +64,20 @@ async function progress() {
     meshNames: ['mesh'],
     admission: { register() {} },
     diagnosticLease: () => lease,
-    async drainResources() { throw failure; },
-    async rollbackRetiring() { rollbackAt = performance.now(); }
+    async drainResources() {
+      throw failure;
+    },
+    async rollbackRetiring() {
+      rollbackAt = performance.now();
+    }
   });
   const source = new ZLinkHostServiceRelocationRuntime({
     diagnosticLease: () => lease,
-    actorTransfer: { async completeRelocationSourceLeave() { throw failure; } },
+    actorTransfer: {
+      async completeRelocationSourceLeave() {
+        throw failure;
+      }
+    },
     actorManager: () => undefined
   });
   const profile = { ready: Promise.resolve(), actor: {}, sourceSpotId: 'spot' };
@@ -74,22 +90,35 @@ async function progress() {
     const result = await route.relocateHost(3000);
     assert.equal(result.kind, 'forceStopped');
     assert.equal(result.reason, 'teardown_failed');
-    elapsed.push({ marker: markers[0], operationMs: rollbackAt - started, nextTurnMs: await nextTurn().then(() => performance.now() - started) });
+    elapsed.push({
+      marker: markers[0],
+      operationMs: rollbackAt - started,
+      nextTurnMs: await nextTurn().then(() => performance.now() - started)
+    });
     process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = '0';
     started = performance.now();
     await source.finalizeActorJoinSource(profile, 'relocation');
-    elapsed.push({ marker: markers[1], operationMs: performance.now() - started, nextTurnMs: await nextTurn().then(() => performance.now() - started) });
+    elapsed.push({
+      marker: markers[1],
+      operationMs: performance.now() - started,
+      nextTurnMs: await nextTurn().then(() => performance.now() - started)
+    });
     await route.relocateHost(3000);
   } finally {
     console.error = originalError;
   }
   console.log(JSON.stringify({ elapsed, mainWrites }));
-  assert.ok(elapsed.every(({ operationMs, nextTurnMs }) => operationMs < 250 && nextTurnMs < 250),
-    'each operation and its next main-thread turn must complete within 250 ms');
+  assert.ok(
+    elapsed.every(({ operationMs, nextTurnMs }) => operationMs < 250 && nextTurnMs < 250),
+    'each operation and its next main-thread turn must complete within 250 ms'
+  );
   assert.deepEqual(mainWrites, []);
   await until(() => evidence().filter(({ kind }) => kind === 'diagnostic-write').length >= 2);
   const writes = evidence().filter(({ kind }) => kind === 'diagnostic-write');
-  assert.deepEqual(writes.map(({ thread }) => thread), ['worker', 'worker']);
+  assert.deepEqual(
+    writes.map(({ thread }) => thread),
+    ['worker', 'worker']
+  );
   for (const [index, row] of writes.entries()) {
     assert.ok(row.value.text.startsWith(markers[index]));
     assert.match(row.value.text, /diagnostic-probe failure/);
@@ -106,33 +135,59 @@ async function overflow() {
   const live = delivery.openTelemetryLease();
   const retired = delivery.openTelemetryLease();
   logDiagnostic(live, 'warn', 'test', '[diagnostic.blocked]');
-  logDiagnostic(retired, 'warn', 'test', '[diagnostic.retired-in-transit]');
+  logDiagnostic(retired, 'warn', 'test', '[diagnostic.admitted-in-transit]');
   logDiagnostic(live, 'warn', 'test', '[diagnostic.survivor]');
   await until(() => evidence().some(({ kind }) => kind === 'diagnostic-entered'));
   assert.equal(Atomics.load(owner.state, TelemetryState.Pending), 2);
   for (let i = 2; i < MESSAGE_FLOW_PENDING_LIMIT; i++) {
-    logDiagnostic(retired, 'warn', 'test', '[diagnostic.retired-pending]');
+    logDiagnostic(retired, 'warn', 'test', '[diagnostic.admitted-pending]');
   }
   assert.equal(Atomics.load(owner.state, TelemetryState.Pending), MESSAGE_FLOW_PENDING_LIMIT);
   for (let i = 0; i < 3; i++) logDiagnostic(live, 'warn', 'test', '[diagnostic.dropped]');
   owner.submit(live, {
-    eventId: 'zlink.message_flow', timestamp: new Date(), phase: 'received',
-    outcome: 'succeeded', surface: 'channel', messageKind: 'request'
+    eventId: 'zlink.message_flow',
+    timestamp: new Date(),
+    phase: 'received',
+    outcome: 'succeeded',
+    surface: 'channel',
+    messageKind: 'request'
   });
   assert.equal(Atomics.load(owner.counters, TelemetryCounter.DiagnosticOverflow), 3n);
   assert.equal(Atomics.load(owner.counters, TelemetryCounter.Overflow), 1n);
   delivery.retireTelemetryLease(retired);
-  logDiagnostic(retired, 'warn', 'test', '[diagnostic.late-retired]');
-  assert.equal(Atomics.load(owner.state, TelemetryState.Pending), 2);
+  assert.equal(
+    Atomics.load(owner.state, TelemetryState.Pending),
+    MESSAGE_FLOW_PENDING_LIMIT,
+    'retirement preserves admitted diagnostics while the worker is blocked'
+  );
   fs.writeFileSync(gateFile, 'release');
   await until(() => owner.workerReady && !owner.executing);
+  logDiagnostic(retired, 'warn', 'test', '[diagnostic.late-retired]');
+  assert.equal(
+    Atomics.load(owner.state, TelemetryState.Pending),
+    0,
+    'a retired lease cannot submit even when the queue has space'
+  );
   const rows = evidence();
-  assert.deepEqual(rows.filter(({ kind }) => kind === 'diagnostic-write')
-    .map(({ thread, value }) => [thread, value.text.split(' ')[0]]),
-  [['worker', '[diagnostic.blocked]'], ['worker', '[diagnostic.survivor]']]);
-  assert.deepEqual(rows.filter(({ kind }) => kind === 'metric')
-    .map(({ thread, value }) => [thread, value.attributes.source, value.value]),
-  [['worker', 'message_flow', 1], ['worker', 'diagnostic', 3]]);
+  const writes = rows.filter(({ kind }) => kind === 'diagnostic-write');
+  assert.equal(writes.length, MESSAGE_FLOW_PENDING_LIMIT + 1);
+  assert.ok(writes.every(({ thread }) => thread === 'worker'));
+  const markers = writes.map(({ value }) => value.text.split(' ')[0]);
+  assert.deepEqual(markers.slice(0, 3), [
+    '[diagnostic.blocked]',
+    '[diagnostic.admitted-in-transit]',
+    '[diagnostic.survivor]'
+  ]);
+  assert.ok(markers.slice(3).every((marker) => marker === '[diagnostic.admitted-pending]'));
+  assert.deepEqual(
+    rows
+      .filter(({ kind }) => kind === 'metric')
+      .map(({ thread, value }) => [thread, value.attributes.source, value.value]),
+    [
+      ['worker', 'message_flow', 1],
+      ['worker', 'diagnostic', 3]
+    ]
+  );
   console.log(JSON.stringify(rows.filter(({ kind }) => kind === 'metric')));
 }
 
@@ -140,7 +195,12 @@ async function overflow() {
   await owner.ready;
   if (mode === 'diagnostic-progress') await progress();
   else await overflow();
-})().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-}).finally(() => clearInterval(keepAlive));
+})()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    fs.writeFileSync(gateFile, 'release');
+    clearInterval(keepAlive);
+  });

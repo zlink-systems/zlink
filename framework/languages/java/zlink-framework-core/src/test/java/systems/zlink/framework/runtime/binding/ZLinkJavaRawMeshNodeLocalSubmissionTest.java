@@ -2,6 +2,8 @@ package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
+
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -126,10 +128,8 @@ final class ZLinkJavaRawMeshNodeLocalSubmissionTest {
                         .join();
                 assertEquals(2, copied.size());
                 for (Message message : copied) {
-                    assertThrows(
-                            IllegalStateException.class,
-                            message::refCount,
-                            "a rejected submission must release its copied messages");
+                    // a rejected submission must release its copied messages
+                    assertConsumed(message);
                 }
                 assertEquals("packet", packet.toUtf8String());
                 assertEquals("payload", body.toUtf8String());

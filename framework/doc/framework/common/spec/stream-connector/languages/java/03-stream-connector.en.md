@@ -103,6 +103,8 @@ public interface ZLinkStreamConnector {
         ZLinkStreamMessageHandler<TPayload> handler);
     AutoCloseable onRequestSending(ZLinkStreamRequestSendingHandler handler);
     AutoCloseable onAdmissionWaiting(ZLinkStreamAdmissionWaitingHandler handler);
+    AutoCloseable onAdmissionQueued(ZLinkStreamAdmissionQueuedHandler handler);
+    AutoCloseable onAdmissionPosition(ZLinkStreamAdmissionPositionHandler handler);
     AutoCloseable onReplyReceived(ZLinkStreamReplyReceivedHandler handler);
     AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler);
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
@@ -372,6 +374,16 @@ public interface ZLinkStreamAdmissionWaitingHandler {
     CompletionStage<Void> handle(ZLinkStreamAdmissionWaiting event);
 }
 
+@FunctionalInterface
+public interface ZLinkStreamAdmissionQueuedHandler {
+    CompletionStage<Void> handle();
+}
+
+@FunctionalInterface
+public interface ZLinkStreamAdmissionPositionHandler {
+    CompletionStage<Void> handle(int position, int estimatedWaitMs);
+}
+
 public interface ZLinkStreamRequestSendingHandler {
     void handle(ZLinkStreamRequestSendingContext context);
 }
@@ -385,6 +397,9 @@ public interface ZLinkStreamReplyReceivedHandler {
 read-only `requestPacketName()`, nullable `actorId()`, `succeeded()`,
 `reply()` on success, `error()` on failure, and `elapsed()`.
 Common Spec §5.7 and §7 govern metadata validation and hook failures.
+
+
+[Authentication Admission §3.5.7](../../../server/04-session/03-authentication-admission.en.md#357-connector-callback-order) defines when the queue callbacks run and in what order. `position` is the one-based position across the mesh, and `estimatedWaitMs` is the estimated wait in milliseconds.
 
 
 ### 7.2 Test Wait Surface
@@ -626,6 +641,8 @@ class ZLinkKotlinStreamConnector {
     fun <TPayload : Any> messages(packetName: String, payloadType: KClass<TPayload>): Flow<ZLinkStreamMessage<TPayload>>
     fun onRequestSending(handler: ZLinkStreamRequestSendingHandler): AutoCloseable
     fun onAdmissionWaiting(handler: ZLinkStreamAdmissionWaitingHandler): AutoCloseable
+    fun onAdmissionQueued(handler: ZLinkStreamAdmissionQueuedHandler): AutoCloseable
+    fun onAdmissionPosition(handler: ZLinkStreamAdmissionPositionHandler): AutoCloseable
     fun repliesReceived(): Flow<ZLinkStreamReplyReceivedContext>
     fun errors(): Flow<ZLinkStreamError>
     fun actors(): List<ZLinkKotlinStreamActor>

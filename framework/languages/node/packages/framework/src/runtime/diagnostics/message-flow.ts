@@ -141,7 +141,7 @@ export class ZLinkMessageFlowTracer {
     const mode = effectiveMessageFlow(this.ctx);
     return (
       MESSAGE_FLOW_MODE_RANK[mode] >= MESSAGE_FLOW_MODE_RANK[requiredMode(outcome)] &&
-      messageFlowDelivery().accepts(this.telemetryLease)
+      messageFlowDelivery().admits(this.telemetryLease)
     );
   }
 
@@ -159,7 +159,7 @@ export class ZLinkMessageFlowTracer {
     if (MESSAGE_FLOW_MODE_RANK[mode] < MESSAGE_FLOW_MODE_RANK[requiredMode(outcome, result)]) {
       return undefined;
     }
-    if (!messageFlowDelivery().accepts(this.telemetryLease)) return undefined;
+    if (!messageFlowDelivery().admits(this.telemetryLease)) return undefined;
     const samplingFlowId = messageFlowTracingEnabled(mode)
       ? (flowId ?? currentFlowContext()?.flowId)
       : undefined;
@@ -195,7 +195,7 @@ export class ZLinkMessageFlowTracer {
       MESSAGE_FLOW_MODE_RANK[requiredMode(flowInput.outcome, flowInput.result)]
     )
       return;
-    if (!messageFlowDelivery().accepts(this.telemetryLease)) return;
+    if (!messageFlowDelivery().admits(this.telemetryLease)) return;
     const tracingEnabled = messageFlowTracingEnabled(effectiveMode);
     const ambient = tracingEnabled ? currentFlowContext() : undefined;
     const flowId = tracingEnabled ? (flowInput.flowId ?? ambient?.flowId) : undefined;
@@ -217,7 +217,7 @@ export class ZLinkMessageFlowTracer {
     acceptedFlowId?: string,
     acceptedFlowOrigin?: ZLinkFlowOrigin
   ): void {
-    if (!messageFlowDelivery().accepts(this.telemetryLease)) return;
+    if (!messageFlowDelivery().admits(this.telemetryLease)) return;
     const tracingEnabled = messageFlowTracingEnabled(effectiveMode);
     const ambient = tracingEnabled ? currentFlowContext() : undefined;
     const flowId = tracingEnabled

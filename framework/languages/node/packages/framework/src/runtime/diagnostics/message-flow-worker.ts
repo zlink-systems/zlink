@@ -17,8 +17,8 @@ import {
   TelemetryCounter,
   TELEMETRY_STATE_BYTES,
   TELEMETRY_WORKER_AVAILABLE,
-  type ZLinkDiagnosticRecord,
-  type ZLinkTelemetryDelivery
+  type TelemetryRecord,
+  type ZLinkDiagnosticRecord
 } from './message-flow-delivery';
 import { COUNTER_UNITS, METRIC_NAMES } from './runtime-metrics';
 import { ZLinkMeters } from '../../contracts/Eventing/Metrics';
@@ -163,12 +163,11 @@ try {
 // an ERROR-only processor may reject an unspecified-severity enabled() query.
 Atomics.store(state, TelemetryState.Enabled, hasLoggerProvider || hasTraceProvider ? 1 : 0);
 parentPort!.postMessage(TELEMETRY_WORKER_AVAILABLE);
-parentPort!.on('message', (batch: ZLinkTelemetryDelivery[]) => {
-  for (const item of batch) {
+parentPort!.on('message', (batch: TelemetryRecord[]) => {
+  for (const record of batch) {
     Atomics.sub(state, TelemetryState.Pending, 1);
-    if (Atomics.load(new Int32Array(item.lease), 0) !== 0) continue;
-    if ('marker' in item.record) deliverDiagnostic(item.record);
-    else deliver(item.record);
+    if ('marker' in record) deliverDiagnostic(record);
+    else deliver(record);
   }
   for (const source of overflowSources) {
     const dropped = Atomics.load(counters, source.counter);

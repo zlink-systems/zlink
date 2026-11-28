@@ -25,7 +25,7 @@ export const TELEMETRY_STATE_BYTES =
   ) * BigUint64Array.BYTES_PER_ELEMENT;
 
 export interface ZLinkTelemetryLease {
-  readonly retired: Int32Array;
+  retired: boolean;
 }
 
 export interface ZLinkDiagnosticRecord {
@@ -38,19 +38,14 @@ export interface ZLinkDiagnosticRecord {
   readonly timestamp: Date;
 }
 
-type TelemetryRecord = ZLinkTelemetryRecord | ZLinkDiagnosticRecord;
-
-export interface ZLinkTelemetryDelivery {
-  readonly lease: SharedArrayBuffer;
-  readonly record: TelemetryRecord;
-}
+export type TelemetryRecord = ZLinkTelemetryRecord | ZLinkDiagnosticRecord;
 
 export function openTelemetryLease(): ZLinkTelemetryLease {
-  return { retired: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)) };
+  return { retired: false };
 }
 
 export function renewTelemetryLease(lease: ZLinkTelemetryLease | undefined): ZLinkTelemetryLease {
-  return lease === undefined || Atomics.load(lease.retired, 0) !== 0 ? openTelemetryLease() : lease;
+  return lease === undefined || lease.retired ? openTelemetryLease() : lease;
 }
 
 let processOwner: ZLinkMessageFlowDelivery | undefined;
@@ -69,8 +64,7 @@ export function telemetryProviderFailureCount(): number {
 }
 
 export function retireTelemetryLease(lease: ZLinkTelemetryLease): void {
-  Atomics.store(lease.retired, 0, 1);
-  processOwner?.retire(lease);
+  lease.retired = true;
 }
 
 export class ZLinkMessageFlowDelivery {
@@ -87,7 +81,7 @@ export class ZLinkMessageFlowDelivery {
   private readonly worker?: Worker;
   private failure?: Error;
   private rejectReady!: (error: Error) => void;
-  private pending: ZLinkTelemetryDelivery[] = [];
+  private pending: TelemetryRecord[] = [];
   private executing = false;
   private workerReady = false;
   private overflowPending = false;
@@ -148,18 +142,13 @@ export class ZLinkMessageFlowDelivery {
     return Atomics.load(this.state, TelemetryState.Enabled) !== 0;
   }
 
-  accepts(lease: ZLinkTelemetryLease): boolean {
-    return this.enabled() && Atomics.load(lease.retired, 0) === 0;
+  admits(lease: ZLinkTelemetryLease, diagnostic = false): boolean {
+    return !lease.retired && this.failure === undefined && (diagnostic || this.enabled());
   }
 
   submit(lease: ZLinkTelemetryLease, record: TelemetryRecord): void {
     const diagnostic = 'marker' in record;
-    if (
-      this.failure !== undefined ||
-      (!diagnostic && !this.enabled()) ||
-      Atomics.load(lease.retired, 0) !== 0
-    )
-      return;
+    if (!this.admits(lease, diagnostic)) return;
     if (Atomics.load(this.state, TelemetryState.Pending) === MESSAGE_FLOW_PENDING_LIMIT) {
       Atomics.add(
         this.counters,
@@ -170,7 +159,7 @@ export class ZLinkMessageFlowDelivery {
       return;
     }
     Atomics.add(this.state, TelemetryState.Pending, 1);
-    this.pending.push({ lease: lease.retired.buffer as SharedArrayBuffer, record });
+    this.pending.push(record);
     if (this.workerReady && !this.executing && this.scheduled === undefined) {
       this.scheduled = setImmediate(() => {
         this.scheduled = undefined;
@@ -178,12 +167,6 @@ export class ZLinkMessageFlowDelivery {
       });
       this.scheduled.unref();
     }
-  }
-
-  retire(lease: ZLinkTelemetryLease): void {
-    const retained = this.pending.filter((item) => item.lease !== lease.retired.buffer);
-    Atomics.sub(this.state, TelemetryState.Pending, this.pending.length - retained.length);
-    this.pending = retained;
   }
 
   private flush(): void {

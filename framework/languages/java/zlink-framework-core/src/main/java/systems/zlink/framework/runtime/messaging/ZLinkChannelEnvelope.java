@@ -199,10 +199,14 @@ public final class ZLinkChannelEnvelope {
     }
 
     public static Header reply(Header request) {
+        return reply(request, request.messageName());
+    }
+
+    public static Header reply(Header request, String messageName) {
         return new Header(
                 KIND_RESPONSE,
                 request.channelName(),
-                request.messageName(),
+                messageName,
                 request.contentType(),
                 request.correlationId(),
                 null,

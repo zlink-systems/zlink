@@ -35,6 +35,8 @@ internal static class ZLinkCompletionDispatcher
 
         private void Enqueue() => Post(this);
 
+        // Both awaiters reference the same source and token; at most one continuation is registered.
+        // The single GetResult here completes the permitted IValueTaskSource consumption sequence.
         internal override void Execute() => _caller.SetResult(source.GetAwaiter().GetResult());
 
         internal override void Completed(Exception? failure)

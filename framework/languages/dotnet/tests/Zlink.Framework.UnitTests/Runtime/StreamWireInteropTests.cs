@@ -43,7 +43,7 @@ public sealed class StreamWireInteropTests
             stream,
             ping,
             ReadOnlyMemory<byte>.Empty,
-            new CapturingLogger(LogLevel.Information)
+            new ZLinkMessageFlowTracer(new ZLinkDispatchOptionsModel())
         );
 
         Assert.True(
@@ -60,7 +60,7 @@ public sealed class StreamWireInteropTests
     }
 
     [Fact]
-    public void Server_ignored_controls_use_debug_logs_without_message_flow_drops()
+    public async Task Server_ignored_controls_use_debug_logs_without_message_flow_drops()
     {
         var socket = DispatchProxy.Create<IZLinkBackendStreamSocket, CapturingStreamSocketProxy>();
         var capture = (CapturingStreamSocketProxy)(object)socket;
@@ -75,6 +75,7 @@ public sealed class StreamWireInteropTests
         var flowLogger = new CapturingLogger(LogLevel.Trace);
         var flow = new ZLinkMessageFlowTracer(options, flowLogger);
         var runtimeLogger = new CapturingLogger(LogLevel.Information);
+        var runtimeFlow = new ZLinkMessageFlowTracer(options, runtimeLogger);
         Assert.True(flow.Enabled(ZLinkMessageFlowOutcome.Dropped));
 
         for (var index = 0; index < 1000; index++)
@@ -82,10 +83,11 @@ public sealed class StreamWireInteropTests
                 stream,
                 Control("$zlink.future.control"),
                 new byte[] { 1, 2, 3 },
-                runtimeLogger
+                runtimeFlow
             );
 
         Assert.Empty(flowLogger.Entries);
+        await CapturingLogger.ObservePendingAsync(runtimeFlow);
         Assert.Empty(runtimeLogger.Entries);
 
         runtimeLogger.MinimumLevel = LogLevel.Debug;
@@ -93,22 +95,23 @@ public sealed class StreamWireInteropTests
             stream,
             Control(ZlinkStreamControlProtocol.HeartbeatPingName),
             new byte[] { 2, 3 },
-            runtimeLogger
+            runtimeFlow
         );
         ZLinkStreamControlFrames.Dispatch(
             stream,
             Control(ZlinkStreamControlProtocol.HeartbeatPongName),
             new byte[] { 2 },
-            runtimeLogger
+            runtimeFlow
         );
         ZLinkStreamControlFrames.Dispatch(
             stream,
             Control("$zlink.future.control"),
             new byte[] { 1, 2, 3 },
-            runtimeLogger
+            runtimeFlow
         );
 
         Assert.Empty(flowLogger.Entries);
+        await CapturingLogger.ObservePendingAsync(runtimeFlow);
         var messages = runtimeLogger.Entries.Select(entry => entry.Message).ToArray();
         Assert.Equal(3, messages.Length);
         Assert.Contains(
@@ -135,8 +138,13 @@ public sealed class StreamWireInteropTests
                 ) && message.Contains("payloadBytes=1", StringComparison.Ordinal)
         );
         Assert.Single(capture.Frames);
-        Assert.True(CoreFrameCodec.TryDecode(capture.Frames[0], out _, out var pongPayload));
-        Assert.Empty(pongPayload.ToArray());
+        AssertEmptyPayload(capture.Frames[0]);
+
+        static void AssertEmptyPayload(byte[] frame)
+        {
+            Assert.True(CoreFrameCodec.TryDecode(frame, out _, out var payload));
+            Assert.Empty(payload.ToArray());
+        }
     }
 
     [Fact]
@@ -155,7 +163,7 @@ public sealed class StreamWireInteropTests
                 stream,
                 Control(ZlinkStreamControlProtocol.BoundControlName),
                 ReadOnlyMemory<byte>.Empty,
-                new CapturingLogger(LogLevel.Information)
+                new ZLinkMessageFlowTracer(new ZLinkDispatchOptionsModel())
             )
         );
     }
@@ -238,6 +246,15 @@ public sealed class StreamWireInteropTests
 
         public bool IsEnabled(LogLevel logLevel) => logLevel >= MinimumLevel;
 
+        internal static Task ObservePendingAsync(ZLinkMessageFlowTracer flow)
+        {
+            var receipt = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            flow.LogDiagnostic(LogLevel.Information, null, "{DeliveryReceipt}", receipt);
+            return receipt.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
         public void Log<TState>(
             LogLevel logLevel,
             EventId eventId,
@@ -246,6 +263,15 @@ public sealed class StreamWireInteropTests
             Func<TState, Exception?, string> formatter
         )
         {
+            if (
+                state is IReadOnlyList<KeyValuePair<string, object?>> fields
+                && fields.Count > 0
+                && fields[0] is { Key: "DeliveryReceipt", Value: TaskCompletionSource receipt }
+            )
+            {
+                receipt.TrySetResult();
+                return;
+            }
             if (IsEnabled(logLevel))
                 Entries.Enqueue((logLevel, formatter(state, exception)));
         }

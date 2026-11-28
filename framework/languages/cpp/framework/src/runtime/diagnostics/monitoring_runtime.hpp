@@ -169,6 +169,7 @@ class monitoring_runtime_t
                                 timer_failure_event_t failure) const;
     void publish_metric (metric_event_payload_t event) const;
     void publish_drain (drain_event_t event) const;
+    void publish_unfinished_join_deliveries (std::size_t count, std::string deliveries) const;
 
   private:
     void
