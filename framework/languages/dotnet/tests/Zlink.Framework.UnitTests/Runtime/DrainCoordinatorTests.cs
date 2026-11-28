@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
@@ -135,183 +136,360 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         Assert.Equal(new Exception[] { first, second }, failure.InnerExceptions);
     }
 
-    [Fact]
-    public async Task Startup_Cancellation_Waits_For_Host_Lease_Cleanup_Beyond_Renew_Timeout()
-    {
-        var store = new StartupPendingReleaseStore();
-        var builder = Host.CreateApplicationBuilder();
-        builder.Services.AddZLinkFramework(options =>
-            options.AddLocationStore(new ZLinkInMemoryProviderLocationStore())
-        );
-        builder.Services.AddSingleton(
-            new ZLinkLocationRuntime(
-                new ZLinkLocationOptions { OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(25) },
-                store
-            )
-        );
-        using var host = builder.Build();
-        using var cancellation = new CancellationTokenSource();
-        store.OnClaimStarted = cancellation.Cancel;
-        var start = host.StartAsync(cancellation.Token);
-        await store.ClaimStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        cancellation.Cancel();
-        store.ClaimResponse.TrySetException(new InvalidOperationException("claim response lost"));
-        try
-        {
-            await store.ReleaseStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            await Assert.ThrowsAsync<TimeoutException>(() =>
-                start.WaitAsync(TimeSpan.FromMilliseconds(80))
-            );
-            store.ReleaseAllowed.TrySetResult();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                start.WaitAsync(TimeSpan.FromSeconds(2))
-            );
-            Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(
-                await store.Inner.ReadOwnerLeaseAsync(store.OwnerId!)
-            );
-            Assert.Equal(0, store.RenewCalls);
-            Assert.Equal(1, store.ReadCalls);
-            Assert.Equal(1, store.ReleaseCalls);
-        }
-        finally
-        {
-            store.ReleaseAllowed.TrySetResult();
-        }
-    }
-
-    [Fact]
-    public async Task Startup_Cancellation_Observes_Pending_Provider_Before_Reading_Lease()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Startup_Cancellation_Observes_Late_Commit_After_Renew_Deadline(bool hosted)
     {
         var store = new StartupPendingReleaseStore(commitBeforeResponse: false);
-        var builder = Host.CreateApplicationBuilder();
-        builder.Services.AddZLinkFramework(options =>
-            options.AddLocationStore(new ZLinkInMemoryProviderLocationStore())
+        var time = new ControllableTimeProvider();
+        var options = new ZLinkLocationOptions { OwnerLeaseRenewTimeout = StartupRenewTimeout };
+        var heartbeatTimer = time.WaitForNextTimerAsync(
+            options.OwnerLeaseRenewInterval - StartupRenewTimeout
         );
-        builder.Services.AddSingleton(
-            new ZLinkLocationRuntime(
-                new ZLinkLocationOptions { OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(25) },
-                store
-            )
-        );
-        using var host = builder.Build();
+        await using var location = new ZLinkLocationRuntime(options, store, time);
+        using var host = hosted ? CreateStartupClaimHost(location) : null;
         using var cancellation = new CancellationTokenSource();
         store.OnClaimStarted = cancellation.Cancel;
-        var start = host.StartAsync(cancellation.Token);
-        await store.ClaimStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        cancellation.Cancel();
+        var start = host is null
+            ? location.StartAsync(RoutingId.From("late-claim"), cancellation.Token).AsTask()
+            : host.StartAsync(cancellation.Token);
         try
         {
-            await Assert.ThrowsAsync<TimeoutException>(() =>
-                start.WaitAsync(TimeSpan.FromMilliseconds(80))
-            );
+            await store.ClaimStarted.Task.WaitAsync(StartupTestTimeout);
+            time.AdvanceMonotonic(StartupRenewTimeout);
             Assert.Equal(0, store.ReadCalls);
-            var claim = await store.Inner.ClaimOwnerLeaseAsync(
-                store.OwnerId!,
-                TimeSpan.FromSeconds(15)
-            );
-            store.ClaimResponse.TrySetResult(claim);
-            await store.ReleaseStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await store.CommitClaimAsync();
             store.ReleaseAllowed.TrySetResult();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                start.WaitAsync(TimeSpan.FromSeconds(2))
+
+            var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                start.WaitAsync(StartupTestTimeout)
             );
+            Assert.Null(failure.InnerException);
+            Assert.Equal(1, store.ReadCalls);
+            Assert.False(store.ReadBeforeClaimResponse);
+            Assert.Equal(1, store.ReleaseCalls);
+            Assert.Equal(0, store.RenewCalls);
+            Assert.False(heartbeatTimer.IsCompleted);
+            Assert.Equal(0, time.ActiveTimerCount);
             Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(
                 await store.Inner.ReadOwnerLeaseAsync(store.OwnerId!)
             );
-            Assert.Equal(0, store.RenewCalls);
-            Assert.Equal(1, store.ReadCalls);
-            Assert.Equal(1, store.ReleaseCalls);
         }
         finally
         {
-            store.ClaimResponse.TrySetException(new InvalidOperationException("test cleanup"));
-            store.ReleaseAllowed.TrySetResult();
+            store.CompleteOutstandingCalls();
         }
     }
 
     [Fact]
-    public async Task Startup_Cancellation_Reports_Lease_Release_Failure_In_Host_Terminal()
+    public async Task Startup_Cancellation_After_Renew_Deadline_Releases_Committed_Claim()
     {
-        var releaseFailure = new InvalidOperationException("owner lease release failed");
+        var store = new StartupPendingReleaseStore();
+        var time = new ControllableTimeProvider();
+        await using var location = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions { OwnerLeaseRenewTimeout = StartupRenewTimeout },
+            store,
+            time
+        );
+        using var cancellation = new CancellationTokenSource();
+        location.OwnerLeaseRenewalFailed += cancellation.Cancel;
+        var start = location
+            .StartAsync(RoutingId.From("cancelled-after-renew"), cancellation.Token)
+            .AsTask();
+        try
+        {
+            await store.ClaimStarted.Task.WaitAsync(StartupTestTimeout);
+            using var response = store.ClaimToken.Register(() =>
+                store.ClaimResponse.TrySetCanceled(store.ClaimToken)
+            );
+            store.ReleaseAllowed.TrySetResult();
+            time.AdvanceMonotonic(StartupRenewTimeout);
+
+            var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                start.WaitAsync(StartupTestTimeout)
+            );
+            Assert.Null(failure.InnerException);
+            Assert.Equal(1, store.ReadCalls);
+            Assert.Equal(1, store.ReleaseCalls);
+            Assert.Equal(0, store.RenewCalls);
+            Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(
+                await store.Inner.ReadOwnerLeaseAsync(store.OwnerId!)
+            );
+        }
+        finally
+        {
+            store.CompleteOutstandingCalls();
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Startup_Cancellation_Host_Awaits_Release_And_Preserves_Release_Failure(
+        bool releaseFails
+    )
+    {
+        var releaseFailure = releaseFails
+            ? new InvalidOperationException("owner lease release failed")
+            : null;
         var store = new StartupPendingReleaseStore { ReleaseFailure = releaseFailure };
-        store.ReleaseAllowed.TrySetResult();
-        var builder = Host.CreateApplicationBuilder();
-        builder.Services.AddZLinkFramework(options =>
-            options.AddLocationStore(new ZLinkInMemoryProviderLocationStore())
+        var time = new ControllableTimeProvider();
+        await using var location = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions { OwnerLeaseRenewTimeout = StartupRenewTimeout },
+            store,
+            time
         );
-        builder.Services.AddSingleton(
-            new ZLinkLocationRuntime(
-                new ZLinkLocationOptions { OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(25) },
-                store
-            )
-        );
-        using var host = builder.Build();
+        using var host = CreateStartupClaimHost(location);
         using var cancellation = new CancellationTokenSource();
         store.OnClaimStarted = cancellation.Cancel;
         var start = host.StartAsync(cancellation.Token);
-        await store.ClaimStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        cancellation.Cancel();
-        store.ClaimResponse.TrySetException(new InvalidOperationException("claim response lost"));
+        try
+        {
+            await store.ClaimStarted.Task.WaitAsync(StartupTestTimeout);
+            store.ClaimResponse.TrySetException(
+                new InvalidOperationException("claim response lost")
+            );
+            await store.ReleaseStarted.Task.WaitAsync(StartupTestTimeout);
+            time.AdvanceMonotonic(StartupRenewTimeout);
+            Assert.False(start.IsCompleted);
+            store.ReleaseAllowed.TrySetResult();
 
-        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            start.WaitAsync(TimeSpan.FromSeconds(2))
-        );
-        Assert.True(failure.CancellationToken.IsCancellationRequested);
-        Assert.Same(releaseFailure, failure.InnerException);
-        Assert.Equal(1, store.ReadCalls);
-        Assert.Equal(1, store.ReleaseCalls);
-        Assert.Equal(0, store.RenewCalls);
-        var terminal = host
-            .Services.GetRequiredService<IZLinkFrameworkRuntime>()
-            .Status.TerminationResult;
-        Assert.NotNull(terminal);
-        Assert.Equal(ZLinkFrameworkTerminationOutcome.ForceStopped, terminal.Value.Outcome);
+            var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                start.WaitAsync(StartupTestTimeout)
+            );
+            Assert.True(failure.CancellationToken.IsCancellationRequested);
+            Assert.Same(releaseFailure, failure.InnerException);
+            Assert.Equal(1, store.ReadCalls);
+            Assert.Equal(1, store.ReleaseCalls);
+            Assert.Equal(0, store.RenewCalls);
+            if (releaseFails)
+            {
+                var terminal = host
+                    .Services.GetRequiredService<IZLinkFrameworkRuntime>()
+                    .Status.TerminationResult;
+                Assert.NotNull(terminal);
+                Assert.Equal(ZLinkFrameworkTerminationOutcome.ForceStopped, terminal.Value.Outcome);
+            }
+            else
+            {
+                Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(
+                    await store.Inner.ReadOwnerLeaseAsync(store.OwnerId!)
+                );
+            }
+        }
+        finally
+        {
+            store.CompleteOutstandingCalls();
+        }
     }
 
     [Fact]
-    public async Task Startup_Cancellation_Uses_Already_Running_Shutdown_Deadline_For_Pending_Provider()
+    public async Task Startup_Cancellation_Default_Stop_Deadline_Abandons_Pending_Claim_Once()
     {
         var store = new StartupPendingReleaseStore();
-        var builder = Host.CreateApplicationBuilder();
-        builder.Services.AddZLinkFramework(options =>
-            options.AddLocationStore(new ZLinkInMemoryProviderLocationStore())
+        var time = new ControllableTimeProvider();
+        await using var location = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions { OwnerLeaseRenewTimeout = StartupRenewTimeout },
+            store,
+            time
         );
-        builder.Services.AddSingleton(
-            new ZLinkLocationRuntime(
-                new ZLinkLocationOptions { OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(25) },
-                store
-            )
-        );
-        using var host = builder.Build();
         using var cancellation = new CancellationTokenSource();
-        var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
-        Task<ZLinkFrameworkTerminationResult>? shutdown = null;
-        // Shutdown and cancellation are requested while the claim is pending, so the
-        // 25 ms renew timeout cannot end the claim before the startup is cancelled.
-        store.OnClaimStarted = () =>
-        {
-            shutdown = runtime.ShutdownAsync(TimeSpan.FromMilliseconds(150)).AsTask();
-            cancellation.Cancel();
-        };
-        var start = host.StartAsync(cancellation.Token);
-        await store.ClaimStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        using var diagnostics = new StartupClaimDiagnosticCapture();
+        store.OnClaimStarted = cancellation.Cancel;
+        var start = location
+            .StartAsync(RoutingId.From("pending-claim"), cancellation.Token)
+            .AsTask();
         try
         {
+            await store.ClaimStarted.Task.WaitAsync(StartupTestTimeout);
+            var deadline = ZLinkFrameworkMaintenanceRuntime.DefaultDeadline;
+            var stopping = location.StopAsync().AsTask();
+            var hasDefaultDeadline = time.HasTimerDueIn(deadline);
+            time.AdvanceMonotonic(deadline);
             var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                start.WaitAsync(TimeSpan.FromSeconds(2))
+                start.WaitAsync(StartupTestTimeout)
             );
             Assert.True(failure.CancellationToken.IsCancellationRequested);
+            await stopping.WaitAsync(StartupTestTimeout);
             Assert.False(store.ClaimResponse.Task.IsCompleted);
             Assert.Equal(0, store.ReadCalls);
             Assert.Equal(0, store.ReleaseCalls);
+            Assert.Equal(0, store.OwnerSweepCalls);
             Assert.Equal(0, store.RenewCalls);
-            var result = await shutdown!.WaitAsync(TimeSpan.FromSeconds(2));
-            Assert.Equal(ZLinkFrameworkTerminationOutcome.ForceStopped, result.Outcome);
+            Assert.True(hasDefaultDeadline);
+            await diagnostics.AssertSingleAsync(store.OwnerId!);
+            Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
+                await store.Inner.ReadOwnerLeaseAsync(store.OwnerId!)
+            );
         }
         finally
         {
-            store.ClaimResponse.TrySetException(new InvalidOperationException("test cleanup"));
-            store.ReleaseAllowed.TrySetResult();
+            store.CompleteOutstandingCalls();
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Startup_Cancellation_Expired_Stop_Deadline_Skips_Next_Store_Request(
+        bool beforeRead
+    )
+    {
+        const string scopeName = "startup-cleanup-before-read";
+        var store = new StartupPendingReleaseStore();
+        using var cancellation = new CancellationTokenSource();
+        using var stopDeadline = new CancellationTokenSource();
+        using var diagnostics = new StartupClaimDiagnosticCapture();
+        using var meter = new MeterListener();
+        if (beforeRead)
+        {
+            // The renewal failure counter is emitted after the pending claim faults,
+            // immediately before cleanup would submit the confirmation read.
+            meter.InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Name == "zlink.location.owner_lease.renew.failures")
+                    listener.EnableMeasurementEvents(instrument);
+            };
+            meter.SetMeasurementEventCallback<long>(
+                (_, _, tags, _) =>
+                {
+                    foreach (var tag in tags)
+                        if (tag.Key == "scope_name" && Equals(tag.Value, scopeName))
+                            stopDeadline.Cancel();
+                }
+            );
+            meter.Start();
+        }
+        else
+        {
+            store.OnReadCompleted = stopDeadline.Cancel;
+        }
+
+        await using var location = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions(),
+            store,
+            new ControllableTimeProvider(),
+            metricScopes: [new("mesh", scopeName)]
+        );
+        store.OnClaimStarted = cancellation.Cancel;
+        var start = location
+            .StartAsync(
+                RoutingId.From("expired-before-store"),
+                cancellation.Token,
+                stopDeadline.Token
+            )
+            .AsTask();
+        try
+        {
+            await store.ClaimStarted.Task.WaitAsync(StartupTestTimeout);
+            if (beforeRead)
+                store.ClaimResponse.TrySetException(
+                    new InvalidOperationException("claim response lost")
+                );
+            else
+                store.ReturnCommittedClaim();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                start.WaitAsync(StartupTestTimeout)
+            );
+            Assert.True(stopDeadline.IsCancellationRequested);
+            Assert.Equal(beforeRead ? 0 : 1, store.ReadCalls);
+            Assert.Equal(0, store.ReleaseCalls);
+            Assert.Equal(0, store.OwnerSweepCalls);
+            Assert.Equal(0, store.RenewCalls);
+            await diagnostics.AssertSingleAsync(store.OwnerId!);
+        }
+        finally
+        {
+            store.CompleteOutstandingCalls();
+        }
+    }
+
+    [Fact]
+    public async Task Startup_Cancellation_Host_Stop_Deadline_Abandons_Pending_Claim_Once()
+    {
+        var store = new StartupPendingReleaseStore();
+        await using var location = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions(),
+            store,
+            new ControllableTimeProvider()
+        );
+        using var host = CreateStartupClaimHost(location);
+        using var cancellation = new CancellationTokenSource();
+        using var diagnostics = new StartupClaimDiagnosticCapture();
+        var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
+        Task<ZLinkFrameworkTerminationResult>? shutdown = null;
+        store.OnClaimStarted = () =>
+        {
+            shutdown = runtime.ShutdownAsync(TimeSpan.FromMilliseconds(1)).AsTask();
+            cancellation.Cancel();
+        };
+        var start = host.StartAsync(cancellation.Token);
+        try
+        {
+            await store.ClaimStarted.Task.WaitAsync(StartupTestTimeout);
+            var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                start.WaitAsync(StartupTestTimeout)
+            );
+            Assert.True(failure.CancellationToken.IsCancellationRequested);
+            var result = await shutdown!.WaitAsync(StartupTestTimeout);
+            Assert.Equal(ZLinkFrameworkTerminationOutcome.ForceStopped, result.Outcome);
+            Assert.False(store.ClaimResponse.Task.IsCompleted);
+            Assert.Equal(0, store.ReadCalls);
+            Assert.Equal(0, store.ReleaseCalls);
+            Assert.Equal(0, store.OwnerSweepCalls);
+            Assert.Equal(0, store.RenewCalls);
+            await diagnostics.AssertSingleAsync(store.OwnerId!);
+        }
+        finally
+        {
+            store.CompleteOutstandingCalls();
+        }
+    }
+
+    [Fact]
+    public async Task Startup_Cancellation_Direct_Stop_Deadline_Bounds_A_Release_Already_In_Progress()
+    {
+        var store = new StartupPendingReleaseStore();
+        var time = new ControllableTimeProvider();
+        await using var location = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions { OwnerLeaseRenewTimeout = StartupRenewTimeout },
+            store,
+            time
+        );
+        using var cancellation = new CancellationTokenSource();
+        using var stopDeadline = new CancellationTokenSource();
+        using var diagnostics = new StartupClaimDiagnosticCapture();
+        store.OnClaimStarted = cancellation.Cancel;
+        var start = location
+            .StartAsync(RoutingId.From("pending-release"), cancellation.Token)
+            .AsTask();
+        try
+        {
+            await store.ClaimStarted.Task.WaitAsync(StartupTestTimeout);
+            store.ReturnCommittedClaim();
+            await store.ReleaseStarted.Task.WaitAsync(StartupTestTimeout);
+            var stopping = location.StopAsync(stopDeadline.Token).AsTask();
+            time.AdvanceMonotonic(StartupRenewTimeout);
+            stopDeadline.Cancel();
+
+            var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                start.WaitAsync(StartupTestTimeout)
+            );
+            Assert.True(failure.CancellationToken.IsCancellationRequested);
+            await stopping.WaitAsync(StartupTestTimeout);
+            Assert.Equal(1, store.ReadCalls);
+            Assert.Equal(1, store.ReleaseCalls);
+            Assert.Equal(0, store.RenewCalls);
+            Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
+                await store.Inner.ReadOwnerLeaseAsync(store.OwnerId!)
+            );
+            await diagnostics.AssertSingleAsync(store.OwnerId!);
+        }
+        finally
+        {
+            store.CompleteOutstandingCalls();
         }
     }
 
@@ -319,12 +497,8 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     public async Task Startup_Cancellation_Already_Requested_Starts_Host_Deadline_Without_Claim()
     {
         var store = new StartupPendingReleaseStore();
-        var builder = Host.CreateApplicationBuilder();
-        builder.Services.AddZLinkFramework(options =>
-            options.AddLocationStore(new ZLinkInMemoryProviderLocationStore())
-        );
-        builder.Services.AddSingleton(new ZLinkLocationRuntime(new ZLinkLocationOptions(), store));
-        using var host = builder.Build();
+        await using var location = new ZLinkLocationRuntime(new ZLinkLocationOptions(), store);
+        using var host = CreateStartupClaimHost(location);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         var frameworkHost = host
@@ -332,12 +506,72 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             .Single(service => service is ZLinkFrameworkHostedService);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            frameworkHost.StartAsync(cancellation.Token).WaitAsync(TimeSpan.FromSeconds(2))
+            frameworkHost.StartAsync(cancellation.Token).WaitAsync(StartupTestTimeout)
         );
         Assert.Null(store.OwnerId);
         Assert.Equal(0, store.ReadCalls);
         Assert.Equal(0, store.ReleaseCalls);
         Assert.Equal(0, store.RenewCalls);
+    }
+
+    private static readonly TimeSpan StartupRenewTimeout = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan StartupTestTimeout = TimeSpan.FromSeconds(5);
+
+    private static IHost CreateStartupClaimHost(ZLinkLocationRuntime location)
+    {
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddZLinkFramework(options =>
+            options.AddLocationStore(new ZLinkInMemoryProviderLocationStore())
+        );
+        builder.Services.AddSingleton(location);
+        return builder.Build();
+    }
+
+    private sealed class StartupClaimDiagnosticCapture : StringWriter
+    {
+        private readonly TextWriter _previous = Console.Error;
+        private readonly TaskCompletionSource<string> _written = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private int _count;
+
+        internal StartupClaimDiagnosticCapture() => Console.SetError(this);
+
+        public override void WriteLine(string? value)
+        {
+            if (
+                value is not null
+                && value.StartsWith(
+                    "location.startup_claim_cleanup_abandoned ",
+                    StringComparison.Ordinal
+                )
+            )
+            {
+                Interlocked.Increment(ref _count);
+                _written.TrySetResult(value);
+            }
+            else
+            {
+                _previous.WriteLine(value);
+            }
+        }
+
+        internal async Task AssertSingleAsync(string ownerId)
+        {
+            Assert.Equal(
+                $"location.startup_claim_cleanup_abandoned owner_id={ownerId}",
+                await _written.Task.WaitAsync(StartupTestTimeout)
+            );
+            MessageFlowDeliveryTests.WaitForDelivery();
+            Assert.Equal(1, Volatile.Read(ref _count));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                Console.SetError(_previous);
+            base.Dispose(disposing);
+        }
     }
 
     private sealed class StartupPendingReleaseStore(bool commitBeforeResponse = true)
@@ -353,11 +587,33 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         internal TaskCompletionSource<ZLinkOwnerLeaseClaimResult> ClaimResponse { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal string? OwnerId { get; private set; }
+        internal CancellationToken ClaimToken { get; private set; }
+        internal bool ReadBeforeClaimResponse { get; private set; }
         internal int RenewCalls { get; private set; }
         internal int ReadCalls { get; private set; }
         internal int ReleaseCalls { get; private set; }
+        internal int OwnerSweepCalls { get; private set; }
         internal Exception? ReleaseFailure { get; set; }
         internal Action? OnClaimStarted { get; set; }
+        internal Action? OnReadCompleted { get; set; }
+        private ZLinkOwnerLeaseClaimResult? _committedClaim;
+        private TimeSpan _leaseTtl;
+
+        internal async Task CommitClaimAsync()
+        {
+            _committedClaim = await Inner.ClaimOwnerLeaseAsync(OwnerId!, _leaseTtl);
+            ReturnCommittedClaim();
+        }
+
+        internal void ReturnCommittedClaim() => ClaimResponse.TrySetResult(_committedClaim!);
+
+        internal void CompleteOutstandingCalls()
+        {
+            ClaimResponse.TrySetResult(
+                _committedClaim ?? new ZLinkOwnerLeaseClaimResult.Conflict()
+            );
+            ReleaseAllowed.TrySetResult();
+        }
 
         public override async ValueTask<ZLinkOwnerLeaseClaimResult> ClaimOwnerLeaseAsync(
             string ownerId,
@@ -366,20 +622,25 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         )
         {
             OwnerId = ownerId;
+            ClaimToken = cancellationToken;
+            _leaseTtl = leaseTtl;
             if (commitBeforeResponse)
-                _ = await Inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl);
+                _committedClaim = await Inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl);
             OnClaimStarted?.Invoke();
             ClaimStarted.TrySetResult();
             return await ClaimResponse.Task;
         }
 
-        public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
+        public override async ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
             string ownerId,
             CancellationToken cancellationToken = default
         )
         {
             ReadCalls++;
-            return Inner.ReadOwnerLeaseAsync(ownerId, cancellationToken);
+            ReadBeforeClaimResponse |= !ClaimResponse.Task.IsCompleted;
+            var result = await Inner.ReadOwnerLeaseAsync(ownerId);
+            OnReadCompleted?.Invoke();
+            return result;
         }
 
         public override async ValueTask<ZLinkOwnerLeaseReleaseResult> ReleaseOwnerLeaseAsync(
@@ -398,7 +659,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         public override ValueTask<long> RemoveAllByOwnerAsync(
             ZLinkLocationOwnerToken owner,
             CancellationToken cancellationToken = default
-        ) => Inner.RemoveAllByOwnerAsync(owner, cancellationToken);
+        )
+        {
+            OwnerSweepCalls++;
+            return Inner.RemoveAllByOwnerAsync(owner, cancellationToken);
+        }
 
         public override ValueTask<ZLinkOwnerLeaseRenewResult> RenewOwnerLeaseAsync(
             ZLinkLocationOwnerToken token,

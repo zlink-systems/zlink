@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using Zlink.Framework.Internal.Locations;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Spots;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
@@ -120,6 +122,7 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
     private readonly IReadOnlyList<KeyValuePair<string, string>> _metricScopes;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly ZLinkStateLane _lane = new();
+    private CancellationTokenSource _directStartupStop = new();
     private ZLinkLocationRuntimeHealth _health = new(false, null, null, null);
     private CancellationTokenSource? _heartbeatCts;
     private Task? _heartbeatLoop;
@@ -342,7 +345,7 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                     leaseOperationStartedAt,
                     cancellationToken,
                     ownerLeaseDeadline.Token,
-                    cancellationCleanupToken
+                    cancellationCleanupToken ?? _directStartupStop.Token
                 )
                 .ConfigureAwait(false);
 
@@ -374,9 +377,28 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
 
     internal async ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
-        await _lifecycleGate.WaitAsync().ConfigureAwait(false);
+        using var defaultDeadline = cancellationToken.CanBeCanceled
+            ? null
+            : new CancellationTokenSource(ZLinkFrameworkMaintenanceRuntime.DefaultDeadline, _time);
+        var stopDeadline = defaultDeadline?.Token ?? cancellationToken;
+        // Startup holds the lifecycle gate while confirming a pending claim.
+        // Give it the Stop deadline before waiting for the gate.
+        await using (
+            stopDeadline.UnsafeRegister(
+                static (state, _) =>
+                {
+                    var runtime = (ZLinkLocationRuntime)state!;
+                    Volatile.Read(ref runtime._directStartupStop).Cancel();
+                },
+                this
+            )
+        )
+            await _lifecycleGate.WaitAsync().ConfigureAwait(false);
         try
         {
+            if (_directStartupStop.IsCancellationRequested)
+                Volatile.Write(ref _directStartupStop, new CancellationTokenSource());
+
             var stop = await _lane
                 .RunAsync(() =>
                 {
@@ -767,13 +789,12 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
         long leaseOperationStartedAt,
         CancellationToken cancellationToken,
         CancellationToken deadlineToken,
-        CancellationToken? cancellationCleanupToken = null
+        CancellationToken? startupStopToken = null
     )
     {
         _options.FreezeStoreOutageRetention();
         OwnerLeaseState owner = default;
         var readingOrRenewing = false;
-        var claimStarted = false;
         Exception? claimFailure = null;
         ZLinkOwnerLeaseClaimResult? rejectedClaim = null;
         Task<ZLinkOwnerLeaseClaimResult>? pendingClaim = null;
@@ -793,24 +814,30 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
         catch (OperationCanceledException cancellation)
             when (cancellationToken.IsCancellationRequested && ClaimPending())
         {
-            // Spec 01-location-runtime §5: a claim already started is read
-            // again and a confirmed lease is released. This is the one
-            // cancellation cleanup of a claim, at startup and in the heartbeat.
-            await RecordCancellationCleanupFailureAsync(
-                    async () =>
-                        await ReleaseClaimIfConfirmedAfterCancellationAsync(
-                                owner.Id,
-                                cancellationCleanupToken ?? deadlineToken,
-                                cancellationCleanupToken.HasValue ? pendingClaim : null
-                            )
-                            .ConfigureAwait(false),
-                    cancellation
-                )
-                .ConfigureAwait(false);
+            try
+            {
+                await ReleaseClaimIfConfirmedAfterCancellationAsync(
+                        owner.Id,
+                        startupStopToken ?? deadlineToken,
+                        startupStopToken.HasValue ? pendingClaim : null
+                    )
+                    .ConfigureAwait(false);
+            }
+            catch (Exception cleanupFailure)
+            {
+                if (startupStopToken is { IsCancellationRequested: true })
+                    ZLinkMessageFlowDelivery.Shared.SubmitDiagnostic(
+                        $"location.startup_claim_cleanup_abandoned owner_id={owner.Id}"
+                    );
+                RecordLeaseFailure(
+                    $"Owner lease cancellation cleanup failed: {cleanupFailure.Message}"
+                );
+                throw new ZLinkOwnerLeaseCancellationCleanupException(cancellation, cleanupFailure);
+            }
             throw;
         }
 
-        bool ClaimPending() => claimStarted && owner.Token is null;
+        bool ClaimPending() => pendingClaim is not null && owner.Token is null;
 
         async ValueTask<bool> RenewOrClaimAsync()
         {
@@ -826,6 +853,8 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                     {
                         if (claimFailure is not null || rejectedClaim is not null)
                         {
+                            if (startupStopToken.HasValue)
+                                cancellationToken.ThrowIfCancellationRequested();
                             readingOrRenewing = true;
                             var confirmed = await ConfirmClaimAsync(owner.Id, deadlineToken)
                                 .ConfigureAwait(false);
@@ -853,7 +882,6 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                             .WaitAsync(operation.Token)
                             .ConfigureAwait(false);
 
-                        claimStarted = true;
                         pendingClaim = ObserveStoreAsync(
                                 () =>
                                     _store.ClaimOwnerLeaseAsync(
@@ -864,9 +892,19 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                                 "compare_exchange"
                             )
                             .AsTask();
-                        var claim = await pendingClaim
-                            .WaitAsync(operation.Token)
-                            .ConfigureAwait(false);
+                        ZLinkOwnerLeaseClaimResult claim;
+                        try
+                        {
+                            claim = await pendingClaim
+                                .WaitAsync(operation.Token)
+                                .ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            // WaitAsync can return a completed provider task after caller cancellation.
+                            if (startupStopToken.HasValue)
+                                cancellationToken.ThrowIfCancellationRequested();
+                        }
                         if (claim is ZLinkOwnerLeaseClaimResult.Claimed claimed)
                         {
                             result = await InstallConfirmedClaimAsync(
@@ -1030,8 +1068,7 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                             exception is not OperationCanceledException
                             || !deadlineToken.IsCancellationRequested
                         )
-                        && claimStarted
-                        && owner.Token is null
+                        && ClaimPending()
                         && claimFailure is null
                         && rejectedClaim is null
                     )
@@ -1300,6 +1337,7 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
             {
                 RecordLeaseFailure(exception.Message);
             }
+            cancellationToken.ThrowIfCancellationRequested();
         }
         var owner = await ObserveStoreAsync(
                 () => _store.ReadOwnerLeaseAsync(ownerId, cancellationToken),
@@ -1308,32 +1346,20 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
             .AsTask()
             .WaitAsync(cancellationToken)
             .ConfigureAwait(false);
-        if (owner is ZLinkOwnerLeaseReadResult.Found found)
-            _ = await ObserveStoreAsync(
-                    () => _store.ReleaseOwnerLeaseAsync(found.Token, cancellationToken),
-                    "release"
-                )
-                .AsTask()
-                .WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
-    }
+        if (pendingClaim is not null)
+            cancellationToken.ThrowIfCancellationRequested();
+        if (owner is not ZLinkOwnerLeaseReadResult.Found found)
+            return;
 
-    private async ValueTask RecordCancellationCleanupFailureAsync(
-        Func<ValueTask> cleanup,
-        OperationCanceledException cancellation
-    )
-    {
-        try
-        {
-            await cleanup().ConfigureAwait(false);
-        }
-        catch (Exception cleanupException)
-        {
-            RecordLeaseFailure(
-                $"Owner lease cancellation cleanup failed: {cleanupException.Message}"
-            );
-            throw new ZLinkOwnerLeaseCancellationCleanupException(cancellation, cleanupException);
-        }
+        _ = await ObserveStoreAsync(
+                () => _store.ReleaseOwnerLeaseAsync(found.Token, cancellationToken),
+                "release"
+            )
+            .AsTask()
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (pendingClaim is not null)
+            cancellationToken.ThrowIfCancellationRequested();
     }
 
     private async Task HeartbeatLoopAsync(
