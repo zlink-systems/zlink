@@ -473,6 +473,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             );
             Assert.True(failure.CancellationToken.IsCancellationRequested);
             await stopping.WaitAsync(StartupTestTimeout);
+            Assert.Contains(
+                "cleanup failed",
+                location.LastError,
+                StringComparison.OrdinalIgnoreCase
+            );
             Assert.Equal(1, store.ReadCalls);
             Assert.Equal(1, store.ReleaseCalls);
             Assert.Equal(0, store.RenewCalls);
