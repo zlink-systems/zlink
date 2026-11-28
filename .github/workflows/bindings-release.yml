@@ -442,7 +442,7 @@ jobs:
           python -m pip install build pytest twine
           cd bindings/python
           pip install -e .
-          python -m pytest -q tests/test_version.py tests/test_enums.py
+          python -m pytest -q tests/test_version.py tests/test_enums.py tests/test_perf_source_compile.py
           python -m build
 
       - name: Publish to PyPI

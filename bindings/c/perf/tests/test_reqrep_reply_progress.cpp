@@ -105,6 +105,17 @@ bool run_test ()
 
     CHECK (send_request (first.get (), 1));
     CHECK (wait_for_request (server.get ()));
+    // Unread DATA fills the shared reply pipe (core/doc/spec/core/socket/README.ko.md:437–448,1256–1262).
+    zlink_routing_id_t first_rid = {};
+    CHECK (zlink_get_routing_id (first.get (), &first_rid) == ZLINK_CONFIG_OK);
+    zlink_msg_t queued_data;
+    CHECK (zlink_msg_init_size (&queued_data, 65536) == ZLINK_CONFIG_OK);
+    std::memset (zlink_msg_data (&queued_data), 0, zlink_msg_size (&queued_data));
+    const zlink_submit_result_t queued_result =
+      perf_zlink_send_rid_parts (server.get (), &first_rid, &queued_data, 1, ZLINK_SEND_FLAGS_NONE);
+    zlink_msg_close (&queued_data);
+    CHECK (queued_result == ZLINK_SUBMIT_OK);
+
     CHECK (reply_one_request (server.get (), context.get (), 65536, "tcp", ZLINK_SOCKET_ROUTER,
                               &active_msg_size, &pending, &pending_by_rid)
            == server_recv_step_replied);
