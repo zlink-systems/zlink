@@ -15,13 +15,13 @@ fn main() {
     let mut monitors: Vec<SocketMonitor> = Vec::with_capacity(settings.clients);
 
     for index in 0..settings.clients {
-        let sock = ctx.dealer_socket().expect("dealer");
+        let sock = ctx.create_dealer_socket().expect("dealer");
         // C parity: numeric HWM remains behind the manual-override gate.
         common::apply_multi_hwm(&sock, &settings);
         let routing_id = RoutingId::from(format!("client_{index}").as_bytes());
         sock.set_routing_id(&routing_id).expect("routing id");
         sock.common_options()
-            .set_receive_timeout(settings.receive_timeout_ms)
+            .set_receive_timeout(common::timeout_ms(settings.receive_timeout_ms))
             .expect("rcvtimeo");
         if matches!(args.transport.as_str(), "tls" | "wss") {
             let tls = common::resolve_perf_tls_paths().expect("TLS certs not found");

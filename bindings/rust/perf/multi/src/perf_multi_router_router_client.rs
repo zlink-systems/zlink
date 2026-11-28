@@ -15,10 +15,10 @@ fn main() {
     let mut monitors: Vec<SocketMonitor> = Vec::with_capacity(settings.clients);
 
     for index in 0..settings.clients {
-        let sock = ctx.router_socket().expect("router");
+        let sock = ctx.create_router_socket().expect("router");
         common::apply_multi_hwm(&sock, &settings);
         sock.common_options()
-            .set_receive_timeout(1)
+            .set_receive_timeout(common::timeout_ms(1))
             .expect("recv timeout");
         let rid = RoutingId::from(format!("CLIENT-{index}").as_bytes());
         sock.set_routing_id(&rid).expect("set rid");

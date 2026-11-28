@@ -79,7 +79,7 @@ pub fn run_server(config: ReqRepConfig) {
     let args = common::MultiArgs::parse();
     let settings = common::MultiSettings::from_env();
     let ctx = common::perf_server_context();
-    let router = ctx.router_socket().expect("router");
+    let router = ctx.create_router_socket().expect("router");
     if config.server_has_routing_id {
         router
             .set_routing_id(&RoutingId::from(SERVER_ROUTING_ID))
@@ -88,11 +88,11 @@ pub fn run_server(config: ReqRepConfig) {
     common::apply_multi_hwm(&router, &settings);
     router
         .common_options()
-        .set_send_timeout(settings.send_timeout_ms)
+        .set_send_timeout(common::timeout_ms(settings.send_timeout_ms))
         .expect("send timeout");
     router
         .common_options()
-        .set_receive_timeout(settings.receive_timeout_ms)
+        .set_receive_timeout(common::timeout_ms(settings.receive_timeout_ms))
         .expect("recv timeout");
     if matches!(args.transport.as_str(), "tls" | "wss") {
         let tls = common::resolve_perf_tls_paths().expect("TLS certs not found");
@@ -198,7 +198,7 @@ pub fn run_client(config: ReqRepConfig) {
     for index in 0..settings.clients {
         let routing_id = RoutingId::from(format!("CLIENT-{index}").as_bytes());
         if config.router_clients {
-            let socket = ctx.router_socket().expect("router client");
+            let socket = ctx.create_router_socket().expect("router client");
             common::apply_multi_hwm(&socket, &settings);
             configure_client_options(&socket, &settings);
             socket
@@ -220,7 +220,7 @@ pub fn run_client(config: ReqRepConfig) {
             });
             monitors.push(monitor);
         } else {
-            let socket = ctx.dealer_socket().expect("dealer client");
+            let socket = ctx.create_dealer_socket().expect("dealer client");
             common::apply_multi_hwm(&socket, &settings);
             configure_client_options(&socket, &settings);
             socket
@@ -498,11 +498,11 @@ macro_rules! impl_client_common_options {
         $(
             impl ClientCommonOptions for $socket {
                 fn set_send_timeout(&self, timeout: i32) -> Result<(), ZlinkError> {
-                    Ok(self.common_options().set_send_timeout(timeout)?)
+                    Ok(self.common_options().set_send_timeout(common::timeout_ms(timeout))?)
                 }
 
                 fn set_receive_timeout(&self, timeout: i32) -> Result<(), ZlinkError> {
-                    Ok(self.common_options().set_receive_timeout(timeout)?)
+                    Ok(self.common_options().set_receive_timeout(common::timeout_ms(timeout))?)
                 }
             }
         )+

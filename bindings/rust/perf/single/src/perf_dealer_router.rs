@@ -17,8 +17,8 @@ fn main() {
     };
 
     let ctx = common::perf_context();
-    let router = ctx.router_socket().expect("router");
-    let dealer = ctx.dealer_socket().expect("dealer");
+    let router = ctx.create_router_socket().expect("router");
+    let dealer = ctx.create_dealer_socket().expect("dealer");
     let rid = RoutingId::from(b"perf-dealer");
     dealer.set_routing_id(&rid).expect("set rid");
     // Match C perf: numeric socket HWM remains behind the manual-override gate.

@@ -129,21 +129,9 @@ impl Context {
         PairSocket::new(self)
     }
 
-    /// Use [`Self::create_pair_socket`] for new code.
-    #[deprecated(note = "use create_pair_socket")]
-    pub fn pair_socket(&self) -> Result<PairSocket, ConfigError> {
-        self.create_pair_socket()
-    }
-
     /// Create a PUB socket.
     pub fn create_pub_socket(&self) -> Result<PubSocket, ConfigError> {
         PubSocket::new(self)
-    }
-
-    /// Use [`Self::create_pub_socket`] for new code.
-    #[deprecated(note = "use create_pub_socket")]
-    pub fn pub_socket(&self) -> Result<PubSocket, ConfigError> {
-        self.create_pub_socket()
     }
 
     /// Create a SUB socket.
@@ -151,21 +139,9 @@ impl Context {
         SubSocket::new(self)
     }
 
-    /// Use [`Self::create_sub_socket`] for new code.
-    #[deprecated(note = "use create_sub_socket")]
-    pub fn sub_socket(&self) -> Result<SubSocket, ConfigError> {
-        self.create_sub_socket()
-    }
-
     /// Create a DEALER socket.
     pub fn create_dealer_socket(&self) -> Result<DealerSocket, ConfigError> {
         DealerSocket::new(self)
-    }
-
-    /// Use [`Self::create_dealer_socket`] for new code.
-    #[deprecated(note = "use create_dealer_socket")]
-    pub fn dealer_socket(&self) -> Result<DealerSocket, ConfigError> {
-        self.create_dealer_socket()
     }
 
     /// Create a ROUTER socket.
@@ -173,21 +149,9 @@ impl Context {
         RouterSocket::new(self)
     }
 
-    /// Use [`Self::create_router_socket`] for new code.
-    #[deprecated(note = "use create_router_socket")]
-    pub fn router_socket(&self) -> Result<RouterSocket, ConfigError> {
-        self.create_router_socket()
-    }
-
     /// Create an XPUB socket.
     pub fn create_xpub_socket(&self) -> Result<XPubSocket, ConfigError> {
         XPubSocket::new(self)
-    }
-
-    /// Use [`Self::create_xpub_socket`] for new code.
-    #[deprecated(note = "use create_xpub_socket")]
-    pub fn xpub_socket(&self) -> Result<XPubSocket, ConfigError> {
-        self.create_xpub_socket()
     }
 
     /// Create an XSUB socket.
@@ -195,21 +159,9 @@ impl Context {
         XSubSocket::new(self)
     }
 
-    /// Use [`Self::create_xsub_socket`] for new code.
-    #[deprecated(note = "use create_xsub_socket")]
-    pub fn xsub_socket(&self) -> Result<XSubSocket, ConfigError> {
-        self.create_xsub_socket()
-    }
-
     /// Create a STREAM socket.
     pub fn create_stream_socket(&self) -> Result<StreamSocket, ConfigError> {
         StreamSocket::new(self)
-    }
-
-    /// Use [`Self::create_stream_socket`] for new code.
-    #[deprecated(note = "use create_stream_socket")]
-    pub fn stream_socket(&self) -> Result<StreamSocket, ConfigError> {
-        self.create_stream_socket()
     }
 
     /// Interrupt all blocking calls on sockets of this context with ETERM.

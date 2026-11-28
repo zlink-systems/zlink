@@ -33,6 +33,7 @@
     X(_entries) \
     X(_entries_by_id) \
     X(_error) \
+    X(_finish_rejected_submit_locked) \
     X(_handle) \
     X(_index) \
     X(_keepalive) \
@@ -50,7 +51,6 @@
     X(_settled) \
     X(_socket) \
     X(_state_changed) \
-    X(_submit_error) \
     X(_submit_parts) \
     X(_thread_id) \
     X(_topic) \
@@ -1245,9 +1245,9 @@ static int owner_stopped (PyObject *owner, PyObject *entry)
 static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
 {
     PyObject *guard = lock_attribute (owner, hp__lock);
-    PyObject *parts = NULL, *submitted = NULL, *result = NULL;
+    PyObject *parts = NULL, *submitted = NULL, *outcome = NULL, *result = NULL;
     PyObject *entries = NULL, *context = NULL;
-    int attempt_rc = -1, initial_attempt = 0, abandoned = 0, resubmit = 0;
+    int initial_attempt = 0, abandoned = 0, resubmit = 0;
     if (!guard)
         return NULL;
     int stopped = owner_stopped (owner, entry);
@@ -1337,58 +1337,48 @@ static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
     unsigned long long completion_id;
     if (!PyArg_ParseTuple (submitted, "iiK", &rc, &err, &completion_id))
         goto done;
-    attempt_rc = rc;
     guard = lock_attribute (owner, hp__lock);
     if (!guard)
         goto done;
-    PyObject *public_owner = PyObject_GetAttr (owner, hp__public_owner);
-    if (!public_owner)
-        goto done;
-    int writable_wait = rc == ZLINK_SUBMIT_BACKPRESSURED && err == EAGAIN && completion_id;
-    int ownerless_wait = initial_attempt && public_owner == Py_None && writable_wait;
-    Py_DECREF (public_owner);
-    if (completion_id) {
+    if (rc != ZLINK_SUBMIT_OK) {
+        PyObject *projection = hot_call (owner, hp__finish_rejected_submit_locked,
+                                         "OiiKi", entry, rc, err, completion_id,
+                                         initial_attempt);
+        if (!projection)
+            goto done;
+        PyObject *projected_outcome, *retry;
+        if (PyArg_ParseTuple (projection, "OO", &projected_outcome, &retry)) {
+            resubmit = PyObject_IsTrue (retry);
+            if (resubmit >= 0)
+                outcome = Py_NewRef (projected_outcome);
+        }
+        Py_DECREF (projection);
+    } else if (completion_id) {
         PyObject *published =
           hot_call (owner, hp__publish_writable_locked, "OK", entry, completion_id);
         if (!published)
             goto done;
-        resubmit = writable_wait && PyObject_IsTrue (published);
         Py_DECREF (published);
-    }
-    PyObject *error = NULL;
-    if (ownerless_wait) {
         PyObject *module = PyImport_ImportModule ("zlink.contracts.errors.errors");
-        error = module ? hot_call (module, hp_SubmitError, "ii", ZLINK_SUBMIT_INVALID_STATE, 0) : NULL;
-        Py_XDECREF (module);
-        attempt_rc = ZLINK_SUBMIT_INVALID_STATE;
-        if (!error)
-            goto done;
-    } else if (rc == ZLINK_SUBMIT_OK && !completion_id) {
-        PyObject *succeeded = hot_call (entry, hp_succeed_send, NULL);
-        if (!succeeded)
-            goto done;
-        Py_DECREF (succeeded);
-    } else if (rc == ZLINK_SUBMIT_OK
-               || (rc == ZLINK_SUBMIT_BACKPRESSURED && completion_id && !writable_wait)) {
-        PyObject *module = PyImport_ImportModule ("zlink.contracts.errors.errors");
-        error = module ? hot_call (module, hp_SubmitError, "ii", ZLINK_SUBMIT_INTERNAL_ERROR, EPROTO) : NULL;
+        PyObject *error = module ? hot_call (module, hp_SubmitError, "ii", ZLINK_SUBMIT_INTERNAL_ERROR, EPROTO) : NULL;
         Py_XDECREF (module);
         if (!error)
             goto done;
-    } else if (!writable_wait) {
-        error = hot_call (owner, hp__submit_error, "ii", rc, err);
-        if (!error)
-            goto done;
-    }
-    if (error) {
-        if (attempt_rc == ZLINK_SUBMIT_BACKPRESSURED)
-            attempt_rc = ZLINK_SUBMIT_INTERNAL_ERROR;
         PyObject *failed = hot_call (entry, hp_fail, "(O)", error);
         Py_DECREF (error);
         if (!failed)
             goto done;
         Py_DECREF (failed);
+    } else {
+        PyObject *succeeded = hot_call (entry, hp_succeed_send, NULL);
+        if (!succeeded)
+            goto done;
+        Py_DECREF (succeeded);
     }
+    if (rc == ZLINK_SUBMIT_OK)
+        outcome = PyLong_FromLong (rc);
+    if (!outcome)
+        goto done;
     int releasable = entry_truth (entry, hp_releasable);
     if (releasable < 0)
         goto done;
@@ -1411,8 +1401,9 @@ static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
             }
         }
     }
-    result = PyLong_FromLong (attempt_rc);
-    if (result && resubmit) {
+    result = outcome;
+    outcome = NULL;
+    if (resubmit) {
         unlock_entry (guard);
         guard = NULL;
         PyObject *deferred = hot_call (owner, hp__defer_retry, "(O)", entry);
@@ -1427,6 +1418,7 @@ done:
     Py_XDECREF (context);
     Py_XDECREF (parts);
     Py_XDECREF (submitted);
+    Py_XDECREF (outcome);
     return result;
 }
 

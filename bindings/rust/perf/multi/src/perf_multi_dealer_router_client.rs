@@ -14,14 +14,14 @@ fn main() {
     let mut monitors: Vec<SocketMonitor> = Vec::with_capacity(settings.clients);
 
     for index in 0..settings.clients {
-        let sock = ctx.dealer_socket().expect("dealer");
+        let sock = ctx.create_dealer_socket().expect("dealer");
         // C parity: numeric HWM remains behind the manual-override gate.
         common::apply_multi_hwm(&sock, &settings);
         sock.common_options()
-            .set_send_timeout(settings.send_timeout_ms)
+            .set_send_timeout(common::timeout_ms(settings.send_timeout_ms))
             .expect("send timeout");
         sock.common_options()
-            .set_receive_timeout(settings.receive_timeout_ms)
+            .set_receive_timeout(common::timeout_ms(settings.receive_timeout_ms))
             .expect("recv timeout");
         let rid = RoutingId::from(format!("CLIENT-{index}").as_bytes());
         sock.set_routing_id(&rid).expect("set rid");
