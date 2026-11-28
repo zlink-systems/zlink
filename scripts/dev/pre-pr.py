@@ -60,6 +60,7 @@ NODE_EXTRA = (
     "Run Node M5 foundation gate",
     "Run the tutorial StreamClient receiving check",
     "Verify packed Node packages in clean consumers",
+    "Build and test Node framework perf",
 )
 NODE_BROWSER = "Run actual Chromium Stream Connector E2E"
 NODE_DRIFT = "Verify the build left the committed WebGL bundle unchanged"

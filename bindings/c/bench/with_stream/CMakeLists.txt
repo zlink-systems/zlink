@@ -21,6 +21,9 @@ target_link_libraries(
     bench_streamcompare_client PRIVATE
     OpenSSL::SSL
     OpenSSL::Crypto)
+if(WIN32)
+    target_link_libraries(bench_streamcompare_client PRIVATE Crypt32)
+endif()
 target_compile_options(bench_streamcompare_client PRIVATE ${STREAMCOMPARE_CXX_FLAGS})
 target_compile_features(bench_streamcompare_client PRIVATE cxx_std_17)
 
@@ -78,7 +81,12 @@ endif()
 target_compile_options(test_scenario_stream_asio_pull PRIVATE ${STREAMCOMPARE_CXX_FLAGS})
 target_compile_features(test_scenario_stream_asio_pull PRIVATE cxx_std_17)
 
-if(EXISTS "${STREAM_SCENARIO_ZMQ_INCLUDE_DIR}/zmq.h"
+foreach(target IN ITEMS bench_streamcompare_client test_scenario_stream_asio test_scenario_stream_asio_pull)
+    target_include_directories(${target} PRIVATE "${ZLINK_C_BENCH_BOOST_INCLUDE_DIR}")
+endforeach()
+
+if(NOT ZLINK_C_BUILD_NATIVE_BENCHES_ONLY
+   AND EXISTS "${STREAM_SCENARIO_ZMQ_INCLUDE_DIR}/zmq.h"
    AND EXISTS "${STREAM_SCENARIO_ZMQ_LIBRARY_FILE}")
     if(NOT TARGET test_scenario_stream_zmq)
         add_executable(

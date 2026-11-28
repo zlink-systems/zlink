@@ -10,12 +10,7 @@ operation builder는 [Messaging 레퍼런스](02-messaging.ko.md)를 참조한�
 
 ---
 
-## 공유 socket 표면(embedding을 통해, interface가 아니라)
-
-**Options.** `StreamSocket`을 제외한 모든 socket type은 embedding을
-통해 이 집합을 공짜로 얻는다. **결합형 TLS setter만 존재한다**; rust와
-달리 개별 `SetTLSCert`/`SetTLSKey`/`SetTLSCA`/`SetTLSHostname` 메서드는
-이 binding에 없다.
+## 공통 socket 메서드
 
 | Member | 의미 |
 | --- | --- |
@@ -28,28 +23,24 @@ operation builder는 [Messaging 레퍼런스](02-messaging.ko.md)를 참조한�
 | `SetTLSServer(certPath, keyPath string, requireClientCert bool) error` | 결합된 서버측 TLS 설정, `Bind` 전에 적용 |
 | `SetTLSClient(caCertPath, hostname string, trustSystem bool) error` | 결합된 클라이언트측 TLS 설정, `Connect` 전에 적용 |
 
-모든 socket은 `Bind`, `Unbind`, `DisconnectRID`, `Close`, `LastEndpoint`와 두 TLS 설정
-method를 제공한다. 나가는 연결을 지원하는 일곱 socket은 `Connect`, `Disconnect`,
-`ConnectionAttemptsSnapshot`, `CommonOptions`도 제공한다. STREAM의 공통 option은
-`SetSendHighWaterMark`/`SendHighWaterMark`, `SetReceiveHighWaterMark`/`ReceiveHighWaterMark`,
-`SetLinger`, `SetReceiveTimeout`, `SetSendTimeout`, `SetTCPKeepalive`,
-`SetTCPNoDelay`, `SetIPv6`, `SetReceiveFlowState`로 직접 설정하거나 조회한다.
+모든 socket은 `Bind`, `Unbind`, `DisconnectRID`, `Close`, `LastEndpoint`, `CommonOptions`와
+두 TLS 설정 메서드를 제공한다. 나가는 연결을 지원하는 일곱 socket은 `Connect`, `Disconnect`,
+`ConnectionAttemptsSnapshot`도 제공한다.
 
 **Completion result.** 수명주기 method와 TLS setter는 `error`를 반환한다.
 `LastEndpoint()`는 `(string, error)`를 반환한다. `CommonOptions()`는 option
 facade를 바로 반환한다.
 
-**선택 기준.** raw TCP peer의 연결을 받으려면 STREAM을 사용한다. `Connect`나
-`CommonOptions()`의 전체 option이 필요하면 나가는 연결을 지원하는 socket을 선택한다.
+**선택 기준.** raw TCP peer의 연결을 받으려면 STREAM을 사용한다. `Connect`가 필요하면
+나가는 연결을 지원하는 socket을 선택한다.
 나가는 연결의 준비 상태는 [연결 시도 스냅샷](04-eventing.ko.md#연결-시도-스냅샷)을 참조한다.
 
 ---
 
 ## `CommonSocketOptions` / `PubSocketOptions`
 
-typed option facade — `CommonSocketOptions`는 `connectionSocket`을
-embed하는 모든 socket type이 공유하고(`.CommonOptions()`로 접근),
-`PubSocketOptions`는 PUB/XPUB 전용이다(`.PubOptions()`로 접근).
+모든 socket은 `CommonOptions()`로 `CommonSocketOptions`를 제공한다.
+PUB와 XPUB는 `PubOptions()`로 `PubSocketOptions`도 제공한다.
 
 ```go
 opts := dealer.CommonOptions()
@@ -264,20 +255,20 @@ subscription을 일반 메시지로 실어야 할 때 특별히 `XSubSocket`을 
 
 ## `StreamSocket`
 
-다른 모든 socket type이 사용하는 zlink wire protocol 밖에서, raw TCP peer와
-직접 framed packet을 주고받는다. STREAM이 제공하는 method는 위의 공유
-socket 표면을 참조한다.
+STREAM은 raw TCP peer와 byte record 또는 framed packet을 주고받는다.
 
 ```go
 stream, err := ctx.StreamSocket()
+stream.CommonOptions().SetReceiveHighWaterMark(100_000)
 stream.SetReceiveMode(zlink.StreamReceivePacket)
 var packet zlink.StreamPacket
 ok, err := stream.RecvPacket(&packet, zlink.RecvFlagsNone)
 ```
 
-**Options.** `StreamSocketOptions` facade 타입은 존재하지 않는다 —
-`SetNotify`/`Notify`는 `StreamSocket`에 직접 선언돼 있다,
-`PubSocketOptions`의 별도 facade 형태와 다르다.
+`CommonOptions()`로 HWM, timeout, linger 등 공통 옵션을 설정하고 조회한다. 기존
+`SetSendHighWaterMark` 같은 직접 메서드도 같은 옵션을 사용한다. STREAM에서 Core가
+지원하지 않는 옵션은 `*ConfigError`로 Core 결과 코드와 errno를 전달한다.
+`SetNotify`와 `SetReceiveMode`는 STREAM에서 직접 호출한다.
 
 | Member | 의미 |
 | --- | --- |
@@ -290,9 +281,8 @@ ok, err := stream.RecvPacket(&packet, zlink.RecvFlagsNone)
 
 **Completion result.** 두 receive 형식 모두 `DontWait`에서 `(false, nil)` 관례를 따른다.
 
-**선택 기준.** Bind 전에 RAW 또는 PACKET을 정하고 일치하는 pull API를 사용한다.
-`StreamSocket`은 이 binding의 공개 API 관점에서 아예 `Connect`/
-`Disconnect`가 불가능하다는 걸 기억한다 — bind-and-accept 전용이다.
+STREAM은 `Bind`로 들어오는 연결을 받는다. `Bind` 전에 RAW 또는 PACKET을 정하고
+수신 모드에 맞는 메서드를 사용한다.
 
 ---
 
