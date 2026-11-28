@@ -4,6 +4,7 @@
 #include "runtime/mesh/mesh_node_host_service_internal.hpp"
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/channels/route_handler_registry.hpp"
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
