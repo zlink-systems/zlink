@@ -1381,7 +1381,7 @@ IDs, part consumption, and wait-token conditions belong to
 |---|---|
 | SEND `OK`, ID `0` | Follow the SEND stage outcome in [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). |
 | REQUEST `OK`, nonzero ID | Follow the REQUEST stage outcome in [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). |
-| `BACKPRESSURED`, `EAGAIN`, nonzero wait token | Before calling Core, the binding retains an independently owned staging record and passes a separate native array to each attempt. Only after a `ZLINK_SEND_ADMITTED` WRITABLE does the binding resubmit the same operation from staging. Staging is released once on admission, terminal failure, or socket/context lifecycle cleanup. `ZLINK_SEND_NOT_FOUND` and `ZLINK_SEND_NOT_CONNECTED` project to `NOT_FOUND` and `NOT_CONNECTED`, respectively; any other value, including the ABI-preservation value `ZLINK_SEND_TIMED_OUT` that Core never produces, projects to `INTERNAL_ERROR` with `EPROTO`. Stage outcomes follow [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). |
+| `BACKPRESSURED`, `EAGAIN`, nonzero wait token | Before calling Core, the binding retains an independently owned staging record and passes a separate native array to each attempt. Only after a `ZLINK_SEND_ADMITTED` WRITABLE does the binding resubmit the same operation from staging. Staging is released once on admission, terminal failure, or socket/context lifecycle cleanup. Ownership of a public `Message` passes to the Core path at the moment the nonzero wait token and the staging are acquired; after that the caller doesn't use the original again, and if the wait ends without admission (terminal failure or cleanup) only the staging is released, without restoring the original. `ZLINK_SEND_NOT_FOUND` and `ZLINK_SEND_NOT_CONNECTED` project to `NOT_FOUND` and `NOT_CONNECTED`, respectively; any other value, including the ABI-preservation value `ZLINK_SEND_TIMED_OUT` that Core never produces, projects to `INTERNAL_ERROR` with `EPROTO`. Stage outcomes follow [async execution model §5](async-execution-model.en.md#5-joining-submit-results-and-completions). |
 | Submit failure without a wait token | Complete the terminal with that submit error (raised as an exception/error, not through the result object). |
 
 - **The binding delivers a WRITABLE found by socket-local context and token to its waiter without rechecking Core's guaranteed submit RID echo.**
@@ -1397,6 +1397,7 @@ owns record atomicity, consumption of the complete array, and concurrent-submiss
 owns the race between close and an in-flight submission. A binding whose public API preserves a
 message on failure also retains the source under its language ownership contract, independently of
 the staging record above. A binding adds no multipart ABI or public transaction abstraction.
+When a consumed (closed) public `Message` is put into a send operation again, the binding ends it with `INVALID_HANDLE` without submitting to Core; it never sends an empty frame. Reading a consumed `Message` gives empty data and size 0.
 
 Request reply completion, timeout, and language wait cancellation follow
 [Timeout](#timeout) and the [async execution model](async-execution-model.en.md#6-caller-wait-cancellation).
@@ -2027,7 +2028,7 @@ as a per-language multipart object. Public Spot subscribe results follow [Framew
 | `topic` | **`string` (UTF-8)** | The matched topic. **Not bytes.** |
 | `parts` | `List<Message>` / `Vec<Message>` | The multipart payload |
 | `is_single_part()` | `bool` | `parts.size() == 1` |
-| `first_part()` | `Message` | `parts[0]`; error/exception if empty |
+| `first_part()` | `Message` | `parts[0]`; if empty, an `INVALID_STATE` (`EINVAL`) error/exception — not `NO_DATA` (no receive to retry) or `NOT_SUPPORTED` (socket type not supported) |
 | `single_part_or_throw()` | `Message` | Returns the part if `is_single_part()`, else error/exception |
 | `close()` / `Dispose()` / `Drop` | — | Cleans up held parts, per each language's lifecycle idiom |
 

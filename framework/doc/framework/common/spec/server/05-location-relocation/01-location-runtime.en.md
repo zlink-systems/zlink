@@ -1703,6 +1703,17 @@ An Actor move that doesn't change User Spot membership changes owner with a sing
 number and prep info — it doesn't swap in a different target. A previous attempt can't
 change the owner.
 
+- **The first target attempt number of a relocation is `1`, and each replacement adds 1.** Comparison is
+  by equality only.
+- **The representative authority alone owns the target attempt number.** After `Prepared`, a new
+  attempt on the same target changes the representative authority's `target.attemptGeneration` with one
+  CAS conditioned on its `StoreVersion`. The aggregate record isn't changed because the prepare request
+  content is the same (`AlreadyPrepared`), and the participant records and inventory aren't changed either.
+  The commit CAS is conditioned on the representative's current attempt number, so a previous attempt
+  can't commit.
+- A target's Restore accepts a representative that is `Captured`, or `Prepared` with itself recorded as
+  the target. `Prepared` with a different recorded target is `Conflict`.
+
 | Move kind | Values changed together in the Location Store |
 |---|---|
 | One Actor's host relocation | Actor owner and `AuthorityOwnerGeneration`. If it's an Entry Spot member, source and target Entry membership also change. |
@@ -1749,7 +1760,7 @@ and `level` are decimal integers without leading zeros.
 | A participant's membership change | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
 
 **Relocation key values.** When a relocation (`aggregate.relocation` of §9.1) writes the records of
-this section, `aggregateId` is its `relocationId` and `aggregateGeneration` is `1`. The source writes
+this section, `aggregateId` is its `relocationId` and `aggregateGeneration` is `1`. A move of a single Actor with no aggregate record doesn't write the inventory (the `sourceInventorySha256` paragraph above). For any other relocation, the source writes
 this inventory once at seal, before it chooses a target, and keeps using the same inventory when the
 target attempt (`target.attemptGeneration`) changes.
 
@@ -1760,6 +1771,17 @@ the membership change record is the body bytes of the normative schema's
 `aggregate-participant-mutation-bytes`. The type's u32 length prefix is used only on the wire and isn't
 stored in the record. The size limits and SHA-256 apply to the body bytes. The common body rules below
 don't apply to these two records.
+
+**Participant change bytes don't contain values that depend on the target.** These records are written at
+seal before a target is chosen and are reused when the target attempt changes. Values that the target choice
+decides, such as the target node, route, and target-side membership, are owned by the aggregate record's
+target fields (`targetDescriptor`, `targetDescriptorLifecycleGeneration`, `targetOwner`) and the Restore
+request (command 40), and commit builds the target-side change from those values.
+
+**Membership change bytes are opaque; other runtimes don't interpret the content and compare only the
+SHA-256.** A participant with no membership change has the UTF-8 body `[]` (2 bytes). An empty body is
+never written. In a `SpotWide` host move that keeps the logical Spot ID and generation, the membership of an
+Actor already in that Spot doesn't change, so its body is `[]`; the existing membership isn't serialized again.
 
 **Common body rules.** The bodies of the aggregate record and the inventory root and pages are UTF-8
 JSON objects, stored exactly as the bytes produced by
@@ -1840,12 +1862,21 @@ JCS bytes, the same content gives the same check value whichever language wrote 
   `digestSha256` of the participant inventory root fixed at the seal. Because an entry's
   `expectedStoreVersion` is the value read at preparation, this value doesn't change after
   `preparing`. A move of a single Actor with no aggregate record uses the root `digestSha256` of an
-  inventory whose only entry is that Actor.
+  inventory whose only entry is that Actor. That move doesn't store inventory root, page, or participant
+  records, because a one-entry inventory can be rebuilt from the authority record alone (the exception noted in "Relocation key values" below). The target builds the one-entry inventory from
+  the authority record it read, computes its root `digestSha256`, and compares it with
+  `sourceInventorySha256`; it doesn't read an inventory record from the Store.
 
 The inventory root, pages, and participant change records aren't modified once written. Records
 of the same `(aggregateId, aggregateGeneration)` aren't rewritten with different content; different
 content uses a new `aggregateGeneration`. Cleaning up these records after commit or abort is done
 by the progress-information removal change of §8.1.
+
+**Cleanup deletes the pages and participant change records first, the inventory root next, and the aggregate
+record last.** It can be split across batches because of the batch key limit. A reader that finds the
+aggregate record `committed` or `aborted` without an inventory root treats cleanup as finished, and one that
+finds the aggregate record `preparing` or `prepared` without its root or a page treats the records as
+corrupt.
 
 ## 9. Restore, Completion Records, and Their Relationship to the Store
 

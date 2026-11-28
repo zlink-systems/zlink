@@ -213,12 +213,7 @@ func (s *StreamSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 	if err != nil || !ok {
 		return ok, err
 	}
-	if out.routingID.Size() > 0 {
-		routingID := out.routingID
-		out.send = func(ctx context.Context, builderParts []sendBuilderPart) (SendSubmission, error) {
-			return submitManagedSend(ctx, s.core.socketCore, &routingID, builderParts)
-		}
-	}
+	out.source = s.core.socketCore
 	return true, nil
 }
 

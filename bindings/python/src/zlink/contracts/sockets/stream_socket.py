@@ -33,7 +33,15 @@ class StreamSocket(_socket_contract._DisconnectRidContract, _socket_contract._Ro
     def recv_packet_into(
         self, out: StreamPacket, *, flags: RecvFlags = RecvFlags.NONE
     ) -> bool:
-        """Receive one framed packet into reusable caller-owned storage."""
+        """Receive one framed packet into reusable caller-owned storage.
+
+        Return ``False`` if ``DONT_WAIT`` is set and no packet is available.
+
+        Raises:
+            TypeError: The output is not a ``StreamPacket``.
+            RecvError: The output is already in use by another receive
+                (``RecvResult.INVALID_STATE``), or packet reception failed.
+        """
         ...
 
 
