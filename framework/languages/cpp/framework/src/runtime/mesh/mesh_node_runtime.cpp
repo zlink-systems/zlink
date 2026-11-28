@@ -2385,8 +2385,6 @@ struct mesh_node_runtime_t::remote_actor_join_state_t
     std::uint64_t target_application_version = 0;
     std::uint64_t completion_operation_id_high = 0;
     std::uint64_t completion_operation_id_low = 0;
-    std::uint64_t target_completion_operation_id_high = 0;
-    std::uint64_t target_completion_operation_id_low = 0;
     std::uint64_t actor_authority_owner_generation = 0;
     std::optional<std::uint64_t> committed_actor_authority_owner_generation;
     std::vector<std::uint8_t> admission_payload;
@@ -2684,8 +2682,11 @@ void mesh_node_runtime_t::assign_remote_actor_join_operation_id (remote_actor_jo
 {
     s.completion_operation_id_low =
       _state->next_join_completion_operation.fetch_add (1, std::memory_order_relaxed);
+    // MeshNode lifecycle generations use 63 bits. The high bit separates
+    // Deferred Join IDs from local operations that use the same generation.
+    constexpr auto deferred_join_domain = std::uint64_t{1} << 63;
     s.completion_operation_id_high =
-      static_cast<std::uint64_t> (std::hash<std::string>{}(_state->mesh_name)) | 1ULL;
+      _node->status ().lifecycle_generation () | deferred_join_domain;
 }
 
 task_t<actor_join_reply_t> mesh_node_runtime_t::fail_remote_actor_join (
@@ -2705,13 +2706,13 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::fail_remote_actor_join (
 task_t<actor_join_reply_t> mesh_node_runtime_t::join_remote_application_actor_to_spot (
   std::shared_ptr<remote_actor_join_state_t> s, std::optional<observed_spot_authority_t> observed)
 {
+    assign_remote_actor_join_operation_id (*s);
     // The source owns the policy in its immutable startup factory catalog.
     const auto &factories = _state->spot_state->actor_factories;
     const auto factory =
       factories.find (std::string (detail::actor_ref_access_t::actor_type (s->actor)));
     if (factory != factories.end ()
         && factory->second.relocation.kind == detail::factory_relocation_kind_t::disabled) {
-        assign_remote_actor_join_operation_id (*s);
         co_return co_await fail_remote_actor_join (
           *s,
           result_t<actor_join_reply_t>::failure (framework_error_kind_t::rejected,
@@ -2757,9 +2758,6 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     s->source_spot_generation = *source_spot_generation;
     auto reserved = spot.reserved_actor_transfer_id (s->actor);
     s->transfer_id = reserved ? std::move (*reserved) : spot.next_actor_transfer_id ();
-    assign_remote_actor_join_operation_id (*s);
-    s->target_completion_operation_id_high = s->completion_operation_id_high;
-    s->target_completion_operation_id_low = s->completion_operation_id_low;
     const auto source = co_await _node->resolve_actor_async (s->actor);
     if (!source || source->authority_owner_generation == 0) {
         const auto failed = result_t<actor_join_reply_t>::failure (
@@ -2947,10 +2945,7 @@ std::uint64_t mesh_node_runtime_t::negotiated_receive_chunk_limit_bytes (
 // explicitly observed the target Spot's authority fence via
 // observe_spot_authority -- and (b) the target peer
 // is admitted at exactly that observed lifecycle generation. The request
-// correlation is minted from the same monotonic counter the JSON path's
-// completion_operation_id_low already uses, forced odd/nonzero the same
-// way completion_operation_id_high is (the generated actorJoin codec throws on
-// correlation == 0).
+// correlation uses the source's sequence and must be nonzero.
 task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_join_via_wire (
   std::shared_ptr<remote_actor_join_state_t> s, observed_spot_authority_t observed)
 {
@@ -2984,14 +2979,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
           "local owner lease is unavailable for wire Actor join");
     }
     const auto local = _node->status ();
-    // deliver_actor_join / spot's completion delivery requires a
-    // non-zero completion operation id, exactly like the JSON path's
-    // admit_remote_application_actor_join sets before it can send its
-    // request.
-    assign_remote_actor_join_operation_id (*s);
     const auto correlation = (s->completion_operation_id_low << 1) | 1ULL;
-    s->target_completion_operation_id_high = local.lifecycle_generation ();
-    s->target_completion_operation_id_low = correlation;
     spot_node_runtime_t spot (_state->spot_state);
     const auto source_spot_generation =
       co_await spot.resolve_spot_generation (local.routing_id (), *s->source_spot);
@@ -3371,7 +3359,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       .target_authority_owner_generation = s->actor_authority_owner_generation,
       .target_spot_authority_owner_generation = s->target.authority_owner_generation,
       .coordinator = s->relocation_coordinator,
-      .operation = {s->target_completion_operation_id_high, s->target_completion_operation_id_low},
+      .operation = {s->completion_operation_id_high, s->completion_operation_id_low},
       .reply_content_type = s->admission_reply_content_type,
       .reply = s->admission_payload};
     runtime::protocol::frozen_record_t recovery_frozen;
