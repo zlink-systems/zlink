@@ -2,7 +2,7 @@ package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.runtime.internal.backend.*;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceCompletionDispatcher;
 import systems.zlink.framework.spots.SpotRef;
 import systems.zlink.framework.spots.ZLinkSpotCreateCall;
 import systems.zlink.framework.spots.ZLinkSpotCreateResult;
@@ -47,11 +47,13 @@ public final class ZLinkSpotManagerCalls implements ZLinkSpotManager {
 
     private <T> CompletionStage<T> terminal(
             java.util.function.Function<ZLinkSpotRuntime, CompletionStage<T>> operation) {
+        CompletionStage<T> result;
         try {
-            return operation.apply(access.get());
+            result = operation.apply(access.get());
         } catch (RuntimeException failure) {
-            return CompletableFuture.failedFuture(failure);
+            result = CompletableFuture.failedFuture(failure);
         }
+        return ZLinkServiceCompletionDispatcher.deliverLifecycle(result);
     }
 
     private abstract class UserSpotCall implements Runnable {
@@ -102,9 +104,12 @@ public final class ZLinkSpotManagerCalls implements ZLinkSpotManager {
             CompletionStage<ZLinkSpotCreateResult> failure =
                     systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls.beginOneWay(
                             submitted, this);
-            if (failure != null) return failure;
-            return runtime.submitUserSpot(
-                    spotId, stableType, meshName, request, timeout, getOrCreate);
+            CompletionStage<ZLinkSpotCreateResult> result =
+                    failure != null
+                            ? failure
+                            : runtime.submitUserSpot(
+                                    spotId, stableType, meshName, request, timeout, getOrCreate);
+            return ZLinkServiceCompletionDispatcher.deliverLifecycle(result);
         }
     }
 
