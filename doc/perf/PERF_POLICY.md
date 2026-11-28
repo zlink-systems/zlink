@@ -78,9 +78,13 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
 
 ### PUBSUB multi latency
 
-- catch-up은 paced 시작 뒤 `max(1, target_rate × 1 ms)` 이하의 추정 in-flight가
-  연속 0.5초 유지된 시각으로 판정한다. 추정 in-flight는 목표 송신 일정의 누적 수에서
-  최소 수신 subscriber의 누적 수를 뺀 값이며, 음수는 0으로 취급한다.
+- catch-up은 적체가 더 늘지 않는 상태로 판정한다. paced 시작 뒤 0.5초 창에서 추정 in-flight의
+  최댓값이 그 창 시작 값 이하이고, 그 창에서 최소 수신 subscriber의 수신율이 목표 송신률 이상이면
+  그 창의 끝을 catch-up 시각으로 본다. 추정 in-flight는 목표 송신 일정의 누적 수에서 최소 수신
+  subscriber의 누적 수를 뺀 값이며, 음수는 0으로 취급한다. 전송 중인 메시지도 in-flight에 들어가므로
+  정상 상태의 in-flight는 목표율 × 단방향 지연이다. 그래서 in-flight의 절대 크기로 판정하지 않는다
+  (그렇게 하면 지연 상한을 묻게 되어 fanout이 큰 작은 메시지에서 항상 실패한다). 지연은 catch-up 뒤
+  표본으로 따로 보고한다. 판정은 C `perf_multi_measurement`의 catch-up tracker 한 곳이 소유한다.
   catch-up은 기존 latency duration 동안 허용하고, 도달 뒤 같은 시간만큼 표본을 수집한다.
   deadline까지 도달하지 못하면 `latency`, `latency_p95`, `latency_p99`를
   `invalid:<reason>`으로 기록하고 throughput은 유효한 측정값을 유지한다.
