@@ -1184,7 +1184,7 @@ Binding은 Framework의 application job queue count를 Core byte snapshot에 합
 | SEND `OK`·ID `0` | [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)의 SEND stage 결과를 따른다. |
 | REQUEST `OK`·nonzero ID | [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)의 REQUEST stage 결과를 따른다. |
 | `BACKPRESSURED`·`EAGAIN`·nonzero 대기 토큰 | 바인딩은 Core 호출 전에 독립적으로 소유한 staging record를 보관하고 매 시도에 별도 native 배열을 전달한다. `ZLINK_SEND_ADMITTED`인 WRITABLE 뒤에만 바인딩은 staging에서 같은 operation을 다시 제출한다. Staging은 admission·terminal 실패·socket/context lifecycle cleanup에서 한 번 정리한다. 공개 `Message`의 소유권은 nonzero 대기 토큰과 staging을 확보한 그 시점에 Core 경로로 넘어간다 — 그 뒤 caller는 원본을 다시 쓰지 않고, 대기가 admission 없이 끝나도(terminal 실패·cleanup) 원본으로 되돌리지 않고 staging만 정리한다. `ZLINK_SEND_NOT_FOUND`·`ZLINK_SEND_NOT_CONNECTED`는 각각 `NOT_FOUND`·`NOT_CONNECTED`로, 그 밖의 값(Core가 발행하지 않는 ABI 보존 값 `ZLINK_SEND_TIMED_OUT` 포함)은 `INTERNAL_ERROR`·`EPROTO`로 투영한다. Stage 결과는 [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)를 따른다. |
-| `BACKPRESSURED`·nonzero 대기 토큰·`EAGAIN`이 아닌 errno(Core 계약 위반) | SEND·REQUEST 모두 기다리지 않고 `INTERNAL_ERROR`·`EPROTO`로 투영한다. Staging은 만들지 않거나 그 자리에서 정리하고, 공개 `Message`는 동기 실패처럼 보존한다. |
+| `BACKPRESSURED`·nonzero 대기 토큰·`EAGAIN`이 아닌 errno(Core 계약 위반) | SEND·REQUEST 모두 기다리지 않고 `INTERNAL_ERROR`·`EPROTO`로 투영한다. Staging은 만들지 않거나 그 자리에서 정리하고, 공개 `Message`는 동기 실패처럼 보존한다. 이 대기 토큰으로 나중에 오는 WRITABLE·완료 레코드는 끝난 context의 것이므로 바인딩이 바로 버리고 다음 submit의 등록과 합치지 않는다. |
 | 대기 토큰 없는 submit 실패 | 해당 submit error로 terminal을 끝낸다(결과 객체가 아니라 예외/에러). |
 
 - **바인딩은 socket-local context·token으로 찾은 WRITABLE을 해당 waiter에 전달하며 Core가 보장한 submit RID echo를 다시 판정하지 않는다.**

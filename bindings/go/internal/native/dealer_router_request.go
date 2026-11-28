@@ -93,18 +93,18 @@ func newSendRetryState(
 	return state, nil
 }
 
-func classifyWritableWait(completionID uint64, err error) (waiting, invalidErrno bool) {
+func classifyWritableWait(completionID uint64, err error) (waiting bool, failure error) {
 	if completionID == 0 || err == nil {
-		return false, false
+		return false, err
 	}
 	var submitErr *SubmitError
 	if !errors.As(err, &submitErr) || submitErr.Result != SubmitBackpressured {
-		return false, false
+		return false, err
 	}
 	if submitErr.InternalErrno() != int(C.EAGAIN) {
-		return false, true
+		return false, newSubmitError(SubmitInternalError, int(C.EPROTO))
 	}
-	return true, false
+	return true, nil
 }
 
 // attempt returns a wait token, an admission with ID zero, or a submit error.
@@ -132,11 +132,11 @@ func (s *sendRetryState) attempt(userContext uintptr) (uint64, error) {
 		return submitErrorFromCall(rc, cerr)
 	})
 	id := uint64(completionID)
-	waiting, invalidErrno := classifyWritableWait(id, err)
+	waiting, err := classifyWritableWait(id, err)
 	if waiting {
 		return id, nil
 	}
-	if invalidErrno || (err == nil && id != 0) {
+	if err == nil && id != 0 {
 		return 0, newSubmitError(SubmitInternalError, int(C.EPROTO))
 	}
 	return 0, err
@@ -241,9 +241,10 @@ func submitManagedSend(
 		send.payload.close()
 		return nil, newSubmitError(SubmitInvalidState, int(C.ESHUTDOWN))
 	}
-	// Only the in-flight count is recorded before the native call. A completion
-	// entry is created after Core returns a wait token.
-	owner.inflightSends++
+	if owner.inflightSends == nil {
+		owner.inflightSends = make(map[uintptr]*earlyWritableRecord)
+	}
+	owner.inflightSends[key] = nil
 	owner.mu.Unlock()
 	waitID, err := send.attempt(key)
 	if waitID == 0 {
@@ -251,7 +252,7 @@ func submitManagedSend(
 			send.payload.takeSourceOwnership()
 		}
 		send.payload.close()
-		owner.discardEarlyWritable(key)
+		owner.discardInitialSend(key)
 		if err != nil {
 			return nil, err
 		}
@@ -348,7 +349,8 @@ func submitCompletionRequest(
 		return &requestSubmission{result: SubmitOK, entry: entry}, nil
 	}
 
-	if waiting, _ := classifyWritableWait(uint64(completionID), err); waiting {
+	waiting, err := classifyWritableWait(uint64(completionID), err)
+	if waiting {
 		retry, snapshotErr := newRequestRetryState(core, target, timeoutMillis, parts)
 		entry.request = retry
 		entry.publishSendWait(uint64(completionID))

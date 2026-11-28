@@ -5,6 +5,7 @@ const { randomUUID } = require('node:crypto');
 const test = require('node:test');
 const { Injectable, Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
+const { MeterProvider, MetricReader } = require('@opentelemetry/sdk-metrics');
 const { Message } = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist');
 const { ZLinkInMemoryProviderLocationStore } = require('../../packages/framework/dist/internal');
@@ -26,11 +27,17 @@ const deferred = require('./helpers/deferred.cjs');
 const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 const telemetry = require('./helpers/telemetry-log-capture');
 
+class RelocationMetricReader extends MetricReader {
+  async onShutdown() {}
+}
+
 test(
   'remote Deferred Join reports Unavailable to an unsettled source Actor at the stop deadline',
   { timeout: 15_000 },
   async (t) => {
     await telemetry.observed();
+    const metricReader = new RelocationMetricReader();
+    const meterProvider = new MeterProvider({ readers: [metricReader] });
     const clock = fixedRidHostClock(t);
     const mesh = 'join-stop-' + randomUUID();
     const actorId = 'player';
@@ -47,7 +54,12 @@ test(
     const apps = [];
     t.after(async () => {
       releaseSettlement.resolve();
-      for (const app of apps.reverse()) await app.close();
+      try {
+        for (const app of apps.reverse()) await app.close();
+      } finally {
+        await meterProvider.shutdown();
+        telemetry.close();
+      }
     });
 
     class Player {
@@ -111,6 +123,7 @@ test(
         .zlinkFramework()
         .addLocationStore(provider)
         .addRelocationStore(relocationStore);
+      if (role === 'source') builder.options({ metrics: { meterProvider } });
       builder.configureDispatch().messageFlow('normal');
       builder.configureLocations().ownerLeaseFencingMarginMs(1).pollingIntervalMs(20);
       const route = builder.addRouteMesh(mesh).listen('tcp://127.0.0.1:0').routingId(role);
@@ -347,6 +360,28 @@ test(
       joinErrors[0].errorMessage,
       'Relocation authority was unsettled at the host stop deadline.'
     );
+    const { resourceMetrics, errors } = await metricReader.collect();
+    assert.deepEqual(errors, []);
+    const relocationTerminals = resourceMetrics.scopeMetrics
+      .flatMap(({ metrics }) => metrics)
+      .filter(({ descriptor }) => descriptor.name === 'zlink.relocation.completed')
+      .flatMap(({ dataPoints }) => dataPoints)
+      .filter(({ attributes }) => attributes.mesh_name === mesh);
+    assert.deepEqual(
+      relocationTerminals.map(({ value, attributes }) => ({ value, attributes })),
+      [
+        {
+          value: 1,
+          attributes: {
+            mesh_name: mesh,
+            object_kind: 'actor',
+            policy: 'recreate',
+            outcome: 'failed'
+          }
+        }
+      ],
+      'source Actor relocation must record exactly one failed terminal'
+    );
     assert.deepEqual(postDeadlineStoreCalls, []);
     const backlog = handoff.snapshot(actorId);
     assert.equal(backlog.length, 1, 'source backlog must remain queued');
@@ -363,5 +398,6 @@ test(
     t.diagnostic(
       'source callbacks=1 (Failed/Unavailable), public JoinSpot deadline diagnostics=1, post-deadline Store calls=0, backlog=1, Spot drain pending=0'
     );
+    t.diagnostic('source relocation terminals=1 (failed)');
   }
 );

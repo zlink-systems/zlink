@@ -298,6 +298,7 @@ public final class ZLinkJavaRequestCompletionCostTest {
                                                     java.util.concurrent.ExecutionException.class,
                                                     () -> result.get(1, TimeUnit.SECONDS))
                                             .getCause());
+                            fixture.operationLane.awaitResult(() -> null);
                             assertTrue(frames.stream().allMatch(part -> part.size() == 0));
                         }
                     } finally {

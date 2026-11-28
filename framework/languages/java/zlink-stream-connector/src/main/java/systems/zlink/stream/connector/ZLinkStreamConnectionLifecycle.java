@@ -418,7 +418,8 @@ final class ZLinkStreamConnectionLifecycle {
                             }
                             try {
                                 lastInboundNanos = System.nanoTime();
-                                receiveDispatcher.dispatch(frame.header(), frame.payload());
+                                receiveDispatcher.dispatch(
+                                        transport, frame.header(), frame.payload());
                                 if (connection == transport
                                         && state == ZLinkStreamConnectionState.CONNECTED) {
                                     readNextFrame(transport);
@@ -490,8 +491,14 @@ final class ZLinkStreamConnectionLifecycle {
             //  event and happens elsewhere.
             detachConnectionLocked();
         }
-        errorPublisher.accept(failure.error());
-        Throwable closeFailure = endConnection(failed, failure, false);
+        Throwable closeFailure;
+        if (failure.getCause() instanceof ZLinkStreamAdmissionQueue.MalformedPush) {
+            closeFailure = endConnection(failed, failure, false);
+            errorPublisher.accept(failure.error());
+        } else {
+            errorPublisher.accept(failure.error());
+            closeFailure = endConnection(failed, failure, false);
+        }
         reconnectOrDisconnect(reason);
         publishCloseFailure(closeFailure);
     }

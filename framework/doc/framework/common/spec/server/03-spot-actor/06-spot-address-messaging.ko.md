@@ -526,7 +526,7 @@ Close 절차는 다음 순서로 진행한다.
 lifecycle lane의 차례를 기다린 뒤에 판정하지 않으며, 진행 중인 Close의 단계를 기다리는 동안 다시 판정하지 않는다.
 등록은 그 Close의 결과가 정해질 때 풀린다. 합류한 호출자의 취소를 공유 결과가 정해지기 전에 관찰하면 그 호출은 취소로 끝나고, 진행 중인
 Close에는 영향을 주지 않는다. Lifecycle turn을 다시 시작하지 못한 내부 사유(Spot이 닫힘)는 합류한 호출의 결과가
-아니다 — 합류한 호출은 공유 결과나 자기 취소 중 하나로만 끝난다.
+아니다 — 합류한 호출은 공유 결과나 자기 취소 중 하나로만 끝난다. 자기 취소는 공개 Close가 호출자 취소 수단(cancellation token·signal 등)을 받는 언어에만 있다. 받지 않는 언어(C++ `spot_context_t::close()`)의 합류 호출은 공유 결과로만 끝난다.
 
 **Ready 전에 요청한 context Close는 Ready 뒤에 시작한다.** Ready 전에는 handler와 timer callback이
 실행되지 않으므로([Spot timer §1](10-spot-timer.ko.md#1-timer-generation과-cancel)) 이런 요청은 `Configure`·`OnCreateAsync`·

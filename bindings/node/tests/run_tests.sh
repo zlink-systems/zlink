@@ -14,6 +14,12 @@ for test_file in dist-tools/tests/*.test.js; do
   run_node_job 120 node --test "$test_file"
 done
 
+# Multi perf runner option parsing (no measurement).
+for test_file in perf/multi/tests/*.test.cjs; do
+  printf '[test] %s\n' "$test_file"
+  run_node_job 120 node --test "$test_file"
+done
+
 if [[ "${ZLINK_BINDING_RAW_TEST_ONLY:-0}" != "1" ]]; then
   "$ROOT_DIR/samples/run_samples.sh"
 fi

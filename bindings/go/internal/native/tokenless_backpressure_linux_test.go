@@ -119,9 +119,9 @@ func checkBackpressureCleanup(t *testing.T, owner *completionOwner, trace string
 	t.Helper()
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
-	if len(owner.entries) != 0 || len(owner.earlyWritable) != 0 || owner.inflightSends != 0 {
-		t.Fatalf("completion state: entries=%d early=%d in-flight=%d",
-			len(owner.entries), len(owner.earlyWritable), owner.inflightSends)
+	if len(owner.entries) != 0 || len(owner.inflightSends) != 0 {
+		t.Fatalf("completion state: entries=%d in-flight sends=%d",
+			len(owner.entries), len(owner.inflightSends))
 	}
 	if got := completiontest.Trace(); got != trace {
 		t.Fatalf("native call trace = %q, want %q", got, trace)

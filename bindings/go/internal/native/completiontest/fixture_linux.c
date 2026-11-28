@@ -14,7 +14,8 @@ static _Atomic int override_missing_poller_modify;
 static _Atomic int override_poll_failure;
 static _Atomic int override_close_busy;
 static _Atomic int early_send_wait;
-enum fixture_backpressure { no_backpressure, tokenless_backpressure, writable_backpressure };
+static uintptr_t invalid_wait_context;
+enum fixture_backpressure { no_backpressure, tokenless_backpressure, writable_backpressure, invalid_writable_backpressure };
 static _Atomic enum fixture_backpressure submit_backpressure;
 static zlink_completion_t records[16];
 static size_t read_index, write_index, trace_size;
@@ -36,6 +37,7 @@ void fixture_start(void *socket)
 {
     assert(atomic_load(&fixture_socket) == NULL);
     read_index = write_index = trace_size = 0;
+    invalid_wait_context = 0;
     trace[0] = '\0';
     atomic_store(&fixture_socket, socket);
     atomic_store(&override_empty_poller_wait, 0);
@@ -68,6 +70,11 @@ void fixture_backpressure_once(int with_token)
 {
     atomic_store(&submit_backpressure, with_token ? writable_backpressure : tokenless_backpressure);
 }
+void fixture_invalid_wait_token_once(void)
+{
+    atomic_store(&submit_backpressure, invalid_writable_backpressure);
+}
+uintptr_t fixture_invalid_wait_context(void) { return invalid_wait_context; }
 const char *fixture_trace(void) { return trace; }
 
 int __real_zlink_close(void *);
@@ -205,8 +212,13 @@ static int reject_with_backpressure(zlink_msg_t *parts, size_t part_count, void 
         *id = 41;
         fixture_writable(*id, (uintptr_t) context, "submit-target");
     }
+    if (mode == invalid_writable_backpressure) {
+        assert(id != NULL);
+        *id = 41;
+        invalid_wait_context = (uintptr_t) context;
+    }
     record_call('B');
-    errno = EAGAIN;
+    errno = mode == invalid_writable_backpressure ? EINVAL : EAGAIN;
     return 1;
 }
 
@@ -219,9 +231,11 @@ static zlink_submit_result_t admit(zlink_msg_t *parts, size_t part_count,
     if (reject_with_backpressure(parts, part_count, context, id))
         return ZLINK_SUBMIT_BACKPRESSURED;
     int expected = 1;
-    if (!request && atomic_compare_exchange_strong(&early_send_wait, &expected, 2)) {
+    if (!request && atomic_compare_exchange_strong(&early_send_wait, &expected, 4)) {
         *id = 41;
         fixture_writable(*id, (uintptr_t) context, "submit-target");
+        expected = 4;
+        atomic_compare_exchange_strong(&early_send_wait, &expected, 2);
         while (atomic_load(&early_send_wait) == 2)
             sched_yield();
         errno = EAGAIN;
