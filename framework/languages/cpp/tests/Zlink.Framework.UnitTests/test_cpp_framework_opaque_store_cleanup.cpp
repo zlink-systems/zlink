@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "../support/opaque_store_descriptor_fixture.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
