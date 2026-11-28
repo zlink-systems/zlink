@@ -281,9 +281,7 @@ inline bool run_server_loop (void *ctx,
             if (now_ns >= end_ns)
                 break;
             if (!schedule.due (now_ns)) {
-                const uint64_t wait_ns = std::min (end_ns, schedule.next_ns ()) - now_ns;
-                const long wait_ms =
-                  static_cast<long> (std::min<uint64_t> (50, wait_ns / 1000000ULL));
+                const int wait_ms = schedule.wait_ms (now_ns, end_ns);
                 if (wait_ms > 0 && perf_socket_poll (NULL, 0, wait_ms) < 0
                     && zlink_errno () != EINTR)
                     return false;

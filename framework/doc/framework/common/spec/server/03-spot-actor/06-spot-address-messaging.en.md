@@ -529,6 +529,13 @@ condition. A local and remote owner have the same handler, metadata, and
 completion meaning. A direct call with no Instance intent is an
 existing-only operation, targeting only an already-existing Ready Spot.
 
+A message addressed by Spot ID (a direct call or a cold activation with Instance
+intent) finds its target by Spot ID and route and its handler by packet name.
+The inner application envelope header's `channelName` isn't used for this
+dispatch. The sending MeshNode may leave it as an empty string, and the
+receiving MeshNode doesn't reject the message because the value is empty or has
+any particular value.
+
 - **If close and recreate happened on the same owner after resolve, the
   current Ready Spot at the moment the target queue accepts it processes
   the message.**

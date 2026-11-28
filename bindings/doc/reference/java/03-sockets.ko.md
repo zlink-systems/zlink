@@ -256,9 +256,15 @@ try (SubSocket sub = context.createSubSocket()) {
 | --- | --- |
 | `bind`/`connect`/`unbind`/`disconnect`/`disconnectRid` | `PairSocket`과 같은 형태 |
 | `setSubscription(String filter)` / `unsetSubscription(String filter)` | topic filter를 추가/제거; 구독은 누적된다 |
-| `subscriptionAt(int index)` | `Optional<SubscriptionEntry>` — 해당 index의 filter, 범위 밖이면 empty |
+| `subscriptionAt(int index)` | `Optional<SubscriptionEntry>` — 해당 인덱스의 filter와 pattern 여부를 반환한다. 항목이 없으면 `Optional.empty()`을 반환한다. |
 | `subscribe(TopicMessage result, RecvFlags flags)` | `result`를 다음 매칭 publish로 채움 |
 | `options()` | `SubSocketOptions` 반환: `topicsCount()`만, 읽기 전용 — 두 socket이 가진 유일한 타입별 option |
+
+`subscriptionAt`은 바인딩의 버퍼로 Core를 한 번 호출한다. 빈 filter도 성공으로
+반환한다. `BUFFER_TOO_SMALL`일 때만 Core가 반환한 길이로 한 번 더 호출한다.
+`NOT_FOUND`는 항목 없음으로 반환한다. 다른 실패 결과를 받으면
+바인딩은 `ZlinkConfigException`를 던진다.
+조회 계약은 [공통 Subscription 조회](../../spec/README.ko.md#subscription-조회)를 따른다.
 
 **`XSubSocket`은 member 집합이 동일하다** — 모든 메서드가 같은 signature로
 독립적으로 재선언돼 있으며, 둘의 유일한 차이는 이 contract에서 보이는 게
