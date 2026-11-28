@@ -1127,6 +1127,15 @@ serial_execution_queue_t::serial_execution_queue_t (offload_executor_t &executor
         _publication_cursor = _publication_tail = new publication_node_t ();
 }
 
+serial_execution_queue_t::serial_execution_queue_t (std::shared_ptr<offload_executor_t> executor,
+                                                    serial_execution_queue_options_t options,
+                                                    error_handler_t error_handler,
+                                                    serial_lane_policy_t policy) :
+    serial_execution_queue_t (*executor, options, std::move (error_handler), std::move (policy))
+{
+    _executor_owner = std::move (executor);
+}
+
 serial_execution_queue_t::~serial_execution_queue_t ()
 {
     close ();

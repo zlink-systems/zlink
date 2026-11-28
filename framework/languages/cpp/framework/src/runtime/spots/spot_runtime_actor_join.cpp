@@ -2439,19 +2439,37 @@ spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref,
         return result_t<std::shared_ptr<deferred_barrier_t>>::failure (
           framework_error_kind_t::not_found, "Actor join barrier target is unavailable");
     }
-    auto cancel_reservation = [state = _state, key, reservation_id] {
+    // Host stop drains join deliveries before it releases the node executors. The
+    // barrier's completion submits to the Actor queue, so it joins that wait: the
+    // terminal completes after the barrier is cancelled or after its release returned.
+    auto work_terminal = detail::make_task_completion_source<void> ();
+    _state->lane.run ([&] { _state->pending_join_delivery_work.insert (work_terminal); }).get ();
+    auto retire_work = [state = _state, work_terminal,
+                        retired_once = std::make_shared<std::atomic_bool> (false)] {
+        if (retired_once->exchange (true, std::memory_order_acq_rel))
+            return;
+        auto retired = state->lane.run_task (
+          [state, work_terminal] { state->pending_join_delivery_work.erase (work_terminal); });
+        detail::observe_task_terminal (retired, [work_terminal] (const result_t<void> &terminal) {
+            work_terminal->complete (terminal);
+        });
+    };
+    auto cancel_reservation = [state = _state, key, reservation_id, retire_work] {
         fail_handoff_backlog (state,
                               state->actor_transfer_coordinator->cancel_move (key, reservation_id));
+        retire_work ();
     };
-    auto settle_reservation = [state = _state, actor_ref,
-                               reservation_id] (deferred_barrier_t::async_completion_t release) {
+    auto settle_reservation = [state = _state, actor_ref, reservation_id,
+                               retire_work] (deferred_barrier_t::async_completion_t release) {
         auto owner = std::make_shared<spot_node_runtime_t> (state);
         auto opened = owner->open_local_actor_handoff (actor_ref, reservation_id);
-        detail::observe_task_completion (opened, [owner, release = std::move (release)] (
-                                                   const result_t<result_t<void>> &terminal) {
-            release (terminal ? terminal.value ()
-                              : detail::result_access_t::failure<void> (*terminal.error ()));
-        });
+        detail::observe_task_completion (
+          opened, [owner, release = std::move (release),
+                   retire_work] (const result_t<result_t<void>> &terminal) {
+              release (terminal ? terminal.value ()
+                                : detail::result_access_t::failure<void> (*terminal.error ()));
+              retire_work ();
+          });
     };
     const auto executor = coordinator->actor_executor (key);
     if (!executor) {
@@ -2459,8 +2477,11 @@ spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref,
         return result_t<std::shared_ptr<deferred_barrier_t>>::failure (
           framework_error_kind_t::shutting_down, "Deferred Actor join mailbox is unavailable");
     }
-    return executor->queue ()->reserve_deferred_barrier_next (
+    auto reserved = executor->queue ()->reserve_deferred_barrier_next (
       "actor-join", std::move (cancel_reservation), std::move (settle_reservation));
+    if (!reserved)
+        retire_work ();
+    return reserved;
 }
 
 bool spot_node_runtime_t::reserved_with_pending_relocation_request (

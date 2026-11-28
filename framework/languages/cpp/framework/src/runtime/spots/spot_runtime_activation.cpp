@@ -121,7 +121,7 @@ void configure_spot_execution (
     state->serial_queue =
       retained_queue ? std::move (retained_queue)
                      : std::make_shared<runtime::serial_execution_queue_t> (
-                         *state->serial_executor, runtime::serial_execution_queue_options_t{},
+                         state->serial_executor, runtime::serial_execution_queue_options_t{},
                          runtime::serial_execution_queue_t::error_handler_t{},
                          state->is_entry_spot () ? runtime::serial_lane_policy_t::entry_spot ()
                          : state->execution_mode == user_spot_execution_mode_t::spot_wide
