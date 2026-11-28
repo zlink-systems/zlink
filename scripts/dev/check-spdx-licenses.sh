@@ -32,7 +32,6 @@ APACHE_FILES=(
   framework/languages/cpp/connector/tests/test_connector_unreal_fifo.cpp
   framework/languages/cpp/connector/tests/test_connector_wait_isolation.cpp
   framework/languages/cpp/framework/include/zlink/framework/codecs/json_stream_connector.hpp
-  framework/languages/cpp/tests/support/stream_capture.hpp
   framework/languages/cpp/tests/Zlink.Framework.UnitTests/test_cpp_framework_typed_json_allocations.cpp
   framework/languages/cpp/tests/Zlink.Framework.UnitTests/typed_json_compile_fail.cpp
   framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/ZLinkJsonOptional.java
