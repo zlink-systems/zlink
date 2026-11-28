@@ -22,6 +22,11 @@ class SendSubmission:
 
     @property
     def admitted(self) -> Awaitable[None]:
+        """Wait for send admission.
+
+        Raises:
+            SubmitError: The send failed before admission.
+        """
         return self._admitted
 
 
@@ -47,10 +52,21 @@ class RequestSubmission:
 
     @property
     def admitted(self) -> Awaitable[None]:
+        """Wait for request admission.
+
+        Raises:
+            SubmitError: The request failed before admission.
+        """
         return self._admitted
 
     @property
     def reply(self) -> Awaitable[list["Message"]]:
+        """Wait for the caller-owned reply parts.
+
+        Raises:
+            SubmitError: The request failed before admission.
+            RequestError: The admitted request failed.
+        """
         return self._reply
 
 
@@ -81,11 +97,20 @@ class SendOp(_FluentMessageOp, Protocol):
         Each attempt is nonblocking. Immediate admission completes without a
         SEND completion; ``BACKPRESSURED``/``EAGAIN`` waits for the matching
         WRITABLE token before resubmitting the same packet.
+
+        Raises:
+            RuntimeError: No asyncio event loop is running.
+            SubmitError: Submission failed, including when admission would
+                wait and no completion poller is registered.
         """
         ...
 
     def submit_sync(self) -> None:
-        """Submit synchronously through Core's blocking admission path."""
+        """Submit synchronously through Core's blocking admission path.
+
+        Raises:
+            SubmitError: Submission failed.
+        """
         ...
 
 
@@ -102,11 +127,25 @@ class RequestOp(_FluentMessageOp, Protocol):
         ...
 
     def submit(self) -> RequestSubmission:
-        """Submit and return separate admission and reply stages."""
+        """Submit and return separate admission and reply stages.
+
+        Raises:
+            ValueError: The configured reply timeout is outside the supported range.
+            RuntimeError: No asyncio event loop is running.
+            SubmitError: Submission failed, including when no completion poller
+                is registered.
+        """
         ...
 
     def submit_sync(self) -> list["Message"]:
-        """Block until the request reaches a terminal result."""
+        """Block until the request reaches a terminal result.
+
+        Raises:
+            ValueError: The configured reply timeout is outside the supported range.
+            SubmitError: Submission failed.
+            RequestError: The admitted request failed.
+            RecvError: The blocking completion read failed.
+        """
         ...
 
 
@@ -119,7 +158,11 @@ class ReplyOp(_FluentMessageOp, Protocol):
     def messages(self, *payloads) -> "ReplyOp": ...
 
     def submit(self) -> None:
-        """Submit the reply parts."""
+        """Submit the reply parts.
+
+        Raises:
+            SubmitError: Submission failed.
+        """
         ...
 
 
@@ -136,7 +179,11 @@ class PublishOp(_FluentMessageOp, Protocol):
         ...
 
     def submit(self) -> None:
-        """Submit the publication synchronously."""
+        """Submit the publication synchronously.
+
+        Raises:
+            SubmitError: Submission failed.
+        """
         ...
 
 

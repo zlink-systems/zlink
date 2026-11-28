@@ -10,6 +10,7 @@
 
     <ItemGroup>
         <Compile Include="../../../../languages/dotnet/cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="TestHostMessageFlowListener.cs"/>
+        <Compile Include="../../../../languages/dotnet/cross-language/Zlink.Framework.TestHost/TestHostEventSink.cs" Link="TestHostEventSink.cs"/>
         <InternalsVisibleTo Include="WithGrpcBench.BoundaryTests"/>
         <FrameworkReference Include="Microsoft.AspNetCore.App"/>
         <PackageReference Include="Grpc.Net.Client"/>

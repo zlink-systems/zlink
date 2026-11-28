@@ -28,7 +28,7 @@ def main():
                     payload = received.to_bytes_list()
                     if payload != [b"hello-pair"]:
                         raise AssertionError(f"unexpected pair payload: {payload!r}")
-                print('[pair/recv] send: "hello-pair" → recv: "hello-pair"')
+                print('[pair/recv] send: "hello-pair" -> recv: "hello-pair"')
 # --8<-- [end:doc]
 
 

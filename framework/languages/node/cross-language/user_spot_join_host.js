@@ -27,6 +27,12 @@ const ACTOR_JOIN_WIRE_COMMAND = 28;
 const RELOCATION_ACTOR_TYPE = 'cross-lang-relocation-actor-type';
 const mode = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
+const eventOutput = fs.createWriteStream(null, { fd: 1, autoClose: false });
+let pendingEventWrites = Promise.resolve();
+let eventWriteError;
+eventOutput.on('error', error => {
+  eventWriteError ??= error;
+});
 const failJoinCompletion = process.env.ZLINK_CROSS_FAIL_JOIN_COMPLETION === '1';
 const lateRequestTimeout = process.env.ZLINK_CROSS_LATE_REQUEST_TIMEOUT_MS;
 const joinSetup = process.env.ZLINK_CROSS_JOIN_SETUP === '1';
@@ -65,9 +71,25 @@ function require_(name) {
   return value;
 }
 
+function queueEventWrite(write) {
+  pendingEventWrites = pendingEventWrites.then(write).catch(error => {
+    eventWriteError ??= error;
+  });
+}
+
 function appendEvent(line) {
-  console.log(line);
-  if (args['event-file']) fs.appendFileSync(args['event-file'], `${line}\n`);
+  queueEventWrite(async () => {
+    const row = `${line}\n`;
+    await new Promise((resolve, reject) => {
+      eventOutput.write(row, error => error ? reject(error) : resolve());
+    });
+    if (args['event-file']) await fs.promises.appendFile(args['event-file'], row);
+  });
+}
+
+async function flushEvents() {
+  await pendingEventWrites;
+  if (eventWriteError) throw eventWriteError;
 }
 
 async function waitForEvent(file, marker) {
@@ -88,7 +110,9 @@ async function waitForEvent(file, marker) {
 }
 
 function appendFlow(line) {
-  if (args['event-file']) fs.appendFileSync(`${args['event-file']}.flow`, `${line}\n`);
+  if (args['event-file']) {
+    queueEventWrite(() => fs.promises.appendFile(`${args['event-file']}.flow`, `${line}\n`));
+  }
 }
 
 function writeReady() {
@@ -99,7 +123,7 @@ function errorKindName(kind) {
   return framework.ZLinkFrameworkErrorKind[kind] ?? String(kind ?? 'InternalFailure');
 }
 
-function installMessageFlowCapture() {
+function installMessageFlowCapture(label = 'node-user-spot-join') {
   if (!args['event-file']) return undefined;
   fs.writeFileSync(`${args['event-file']}.flow`, '');
   const provider = new LoggerProvider({
@@ -107,7 +131,7 @@ function installMessageFlowCapture() {
       onEmit(record) {
         const fields = record.attributes;
         appendFlow(
-          `zlink flow: label=node-user-spot-join`
+          `zlink flow: label=${label}`
           + ` phase=${fields.phase ?? '<null>'}`
           + ` surface=${fields.surface ?? '<null>'}`
           + ` kind=${fields.message_kind ?? '<null>'}`
@@ -1003,6 +1027,16 @@ async function runOutageTarget(app, actorClient, targetNodeRid) {
 }
 
 async function main() {
+  if (mode === 'actor-destroy-owner' || mode === 'actor-destroy-caller') {
+    const { actorDestroyHost } = require('./actor-destroy-host');
+    const flowProvider = installMessageFlowCapture('node-actor-destroy');
+    try {
+      await actorDestroyHost(mode === 'actor-destroy-owner', args, require_, appendEvent, writeReady);
+    } finally {
+      await flowProvider?.shutdown();
+    }
+    return;
+  }
   if (mode !== 'user-spot-join-source'
     && mode !== 'user-spot-join-source-multiattempt'
     && mode !== 'user-spot-target') {
@@ -1015,11 +1049,25 @@ async function main() {
   await userSpotJoinSource();
 }
 
-main().catch(error => {
+async function exitAfterEvents(status) {
+  try {
+    await flushEvents();
+  } catch (error) {
+    console.error(error);
+    status = 1;
+  }
+  process.exit(status);
+}
+
+process.once('SIGTERM', () => void exitAfterEvents(143));
+
+main().then(flushEvents).catch(error => {
   const kind = error instanceof framework.ZLinkFrameworkException
     ? errorKindName(error.kind)
     : 'InternalFailure';
-  appendEvent(`user-spot-join-failed|kind=${kind}|message=${String(error?.message ?? error)}`);
-  console.error(`Node User-Spot Join source failed: ${error?.stack ?? error}`);
-  process.exit(1);
+  if (mode !== 'actor-destroy-owner' && mode !== 'actor-destroy-caller') {
+    appendEvent(`user-spot-join-failed|kind=${kind}|message=${String(error?.message ?? error)}`);
+  }
+  console.error(`Node cross-language host '${mode}' failed: ${error?.stack ?? error}`);
+  return exitAfterEvents(1);
 });

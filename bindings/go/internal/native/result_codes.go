@@ -9,12 +9,10 @@ type (
 	RecvFlags = contracts.RecvFlags
 )
 
-type CompletionKind = contracts.CompletionKind
-
 const (
-	CompletionSend     = contracts.CompletionSend
-	CompletionRequest  = contracts.CompletionRequest
-	CompletionWritable = contracts.CompletionWritable
+	completionKindSend     = 1
+	completionKindRequest  = 2
+	completionKindWritable = 3
 )
 
 type SendCompleteResult int

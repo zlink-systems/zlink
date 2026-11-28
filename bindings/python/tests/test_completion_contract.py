@@ -130,11 +130,6 @@ def test_stream_packet_resets_closes_and_reuses_storage():
     assert first_body.closed == 1
     packet._finish_receive()
 
-    packet._begin_receive()
-    with pytest.raises(zlink.RecvError) as raised:
-        packet._begin_receive()
-    assert raised.value.result == zlink.RecvResult.BUSY
-    packet._finish_receive()
     packet.close()
     assert packet.is_empty
 

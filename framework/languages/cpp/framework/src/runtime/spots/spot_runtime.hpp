@@ -2045,7 +2045,7 @@ class spot_node_runtime_t
       const spot_id_t &spot_id,
       std::string packet_name,
       std::string content_type,
-      std::vector<std::uint8_t> payload,
+      zlink::message_t payload,
       std::map<std::string, std::string> metadata,
       bool request,
       std::string correlation_id,

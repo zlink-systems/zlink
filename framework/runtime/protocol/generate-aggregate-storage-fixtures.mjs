@@ -15,18 +15,31 @@ export function generateAggregateStorageFixtures(schema) {
   const aggregateId = "01234567-89ab-cdef-0123-456789abcdef";
   // Deliberately exceed JSON's exact integer range.
   const aggregateGeneration = "9007199254740993";
-  function record(kind, decoded) {
+  const keyFor = (kind, fields) => storage.keys[kind].replace(/\{([^}]+)\}/g, (_, name) =>
+    ({ prefix, aggregateId, aggregateGeneration, ...fields })[name]);
+  // Location runtime §3.4: a marker-less Direct Join keys its inventory by the RelocationId and generation 1.
+  const directJoinKeyFields = { aggregateId: "fedcba98-7654-3210-fedc-ba9876543210", aggregateGeneration: "1" };
+  const reference = (page) => ({
+    level: page.decoded.level, index: page.decoded.index, startIndex: page.decoded.startIndex,
+    entryCount: page.decoded.entryCount, sha256: page.sha256,
+  });
+  const rootRecord = (body, keyFields) => record("root", { ...body, digestSha256: sha256(jcsBytes(body)) }, keyFields);
+
+  function record(kind, decoded, keyFields = {}) {
     assert(validators[kind](decoded), JSON.stringify(validators[kind].errors));
     const bytes = jcsBytes(decoded);
     if (kind === "page") assert(bytes.length <= storage.pageMaximumEncodedBytes);
-    const key = storage.keys[kind].replace(/\{([^}]+)\}/g, (_, name) =>
-      ({ prefix, aggregateId, aggregateGeneration, ...decoded })[name]);
+    const key = keyFor(kind, { ...decoded, ...keyFields });
     return { key, decoded, jcsUtf8: bytes.toString("utf8"), jcsHex: bytes.toString("hex"), sha256: sha256(bytes) };
   }
-  function inventory(name, count, longEntries = false) {
+  // §8.3: a participant without a membership change stores the UTF-8 body `[]`.
+  const NO_MEMBERSHIP_CHANGE_HEX = Buffer.from("[]", "utf8").toString("hex");
+  function inventory(
+    name, count, longEntries = false, keyFields = undefined,
+    membershipMutationHex = "0100fe806d75746174696f6e",
+  ) {
     // §8.3 stores participant records verbatim, outside JSON canonicalization.
     const authorityPayloadHex = "00ff807061796c6f6164";
-    const membershipMutationHex = "0100fe806d75746174696f6e";
     const authorityPayloadSha256 = sha256(Buffer.from(authorityPayloadHex, "hex"));
     const membershipMutationSha256 = sha256(Buffer.from(membershipMutationHex, "hex"));
     const entries = Array.from({ length: count }, (_, index) => ({
@@ -38,10 +51,6 @@ export function generateAggregateStorageFixtures(schema) {
       authorityPayloadSha256, membershipMutationSha256,
     }));
     const pages = [];
-    const reference = (page) => ({
-      level: page.decoded.level, index: page.decoded.index, startIndex: page.decoded.startIndex,
-      entryCount: page.decoded.entryCount, sha256: page.sha256,
-    });
     // One partition rule for entries and references, using the whole stored page.
     function partition(items, level) {
       const result = [];
@@ -52,7 +61,7 @@ export function generateAggregateStorageFixtures(schema) {
         entries: level === 0 ? group : [], children: level === 0 ? [] : group,
       });
       const flush = (group) => {
-        const page = record("page", makePage(group));
+        const page = record("page", makePage(group), keyFields);
         pages.push(page);
         result.push(reference(page));
       };
@@ -74,7 +83,18 @@ export function generateAggregateStorageFixtures(schema) {
     while (current.length > 1) current = partition(current, ++topLevel);
     const digestInput = { totalCount: count, topLevel, topPages: current };
     const digestInputBytes = jcsBytes(digestInput);
-    const root = record("root", { ...digestInput, digestSha256: sha256(digestInputBytes) });
+    const root = rootRecord(digestInput, keyFields);
+    if (keyFields) {
+      return {
+        name, relocationId: keyFields.aggregateId, aggregateGeneration: keyFields.aggregateGeneration, root, pages,
+        participantKeys: entries.map(({ index }) => ({
+          authorityPayload: keyFor("authorityPayload", { index, ...keyFields }),
+          membershipMutation: keyFor("membershipMutation", { index, ...keyFields }),
+        })),
+        rootDigestInputJcsHex: digestInputBytes.toString("hex"),
+        participantHashInputs: { authorityPayloadHex, membershipMutationHex },
+      };
+    }
     const aggregate = record("aggregate", {
       aggregateId, aggregateGeneration, state: "prepared", participantCount: count,
       inventoryDigestSha256: root.decoded.digestSha256,
@@ -89,10 +109,93 @@ export function generateAggregateStorageFixtures(schema) {
       participantHashInputs: { authorityPayloadHex, membershipMutationHex },
     };
   }
+  const small = inventory("small-3", 3);
+  const multiPage = inventory("two-level-1025", 1025);
+  const storageKeyInput = {
+    prefix: "zlink:v11:",
+    aggregateId: aggregateId.toUpperCase(),
+    aggregateGeneration,
+    level: 1,
+    pageIndex: 0,
+    participantIndex: 1024,
+  };
+  const storageKeyFields = { ...storageKeyInput, aggregateId: storageKeyInput.aggregateId.toLowerCase() };
+  const storageKeys = {
+    caseName: multiPage.name,
+    input: storageKeyInput,
+    expected: {
+      aggregate: keyFor("aggregate", storageKeyFields),
+      root: keyFor("root", storageKeyFields),
+      page: keyFor("page", { ...storageKeyFields, index: storageKeyInput.pageIndex }),
+      authorityPayload: keyFor("authorityPayload", { ...storageKeyFields, index: storageKeyInput.participantIndex }),
+      membershipMutation: keyFor("membershipMutation", { ...storageKeyFields, index: storageKeyInput.participantIndex }),
+    },
+  };
+  const standaloneActorCommit = {
+    input: {
+      relocationId: "fedcba98-7654-3210-fedc-ba9876543210",
+      actorId: "golden-actor",
+      stableType: "Game.Actor",
+      objectGeneration: "1",
+      sourceAuthorityOwnerGeneration: "1",
+      expectedStoreVersion: "1",
+      source: {
+        meshName: "mesh", routingIdHex: "73", nodeGeneration: "3",
+        ownerId: "owner-src", ownerLeaseGeneration: "1",
+        entrySpot: { id: "entry", generation: "3" },
+      },
+      target: {
+        meshName: "mesh", routingIdHex: "74", nodeGeneration: "4",
+        ownerId: "owner-tgt", ownerLeaseGeneration: "2",
+        approvedUserSpot: { id: "golden-spot", generation: "1" },
+      },
+    },
+    provenance: {
+      input: "Ready Actor at an Entry Spot, with no prior User Spot membership; target approved one User Spot. The single inventory entry uses newOwner and UTF-8 [] because membership is in the projected authority payload.",
+      codec: "Java ZLinkActorAuthorityPayloadCodec, ZLinkAggregateRelocationCoordinator.projectAuthorityPayload and ZLinkAggregateInventoryStore.digest",
+      command: "cd framework/languages/java && ZLINK_STANDALONE_ACTOR_GOLDEN_OUTPUT=\"$JOB/standalone-actor-commit.json\" ./gradlew --no-daemon --max-workers=4 :zlink-framework-core:test --tests '*.ZLinkAggregateInventoryStoreTest.exportStandaloneActorCommitGolden' --rerun",
+    },
+    expected: {
+      targetAuthorityPayloadHex: "5a4c41550100000000005d0001002e0a47616d652e4163746f720c676f6c64656e2d6163746f72010b676f6c64656e2d73706f74000000000000000102096f776e65722d7467740000000000000002046d657368017400000000000000040000000000000000000081bd66d4",
+      digestSha256: "36a852b37fe03a6899e0ab525d1792063982c293b7c22c85af5fcef1a2ae130a",
+    },
+  };
+  const leaf = small.pages[0];
+  const top = multiPage.pages.at(-1);
+
+  // Rehash the modified pages so the order cases reach structural validation.
+  function reordered(name, base, page) {
+    const { totalCount, topLevel } = base.root.decoded;
+    const root = rootRecord({ totalCount, topLevel, topPages: [reference(page)] });
+    return {
+      name, base: base.name, rootDigestSha256: root.decoded.digestSha256,
+      replaceRecords: [root, page].map(({ key, jcsHex }) => ({ key, hex: jcsHex })),
+    };
+  }
+  const rejected = [
+    { name: "missing-page", base: small.name, removeKeys: [leaf.key] },
+    { name: "missing-participant", base: small.name, removeKeys: [keyFor("membershipMutation", { index: 0 })] },
+    { name: "damaged-participant", base: small.name, replaceRecords: [
+      { key: keyFor("authorityPayload", { index: 1 }), hex: "00fe" },
+    ] },
+    { name: "damaged-page", base: small.name, replaceRecords: [{ key: leaf.key, hex: "7b" }] },
+    reordered("reordered-leaf-entries", small, record("page", {
+      ...leaf.decoded, entries: leaf.decoded.entries.toReversed(),
+    })),
+    reordered("reordered-page-index", multiPage, record("page", {
+      ...top.decoded, children: top.decoded.children.toReversed(),
+    })),
+  ];
+
   return {
     spec: storage.spec, canonicalization: "RFC8785 (canonicalize@2.1.0)",
     byteEncoding: "jcsHex is exact UTF-8 storage bytes; no BOM or trailing newline",
-    cases: [inventory("small-3", 3), inventory("two-level-1025", 1025), inventory("empty-0", 0), inventory("byte-limited-256", 256, true)],
+    storageKeys,
+    standaloneActorCommit,
+    cases: [small, multiPage, inventory("empty-0", 0), inventory("byte-limited-256", 256, true),
+      inventory("no-membership-change-1", 1, false, undefined, NO_MEMBERSHIP_CHANGE_HEX)],
+    rejected,
+    directJoin: inventory("direct-join-1", 1, false, directJoinKeyFields),
   };
 }
 
@@ -106,6 +209,6 @@ function main() {
   if (mode === "--write") fs.writeFileSync(outputPath, expected);
   else assert(fs.readFileSync(outputPath, "utf8") === expected, "aggregate storage golden fixture drift");
   const pages = fixture.cases.reduce((sum, inventory) => sum + inventory.pages.length, 0);
-  console.log(`aggregate storage fixtures ${mode === "--write" ? "written" : "verified"}: ${fixture.cases.length} inventories, ${pages} pages`);
+  console.log(`aggregate storage fixtures ${mode === "--write" ? "written" : "verified"}: ${fixture.cases.length} inventories, ${pages} pages, ${fixture.rejected.length} rejected vectors`);
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

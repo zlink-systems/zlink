@@ -131,29 +131,32 @@ public final class ZLinkStateLaneAllocationTest {
         var returned = new CountDownLatch(TURNS);
         var failures = new ConcurrentLinkedQueue<Throwable>();
         var threads = new ArrayList<Thread>();
-        for (int index = 0; index < TURNS; index++) {
-            var thread =
-                    Thread.ofPlatform()
-                            .start(
-                                    () -> {
-                                        ready.countDown();
-                                        try {
-                                            assertTrue(start.await(WAIT_SECONDS, TimeUnit.SECONDS));
-                                            assertSame(VALUE, lane.awaitTurn(WORK));
-                                            assertFalse(lane.isOnLane());
-                                        } catch (Throwable failure) {
-                                            failures.add(failure);
-                                        } finally {
-                                            returned.countDown();
-                                            scheduled.add(() -> {});
-                                        }
-                                    });
-            threads.add(thread);
-        }
         try {
-            assertTrue(ready.await(WAIT_SECONDS, TimeUnit.SECONDS));
-            Runnable publish =
+            RecordingWork publish =
                     () -> {
+                        for (int index = 0; index < TURNS; index++) {
+                            var thread =
+                                    Thread.ofPlatform()
+                                            .start(
+                                                    () -> {
+                                                        ready.countDown();
+                                                        try {
+                                                            assertTrue(
+                                                                    start.await(
+                                                                            WAIT_SECONDS,
+                                                                            TimeUnit.SECONDS));
+                                                            assertSame(VALUE, lane.awaitTurn(WORK));
+                                                            assertFalse(lane.isOnLane());
+                                                        } catch (Throwable failure) {
+                                                            failures.add(failure);
+                                                        } finally {
+                                                            returned.countDown();
+                                                            scheduled.add(() -> {});
+                                                        }
+                                                    });
+                            threads.add(thread);
+                        }
+                        assertTrue(ready.await(WAIT_SECONDS, TimeUnit.SECONDS));
                         start.countDown();
                         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
                         while (parkedCallers(threads) != TURNS && System.nanoTime() < deadline)
@@ -167,6 +170,7 @@ public final class ZLinkStateLaneAllocationTest {
             }
             return record(file, publish);
         } finally {
+            for (int index = threads.size(); index < TURNS; index++) returned.countDown();
             start.countDown();
             hold.complete(null);
             while (returned.getCount() != 0) scheduled.take().run();
@@ -193,7 +197,7 @@ public final class ZLinkStateLaneAllocationTest {
         return parked;
     }
 
-    private static Counts record(Path file, Runnable work) throws Exception {
+    private static Counts record(Path file, RecordingWork work) throws Exception {
         try (var recording = new Recording()) {
             recording.enable("jdk.ObjectAllocationOutsideTLAB").withStackTrace();
             recording.enable("jdk.DataLoss");
@@ -237,6 +241,11 @@ public final class ZLinkStateLaneAllocationTest {
             }
         }
         return new Counts(turns, turnBytes, controls, types);
+    }
+
+    @FunctionalInterface
+    private interface RecordingWork {
+        void run() throws Exception;
     }
 
     private record Counts(

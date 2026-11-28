@@ -1183,7 +1183,7 @@ Binding은 Framework의 application job queue count를 Core byte snapshot에 합
 |---|---|
 | SEND `OK`·ID `0` | [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)의 SEND stage 결과를 따른다. |
 | REQUEST `OK`·nonzero ID | [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)의 REQUEST stage 결과를 따른다. |
-| `BACKPRESSURED`·`EAGAIN`·nonzero 대기 토큰 | 바인딩은 Core 호출 전에 독립적으로 소유한 staging record를 보관하고 매 시도에 별도 native 배열을 전달한다. `ZLINK_SEND_ADMITTED`인 WRITABLE 뒤에만 바인딩은 staging에서 같은 operation을 다시 제출한다. Staging은 admission·terminal 실패·socket/context lifecycle cleanup에서 한 번 정리한다. `ZLINK_SEND_NOT_FOUND`·`ZLINK_SEND_NOT_CONNECTED`는 각각 `NOT_FOUND`·`NOT_CONNECTED`로, 그 밖의 값(Core가 발행하지 않는 ABI 보존 값 `ZLINK_SEND_TIMED_OUT` 포함)은 `INTERNAL_ERROR`·`EPROTO`로 투영한다. Stage 결과는 [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)를 따른다. |
+| `BACKPRESSURED`·`EAGAIN`·nonzero 대기 토큰 | 바인딩은 Core 호출 전에 독립적으로 소유한 staging record를 보관하고 매 시도에 별도 native 배열을 전달한다. `ZLINK_SEND_ADMITTED`인 WRITABLE 뒤에만 바인딩은 staging에서 같은 operation을 다시 제출한다. Staging은 admission·terminal 실패·socket/context lifecycle cleanup에서 한 번 정리한다. 공개 `Message`의 소유권은 nonzero 대기 토큰과 staging을 확보한 그 시점에 Core 경로로 넘어간다 — 그 뒤 caller는 원본을 다시 쓰지 않고, 대기가 admission 없이 끝나도(terminal 실패·cleanup) 원본으로 되돌리지 않고 staging만 정리한다. `ZLINK_SEND_NOT_FOUND`·`ZLINK_SEND_NOT_CONNECTED`는 각각 `NOT_FOUND`·`NOT_CONNECTED`로, 그 밖의 값(Core가 발행하지 않는 ABI 보존 값 `ZLINK_SEND_TIMED_OUT` 포함)은 `INTERNAL_ERROR`·`EPROTO`로 투영한다. Stage 결과는 [비동기 실행 모델 §5](async-execution-model.ko.md#5-submit-결과와-completion의-합류)를 따른다. |
 | 대기 토큰 없는 submit 실패 | 해당 submit error로 terminal을 끝낸다(결과 객체가 아니라 예외/에러). |
 
 - **바인딩은 socket-local context·token으로 찾은 WRITABLE을 해당 waiter에 전달하며 Core가 보장한 submit RID echo를 다시 판정하지 않는다.**
@@ -1199,6 +1199,7 @@ close와 in-flight 제출의 경합은
 공개 `Message`를 실패 뒤에도 보존하는 binding은 위의 staging과 별개로 원본 ownership을
 언어별 계약에 따라 유지한다. Binding은 별도 multipart ABI나 public transaction abstraction을
 추가하지 않는다.
+소비된(닫힌) 공개 `Message`를 다시 송신 operation에 넣으면 binding은 Core에 제출하지 않고 `INVALID_HANDLE`로 끝낸다. 빈 frame을 보내지 않는다. 소비된 `Message`의 읽기 접근은 빈 data와 크기 0이다.
 
 Request reply 완료·timeout과 언어 wait cancellation의 경계는
 [Timeout](#timeout)과 [비동기 실행 모델](async-execution-model.ko.md#6-caller-wait-cancellation)을 따른다.
@@ -1754,7 +1755,7 @@ Raw `SUB`/`XSUB`의 recv 결과는 Core `zlink_subscribe()`의 전체 payload �
 | `topic` | **`string` (UTF-8)** | 매칭된 topic. **bytes 가 아니다.** |
 | `parts` | `List<Message>` / `Vec<Message>` | multipart payload |
 | `is_single_part()` | `bool` | `parts.size() == 1` |
-| `first_part()` | `Message` | `parts[0]`; 비어있으면 에러/예외 |
+| `first_part()` | `Message` | `parts[0]`; 비어있으면 `INVALID_STATE`(`EINVAL`) 오류/예외 — `NO_DATA`(다시 시도할 수 있는 수신 없음)나 `NOT_SUPPORTED`(소켓 타입 미지원)로 내지 않는다 |
 | `single_part_or_throw()` | `Message` | `is_single_part()` 면 part 반환, 아니면 에러/예외 |
 | `close()` / `Dispose()` / `Drop` | — | 보유 parts 정리. 언어별 lifecycle 관용구 적용 |
 

@@ -10,6 +10,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
     internal const string HeartbeatPingName = ZlinkStreamControlProtocol.HeartbeatPingName;
     internal const string HeartbeatPongName = ZlinkStreamControlProtocol.HeartbeatPongName;
     private readonly ZlinkStreamConnectorCallbacks _callbacks;
+    private readonly ZlinkStreamAdmissionQueue _admissionQueue;
     private readonly ZlinkStreamActors _actors;
     private readonly IZlinkStreamCompressionCodec? _compressionCodec;
     private readonly ZlinkStreamFrameSender _frameSender;
@@ -50,6 +51,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             options.DispatchMode,
             _receivedMessages
         );
+        _admissionQueue = new ZlinkStreamAdmissionQueue(_callbacks);
         _actors = new ZlinkStreamActors(this, _callbacks);
         _headerCodec = new ZlinkStreamHeaderCodec();
         _compressionCodec = CreateCompressionCodec(options);
@@ -64,6 +66,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             _receivedMessages.ResetForConnection,
             async () =>
             {
+                _admissionQueue.Reset();
                 await _actors.ConnectionEndedAsync().ConfigureAwait(false);
                 _receivedMessages.ConnectionEnded();
             },
@@ -94,7 +97,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             _callbacks,
             _actors,
             _lifecycle.HandleServerCloseAsync,
-            _requestClock
+            _requestClock,
+            _admissionQueue
         );
         _receiveLoop = new ZlinkStreamReceiveLoop(
             _receiveDispatcher,
@@ -133,6 +137,26 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             throw new ArgumentNullException(nameof(handler));
         ThrowIfDisposed();
         return _callbacks.AddConnectionStateChanged(handler);
+    }
+
+    public IDisposable OnAdmissionQueued(Func<CancellationToken, ValueTask> handler)
+    {
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
+
+        ThrowIfDisposed();
+        return _callbacks.AddAdmissionQueued(handler);
+    }
+
+    public IDisposable OnAdmissionPosition(
+        Func<ZlinkStreamAdmissionPosition, CancellationToken, ValueTask> handler
+    )
+    {
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
+
+        ThrowIfDisposed();
+        return _callbacks.AddAdmissionPosition(handler);
     }
 
     public IDisposable OnAdmissionWaiting(
@@ -600,12 +624,15 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         {
             TimeSpan deadline = default;
             TimeSpan? admissionDeadline = null;
-            var frame = default(ZlinkStreamOutboundFrame);
+            var originalFrame = default(ZlinkStreamOutboundFrame);
+            string? admissionTicket = null;
             var initial = true;
             while (true)
             {
+                var frame = originalFrame;
                 var attempt = _pending.Create(name);
                 ZlinkStreamPendingCompletion completion;
+                long sentTicketVersion;
                 try
                 {
                     if (initial)
@@ -624,7 +651,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                             frame.PayloadBytes,
                             out requestBuffer
                         );
-                        frame = frame with
+                        originalFrame = frame = frame with
                         {
                             EncodedBytes = encoded,
                             PayloadBytes = encoded[
@@ -634,13 +661,18 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                     }
                     else
                     {
-                        frame = _frameSender.WithRequestSequence(frame, attempt.RequestSeq) with
+                        frame = _frameSender.WithRequestSequence(
+                            originalFrame,
+                            attempt.RequestSeq,
+                            admissionTicket
+                        ) with
                         {
                             ValidateWrite = ValidateAdmissionWrite,
                         };
                     }
                     requestToken.ThrowIfCancellationRequested();
                     connection = _lifecycle.RegisterRequest(attempt, connection.Ended);
+                    sentTicketVersion = _admissionQueue.TicketVersion;
                     written = _oneWaySubmits.SubmitRequestAsync(
                         connection.Transport,
                         frame,
@@ -666,7 +698,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                 if (admissionDeadline is { } limit)
                     EnsureBeforeDeadline(completion.ReceivedAt, limit);
 
-                if (completion.RetryAfterMs is not { } delay)
+                if (!completion.QueueRequired && completion.RetryAfterMs is null)
                 {
                     var replyHeader = completion.Header;
                     return completion.Error is { } error
@@ -693,7 +725,22 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                         timeoutCts.CancelAfter(remaining);
                 }
 
-                var retryAfter = TimeSpan.FromMilliseconds(delay);
+                initial = false;
+                if (completion.QueueRequired)
+                {
+                    admissionTicket = await WaitForAdmissionTicketAsync(
+                            sentTicketVersion,
+                            admissionTicket,
+                            connection,
+                            admissionDeadline.Value,
+                            requestToken,
+                            ValidateAdmissionWrite
+                        )
+                        .ConfigureAwait(false);
+                    continue;
+                }
+
+                var retryAfter = TimeSpan.FromMilliseconds(completion.RetryAfterMs!.Value);
                 var retryAt =
                     completion.ReceivedAt
                     + retryAfter
@@ -710,7 +757,6 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                         requestToken
                     )
                     .ConfigureAwait(false);
-                initial = false;
             }
 
             void ValidateAdmissionWrite()
@@ -742,6 +788,110 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         }
     }
 
+    private async Task<string> WaitForAdmissionTicketAsync(
+        long sentTicketVersion,
+        string? rejectedTicket,
+        (IZlinkStreamConnection Transport, Task<ZlinkStreamError> Ended) connection,
+        TimeSpan deadline,
+        CancellationToken cancellationToken,
+        Action validateWrite
+    )
+    {
+        var waiter = _admissionQueue.Join(
+            connection.Ended,
+            sentTicketVersion,
+            rejectedTicket,
+            _requestClock.Now
+        );
+        try
+        {
+            while (true)
+            {
+                var work = _admissionQueue.Next(waiter, _requestClock.Now, out var register);
+                validateWrite();
+                if (work.Ticket is { } ticket)
+                    return ticket;
+
+                if (register)
+                {
+                    if (work.NotifyQueued)
+                        await _callbacks.NotifyAdmissionQueuedAsync().ConfigureAwait(false);
+
+                    var enqueue = _pending.Create(
+                        ZlinkStreamAdmissionQueue.EnqueueName,
+                        (registration, reply) =>
+                            _admissionQueue.OnResponseAsync(registration, waiter, reply)
+                    );
+                    var frame = _frameSender.BuildOutboundFrame(
+                        ZlinkStreamMessageKind.Request,
+                        ZlinkStreamAdmissionQueue.EnqueueName,
+                        new ZlinkStreamEncodedPayload(
+                            ZlinkStreamCodec.Json,
+                            new byte[] { (byte)'{', (byte)'}' }
+                        ),
+                        ZlinkStreamMetadata.Empty,
+                        compress: false,
+                        enqueue.RequestSeq,
+                        actorSlot: null
+                    ) with
+                    {
+                        ValidateWrite = validateWrite,
+                    };
+                    var transport = _lifecycle.RegisterRequest(enqueue, connection.Ended).Transport;
+                    if (
+                        !_admissionQueue.TryRegister(
+                            waiter,
+                            enqueue,
+                            _requestClock.Now,
+                            out var previous
+                        )
+                    )
+                    {
+                        _pending.Remove(enqueue.RequestSeq);
+                        continue;
+                    }
+                    RemoveRegistration(previous);
+                    try
+                    {
+                        await _oneWaySubmits
+                            .SubmitRequestAsync(transport, frame, cancellationToken, null)
+                            .WaitAsync(cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        _admissionQueue.Abandon(enqueue, _requestClock.Now);
+                        _pending.Remove(enqueue.RequestSeq);
+                        throw;
+                    }
+                    continue;
+                }
+
+                var wakeAt =
+                    work.RegisterAt is { } registerAt && registerAt < deadline
+                        ? registerAt
+                        : deadline;
+                await WaitForAdmissionWakeAsync(
+                        wakeAt,
+                        connection.Ended,
+                        cancellationToken,
+                        work.Changed
+                    )
+                    .ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            RemoveRegistration(_admissionQueue.Leave(waiter));
+        }
+
+        void RemoveRegistration(ZlinkStreamPendingRequests.PendingRequest? registration)
+        {
+            if (registration is not null)
+                _pending.Remove(registration.RequestSeq);
+        }
+    }
+
     private async Task WaitForAdmissionRetryAsync(
         TimeSpan retryAt,
         TimeSpan deadline,
@@ -750,25 +900,35 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
     )
     {
         var wakeAt = retryAt < deadline ? retryAt : deadline;
-        using var wait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        while (
-            !connectionEnded.IsCompleted
-            && wakeAt - _requestClock.Now is var remaining
-            && remaining > TimeSpan.Zero
-        )
-        {
-            var delay = _requestClock.DelayAsync(remaining, wait.Token);
-            if (await Task.WhenAny(delay, connectionEnded).ConfigureAwait(false) == connectionEnded)
-            {
-                wait.Cancel();
-                break;
-            }
-            await delay.ConfigureAwait(false);
-        }
+        while (!connectionEnded.IsCompleted && _requestClock.Now < wakeAt)
+            await WaitForAdmissionWakeAsync(wakeAt, connectionEnded, cancellationToken)
+                .ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         if (connectionEnded.IsCompleted)
             throw new ZlinkStreamException(await connectionEnded.ConfigureAwait(false));
         EnsureBeforeDeadline(_requestClock.Now, deadline);
+    }
+
+    private async Task WaitForAdmissionWakeAsync(
+        TimeSpan wakeAt,
+        Task<ZlinkStreamError> connectionEnded,
+        CancellationToken cancellationToken,
+        Task? queueProgress = null
+    )
+    {
+        var remaining = wakeAt - _requestClock.Now;
+        if (remaining <= TimeSpan.Zero)
+            return;
+
+        using var wait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var delay = _requestClock.DelayAsync(remaining, wait.Token);
+        var completed = queueProgress is null
+            ? await Task.WhenAny(delay, connectionEnded).ConfigureAwait(false)
+            : await Task.WhenAny(delay, connectionEnded, queueProgress).ConfigureAwait(false);
+        if (completed == delay)
+            await delay.ConfigureAwait(false);
+        else
+            wait.Cancel();
     }
 
     private static void EnsureBeforeDeadline(TimeSpan now, TimeSpan deadline)

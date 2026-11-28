@@ -55,6 +55,9 @@ Runtime route cache는 [authority](../00-foundation/02-glossary.ko.md#authority)
 User Spot에 membership을 추가하는 transaction은 same-node와 cross-node 모두 대상 Spot authority의
 SpotId·`ObjectGeneration`·`StoreVersion`과 그 authority에 기록된 owner lease의 유효성을 commit 조건으로
 검사한다. Application의 Join 승인이나 local 활성 Spot 확인으로 이 조건을 대신하지 않는다.
+Relocation aggregate commit이 그 Spot authority를 같은 commit으로 함께 옮기면, "그 authority에 기록된 owner
+lease"는 이 commit이 기록하는 target owner lease다. 함께 옮겨지지 않는 Spot이면 현재 기록된 lease다. 이 lease
+조건은 membership 추가의 조건이며, commit 자체의 target liveness 검증이 아니다([Location runtime §9.1](../05-location-relocation/01-location-runtime.ko.md#91-복원-데이터가-공식-데이터가-되는-시점)).
 
 Object Client 또는 Server role은 Location Store가 필수다. Store가 없으면 startup에서 거부하며 hidden local
 Store, runtime-local object manager와 같은 이름의 축소된 의미를 만들지 않는다. Object role이 `None`인 manual
@@ -490,7 +493,7 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    state와 기존 queue를 복원하지만 아직 application 작업을 실행하지 않는다.
 5. Source의 ingress hold와 boundary 전 relay는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 순서를 따른다. Target은 Join 승인 때 등록한 temporary queue를 사용한다.
 6. Cutover 검증 뒤 target의 owner·membership·capacity·generation CAS는 [공통 relocation §4.4–§4.5](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. Join membership 변경은 이 CAS에 포함한다.
-7. CAS 뒤 queue 병합과 regular route 전환은 [공통 relocation §4.6](../05-location-relocation/04-relocation-flow.ko.md#46-target은-기존-작업부터-점진적으로-queue를-연다)을 따른다. Target Spot의 `OnJoinedActor`를 호출하고 source Spot에 `OnLeaveActor`를 one-way로 보낸 뒤 Actor의 Join completion callback을 끝내고 dispatch를 연다. Target은 authority의 relocation 기록을 [Location runtime §9.3](../05-location-relocation/01-location-runtime.ko.md#93-source가-바뀐-뒤-끝난-request를-처리한다)의 완료 조건이 충족된 뒤 steady로 정규화한다. 수락한 request가 없으면 Join completion callback 전에 정규화하고, 있으면 dispatch를 연 뒤 그 request의 완료 결과가 모두 전달된 다음(`pendingDeliveries`가 0) 정규화한다. Join completion callback과 dispatch 개방은 정규화를 기다리지 않는다.
+7. CAS 뒤 queue 병합과 regular route 전환은 [공통 relocation §4.6](../05-location-relocation/04-relocation-flow.ko.md#46-target은-기존-작업부터-점진적으로-queue를-연다)을 따른다. Target Spot의 `OnJoinedActor`를 호출하고 source Spot에 `OnLeaveActor`를 one-way로 보낸 뒤 Actor의 Join completion callback을 끝내고 dispatch를 연다. Target은 authority의 relocation 기록을 [Location runtime §9.3](../05-location-relocation/01-location-runtime.ko.md#93-source가-바뀐-뒤-끝난-request를-처리한다)의 완료 조건이 충족된 뒤 steady로 정규화한다. 수락한 request가 없으면 Join completion callback 전에 정규화하고, 있으면 dispatch를 연 뒤 그 request의 완료 결과가 모두 전달된 다음(`pendingDeliveries`가 0) 정규화한다. 수락한 request가 있을 때 Join completion callback과 dispatch 개방은 그 정규화를 기다리지 않는다.
 8. Actor가 Session에 bind되어 있으면 target runtime은 CAS와 queue 개방 뒤 command 44
    `sessionRelocationRoute` commit을 Session owner에 one-way로 제출한다. Command 구성과 Session
    owner의 검증·route 적용·held message·seal·timeout 처리는
