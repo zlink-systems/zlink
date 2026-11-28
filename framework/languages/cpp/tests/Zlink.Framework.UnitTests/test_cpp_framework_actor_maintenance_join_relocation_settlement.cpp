@@ -599,6 +599,9 @@ void settlement_after_target_destroy (bool drain)
         const auto *failed = std::get_if<fw::actor_join_failed_t> (&evidence.completions[index]);
         ASSERT_NE (failed, nullptr);
         EXPECT_EQ (failed->error_kind, fw::framework_error_kind_t::unavailable);
+        const auto &accepted = std::get<fw::actor_join_accepted_t> (evidence.completions.front ());
+        EXPECT_EQ ((std::pair{failed->operation_id_high, failed->operation_id_low}),
+                   (std::pair{accepted.operation_id_high, accepted.operation_id_low}));
         if (drain_log) {
             ASSERT_EQ (drain_log->fields.size (), 2u);
             EXPECT_EQ (drain_log->fields[0].value, "1");

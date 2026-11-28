@@ -267,6 +267,7 @@ std::uint64_t make_lifecycle_generation ()
                         ^ static_cast<std::uint64_t> (std::random_device{}());
     const auto time =
       static_cast<std::uint64_t> (std::chrono::steady_clock::now ().time_since_epoch ().count ());
+    // Deferred Join completion IDs reserve bit 63, so generated MeshNode generations fit in 63 bits.
     auto value = (random ^ time ^ counter.fetch_add (1, std::memory_order_relaxed))
                  & static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ());
     return value == 0 ? 1 : value;
@@ -3529,6 +3530,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
                     source->source_spot);
                   detail::observe_task_terminal (
                     delivery, [failures] (const result_t<result_t<void>> &result) {
+                        // Delivery failure can fail app.run(). The Spot drain warning only logs diagnostics.
                         if (auto failure =
                               result ? result.value ().exception () : result.exception ())
                             failures->report (std::move (failure));
