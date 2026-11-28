@@ -75,6 +75,7 @@ Options:
   --output PATH         Tee final rendered output to a file.
   --runs N              Iterations per configuration (default: 1).
   --duration N          Override multi duration seconds (default: 5).
+  --latency-duration N  Latency seconds (positive integer; default: --duration).
   --msg-sizes LIST      Comma-separated sizes.
   --transports LIST     Comma-separated transports (default: policy transport set).
   --clients N           Override number of client sockets per pattern (default: 100).
@@ -101,7 +102,8 @@ Options:
                        Override READY wait timeout.
   --connect-ready-timeout-ms N
                        Override connection-ready wait timeout.
-  --monitor-hwm N       Override PERF_MULTI_MONITOR_HWM (default: 4096000).
+  --monitor-hwm-bytes BYTES
+                       Override PERF_MULTI_MONITOR_HWM_BYTES (default: 4096000).
   --server-shutdown-timeout-ms N
                        Override graceful server shutdown wait.
   --server-bind-port N Override benchmark bind port (default: 0 = auto).
@@ -149,17 +151,20 @@ async function main() {
     clients: defaultClientsForPattern('DEALER_DEALER')
   });
 
+  options.monitorHwm = resolveMultiMonitorHwm(process.env, options.monitorHwm);
   if (options.helpRequested) {
     usage();
     return;
   }
 
-  if (options.monitorHwm !== undefined
-      && (!Number.isSafeInteger(options.monitorHwm) || options.monitorHwm < 0)) {
-    throw new Error('--monitor-hwm must be a nonnegative safe integer');
+  const latencyDuration = options.latencyDuration
+    ?? (process.env.PERF_MULTI_LATENCY_DURATION_SECONDS || String(options.duration));
+  if (!/^[0-9]+$/.test(latencyDuration) || !/[1-9]/.test(latencyDuration)) {
+    throw new Error('--latency-duration must be a positive integer');
   }
-  options.monitorHwm = options.monitorHwm ?? resolveMultiMonitorHwm();
-  process.env.PERF_MULTI_MONITOR_HWM = String(options.monitorHwm);
+  options.latencyDuration = latencyDuration;
+  process.env.PERF_MULTI_LATENCY_DURATION_SECONDS = latencyDuration;
+  process.env.PERF_MULTI_MONITOR_HWM_BYTES = String(options.monitorHwm);
 
   const patternNames = resolveMultiPatternNames(options.pattern);
   const defaultMsgSizes = defaultMultiMsgSizes(patternNames, options.msgSizesExplicit);
