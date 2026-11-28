@@ -18,6 +18,37 @@ static const int recheck_below_ms = 1;
 static const int max_wait_ms = 50;
 static const uint64_t ns_per_ms = 1000000ULL;
 
+static const size_t max_burst_per_sender = 64;
+
+// Keep the current burst across poll turns until it fills or the sender yields.
+class sender_rotation_t
+{
+  public:
+    explicit sender_rotation_t (size_t sender_count) : _sender_count (sender_count) {}
+
+    size_t index () const { return _index; }
+
+    void advance ()
+    {
+        if (++_index == _sender_count)
+            _index = 0;
+        _accepted = 0;
+    }
+
+    bool accepted ()
+    {
+        if (++_accepted < max_burst_per_sender)
+            return false;
+        advance ();
+        return true;
+    }
+
+  private:
+    const size_t _sender_count;
+    size_t _index = 0;
+    size_t _accepted = 0;
+};
+
 inline bool is_paced_receive_phase (uint8_t phase)
 {
     return phase == perf_multi_metric::phase_warmup || phase == perf_multi_metric::phase_latency;

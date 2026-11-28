@@ -823,14 +823,15 @@ inline bool stamp_metric_payload (std::vector<char> &payload,
                                   uint32_t run_id,
                                   perf_multi_metric::phase_t phase,
                                   size_t msg_size,
-                                  uint64_t seq)
+                                  uint64_t seq,
+                                  uint64_t sent_ns)
 {
     if (payload_size < perf_multi_metric::header_size () || payload_size > payload.size ()) {
         return false;
     }
 
     return perf_multi_metric::stamp_payload (payload.data (), payload_size, run_id, phase, msg_size,
-                                             seq, perf_multi_metric::now_ns ());
+                                             seq, sent_ns);
 }
 
 inline size_t metric_capture_bytes ()
@@ -980,7 +981,7 @@ inline bool run_echo_window_round_robin (
     double lat_sum_local = 0.0;
     long lat_count_local = 0;
     bench_latency_sampler_t lat_samples;
-    size_t rr = 0;
+    perf_multi_measurement::sender_rotation_t senders (sockets.size ());
     uint64_t sequence = 1;
     uint64_t accepted = 0;
     const uint64_t latency_epoch = schedule ? schedule->epoch_ns : 0;
@@ -1091,9 +1092,12 @@ inline bool run_echo_window_round_robin (
     while (std::chrono::steady_clock::now () < deadline && !fatal_error) {
         bool submitted = false;
         if (allow_send) {
-            const size_t send_start_rr = rr;
-            for (size_t attempts = 0; attempts < sockets.size (); ++attempts) {
-                const size_t idx = (send_start_rr + attempts) % sockets.size ();
+            for (size_t visited = 0; visited < sockets.size ();) {
+                const uint64_t now_ns = perf_multi_metric::now_ns ();
+                if (now_ns >= acceptance_deadline_ns || (schedule && !schedule->due (now_ns)))
+                    break;
+
+                const size_t idx = senders.index ();
                 send_wait_slot_t &slot = tracker.slots[idx];
                 if (slot.retained) {
                     // A deferred retry remains ready after WRITABLE is consumed.
@@ -1104,15 +1108,15 @@ inline bool run_echo_window_round_robin (
                         fatal_error = true;
                         break;
                     }
+                    senders.advance ();
+                    ++visited;
                     continue;
                 }
-                if (schedule && !schedule->due (perf_multi_metric::now_ns ()))
-                    break;
 
                 std::vector<char> &send_payload =
                   per_socket_payload ? socket_payloads[idx] : payload;
                 if (!stamp_metric_payload (send_payload, payload_size, run_id, phase,
-                                           expected_msg_size, sequence)) {
+                                           expected_msg_size, sequence, now_ns)) {
                     fatal_error = true;
                     break;
                 }
@@ -1120,13 +1124,15 @@ inline bool run_echo_window_round_robin (
                 const send_status_t send_rc = submit_echo_send (
                   &slot, target_rid_ptr, send_payload, payload_size, client_router_send);
                 if (send_rc == send_ok) {
-                    const uint64_t now_ns = perf_multi_metric::now_ns ();
-                    if (now_ns < acceptance_deadline_ns)
+                    const uint64_t accepted_ns = perf_multi_metric::now_ns ();
+                    if (accepted_ns < acceptance_deadline_ns)
                         ++accepted;
                     if (schedule)
-                        schedule->accepted (now_ns);
+                        schedule->accepted (accepted_ns);
                     ++sequence;
                     submitted = true;
+                    if (senders.accepted ())
+                        ++visited;
                     continue;
                 }
                 if (send_rc == send_blocked) {
@@ -1144,6 +1150,8 @@ inline bool run_echo_window_round_robin (
                                   << static_cast<unsigned int> (phase) << " idx=" << idx
                                   << " errno=" << zlink_errno () << std::endl;
                     }
+                    senders.advance ();
+                    ++visited;
                     continue;
                 }
 
@@ -1159,7 +1167,6 @@ inline bool run_echo_window_round_robin (
 
         if (fatal_error)
             break;
-        rr = (rr + 1) % sockets.size ();
 
         // Wait on the existing poller until the next absolute send deadline;
         // deriving it from epoch + k/rate avoids drift from previous wakeups.

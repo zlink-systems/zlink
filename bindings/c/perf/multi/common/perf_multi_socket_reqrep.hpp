@@ -610,7 +610,7 @@ inline bool run_measurement_window (const endpoint_config_t &config,
     for (size_t i = 0; i < state->slots.size (); ++i)
         state->slots[i].next_seq = 1;
 
-    size_t submit_cursor = 0;
+    perf_multi_measurement::sender_rotation_t senders (state->slots.size ());
     const size_t submit_count =
       request_submit_progress_quantum (msg_size, state->slots.size (),
                                         websocket_transport);
@@ -625,10 +625,10 @@ inline bool run_measurement_window (const endpoint_config_t &config,
     while (std::chrono::steady_clock::now () < deadline && !state->fatal) {
         bool submitted = false;
         for (size_t offset = 0; offset < submit_count; ++offset) {
-            const size_t i = (submit_cursor + offset) % state->slots.size ();
-            client_slot_t &slot = state->slots[i];
             if (schedule && !schedule->due (perf_multi_metric::now_ns ()))
                 break;
+            client_slot_t &slot = state->slots[senders.index ()];
+            senders.advance ();
             bool blocked = false;
             if (!submit_request (config, &slot, target_rid_ptr, run_id, msg_size,
                                  request_timeout_ms, &blocked)) {
@@ -638,7 +638,6 @@ inline bool run_measurement_window (const endpoint_config_t &config,
             if (!blocked)
                 submitted = true;
         }
-        submit_cursor = (submit_cursor + submit_count) % state->slots.size ();
         if (state->fatal)
             break;
         // Keep the next send deadline absolute (epoch + k/rate) so poll
