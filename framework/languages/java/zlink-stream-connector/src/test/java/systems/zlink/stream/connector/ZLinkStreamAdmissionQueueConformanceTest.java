@@ -11,11 +11,10 @@ import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
 
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.testsupport.ZLinkConformanceFixtures;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -48,20 +47,10 @@ final class ZLinkStreamAdmissionQueueConformanceTest {
 
     @TestFactory
     Stream<DynamicTest> queueFixture() throws Exception {
-        Path root = Path.of("").toAbsolutePath();
-        while (root != null
-                && !Files.isRegularFile(
-                        root.resolve(
-                                "framework/runtime/conformance/login-admission-queue-v1.json"))) {
-            root = root.getParent();
-        }
-        assertNotNull(root, "login admission queue fixture not found");
-        var fixture =
-                JSON.readTree(
-                        root.resolve("framework/runtime/conformance/login-admission-queue-v1.json")
-                                .toFile());
-        assertEquals(11, fixture.required("connectorScenarios").size());
-        return StreamSupport.stream(fixture.required("connectorScenarios").spliterator(), false)
+        var fixture = ZLinkConformanceFixtures.file("login-admission-queue-v1.json");
+        var scenarios = JSON.readTree(fixture.toFile()).required("connectorScenarios");
+        assertEquals(11, scenarios.size());
+        return StreamSupport.stream(scenarios.spliterator(), false)
                 .map(
                         scenario ->
                                 DynamicTest.dynamicTest(

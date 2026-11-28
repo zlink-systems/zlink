@@ -9,6 +9,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
+import systems.zlink.framework.monitoring.ZLinkPeerState;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
@@ -17,6 +18,7 @@ import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkStreamError;
+import systems.zlink.framework.testsupport.ZLinkStatusAwait;
 import systems.zlink.stream.connector.ZLinkStreamConnector;
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory;
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions;
@@ -118,18 +120,20 @@ final class AdmissionQueueGlobalLimitIntegrationTest {
 
     private static void awaitPeers(ZLinkFrameworkRuntime runtime, String peerRid) throws Exception {
         RoutingId rid = RoutingId.from(peerRid);
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (runtime.routeMeshRuntime().snapshot("game").peers().stream()
-                .noneMatch(
-                        peer ->
-                                peer.nodeRid().equals(rid)
-                                        && peer.state()
-                                                == systems.zlink.framework.monitoring.ZLinkPeerState
-                                                        .READY)) {
-            if (System.nanoTime() > deadline) {
-                throw new java.util.concurrent.TimeoutException("peer never became ready");
-            }
-            Thread.sleep(5);
+        var ready =
+                ZLinkStatusAwait.matching(
+                        runtime.routeMeshRuntime().observe("game", 1),
+                        snapshot ->
+                                snapshot.peers().stream()
+                                        .anyMatch(
+                                                peer ->
+                                                        peer.nodeRid().equals(rid)
+                                                                && peer.state()
+                                                                        == ZLinkPeerState.READY));
+        try {
+            ready.get(10, TimeUnit.SECONDS);
+        } finally {
+            ready.cancel(false);
         }
     }
 

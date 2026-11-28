@@ -170,8 +170,12 @@ public final class ZLinkAdmissionQueueMessages {
             } else if (kind.equals(TICKET)) {
                 required(ticket, "ticket");
                 required(expiresInMs, "expiresInMs");
-                if (ticket.length() != 66 || !B64.matcher(ticket).matches()) {
-                    throw new IllegalArgumentException("ticket must be 66 base64url characters");
+                if (ticket.length() != ZLinkAdmissionTickets.ENCODED_LENGTH
+                        || !B64.matcher(ticket).matches()) {
+                    throw new IllegalArgumentException(
+                            "ticket must be "
+                                    + ZLinkAdmissionTickets.ENCODED_LENGTH
+                                    + " base64url characters");
                 }
             } else {
                 throw new IllegalArgumentException("kind must be position or ticket");

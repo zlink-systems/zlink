@@ -19,7 +19,7 @@ final class ZLinkAdmissionTickets {
     private static final byte VERSION = 1;
     private static final int SIGNATURE_OFFSET = Byte.BYTES + 2 * Long.BYTES;
     private static final int TICKET_BYTES = SIGNATURE_OFFSET + 32;
-    private static final int ENCODED_LENGTH = 66;
+    static final int ENCODED_LENGTH = 66;
     private static final long CLOCK_SKEW_MS = 2_000;
     private static final Base64.Decoder DECODER = Base64.getUrlDecoder();
     private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();

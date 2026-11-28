@@ -107,6 +107,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private static final int EXECUTOR_TERMINATION_ATTEMPTS = 2;
     private static final int RETIRED_SESSION_ADMISSION_LIMIT = 4096;
     private static final long EXECUTOR_TERMINATION_WAIT_SECONDS = 5;
+    private static final long REPORT_PERIOD_SECONDS = 1;
     private static final Duration PHYSICAL_DISCONNECT_TIMEOUT = Duration.ofSeconds(5);
     private static final Logger LOGGER = Logger.getLogger(ZLinkStreamRuntime.class.getName());
     private static final ZLinkStreamHeader SESSION_CLOSING_HEADER =
@@ -659,8 +660,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     }
                 },
                 0,
-                1,
-                java.util.concurrent.TimeUnit.SECONDS);
+                REPORT_PERIOD_SECONDS,
+                TimeUnit.SECONDS);
     }
 
     private void sendAdmissionPush(ZLinkAdmissionQueueMessages.Delivery push) {
@@ -1787,8 +1788,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkStreamAuthenticationAdmission.Lease lease,
             long permitId) {
         var queue = admissionQueue;
-        Runnable releasePermit =
-                permitId == 0 || queue == null ? () -> {} : () -> queue.releasePermit(permitId);
+        Runnable releasePermit = queue == null ? () -> {} : () -> queue.releasePermit(permitId);
         ZLinkStreamSessionContextState authenticationContext = null;
         try {
             SessionState state =

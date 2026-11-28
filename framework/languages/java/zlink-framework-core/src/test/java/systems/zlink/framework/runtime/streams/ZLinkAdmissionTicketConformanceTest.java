@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -12,29 +11,12 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Base64;
 import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
 
 final class ZLinkAdmissionTicketConformanceTest {
     static Stream<Arguments> ticketVectors() throws Exception {
-        for (Path directory = Path.of("").toAbsolutePath();
-                directory != null;
-                directory = directory.getParent()) {
-            var fixture =
-                    directory.resolve(
-                            "framework/runtime/conformance/login-admission-queue-v1.json");
-            if (Files.isRegularFile(fixture)) {
-                var vectors =
-                        new ObjectMapper().readTree(fixture.toFile()).required("ticketVectors");
-                assertEquals(12, vectors.size());
-                return StreamSupport.stream(vectors.spliterator(), false)
-                        .map(vector -> Arguments.of(vector.required("name").asText(), vector));
-            }
-        }
-        throw new AssertionError("login-admission-queue-v1.json was not found");
+        return AdmissionQueueFixture.scenarios("ticketVectors", 12);
     }
 
     @ParameterizedTest(name = "{0}")

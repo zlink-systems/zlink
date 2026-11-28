@@ -20,9 +20,8 @@ import systems.zlink.framework.runtime.streams.ZLinkAdmissionQueueMessages.Enque
 import systems.zlink.framework.runtime.streams.ZLinkAdmissionQueueMessages.NodeReport;
 import systems.zlink.framework.runtime.streams.ZLinkAdmissionQueueMessages.NodeReportReply;
 import systems.zlink.framework.runtime.streams.ZLinkAdmissionQueueMessages.ReleasePermit;
+import systems.zlink.framework.testsupport.ZLinkConformanceFixtures;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Map;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -43,17 +42,8 @@ final class ZLinkAdmissionQueueMessagesConformanceTest {
                     "$zlink.admission-queue.admit-permit", AdmitPermitReply.class);
 
     private static JsonNode fixture() throws Exception {
-        for (Path directory = Path.of("").toAbsolutePath();
-                directory != null;
-                directory = directory.getParent()) {
-            var file =
-                    directory.resolve(
-                            "framework/runtime/conformance/admission-queue-messages-v1.json");
-            if (Files.isRegularFile(file)) {
-                return MAPPER.readTree(file.toFile());
-            }
-        }
-        throw new AssertionError("admission-queue-messages-v1.json was not found");
+        var fixture = ZLinkConformanceFixtures.file("admission-queue-messages-v1.json");
+        return MAPPER.readTree(fixture.toFile());
     }
 
     static Stream<Arguments> messages() throws Exception {

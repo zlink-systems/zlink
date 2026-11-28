@@ -7,9 +7,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.params.provider.Arguments;
 
+import systems.zlink.framework.testsupport.ZLinkConformanceFixtures;
+
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Base64;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -21,22 +21,11 @@ final class AdmissionQueueFixture {
     private AdmissionQueueFixture() {}
 
     static Stream<Arguments> scenarios(String group, int expectedCount) throws Exception {
-        for (Path directory = Path.of("").toAbsolutePath();
-                directory != null;
-                directory = directory.getParent()) {
-            var fixture =
-                    directory.resolve(
-                            "framework/runtime/conformance/login-admission-queue-v1.json");
-            if (Files.isRegularFile(fixture)) {
-                var scenarios = new ObjectMapper().readTree(fixture.toFile()).required(group);
-                assertEquals(expectedCount, scenarios.size());
-                return StreamSupport.stream(scenarios.spliterator(), false)
-                        .map(
-                                scenario ->
-                                        Arguments.of(scenario.required("name").asText(), scenario));
-            }
-        }
-        throw new AssertionError("login-admission-queue-v1.json was not found");
+        var fixture = ZLinkConformanceFixtures.file("login-admission-queue-v1.json");
+        var scenarios = new ObjectMapper().readTree(fixture.toFile()).required(group);
+        assertEquals(expectedCount, scenarios.size());
+        return StreamSupport.stream(scenarios.spliterator(), false)
+                .map(scenario -> Arguments.of(scenario.required("name").asText(), scenario));
     }
 
     /** Fixture names are text; the runtime identities are their UTF-8 bytes, base64url. */

@@ -30,6 +30,10 @@ final class ZLinkStreamAdmissionQueue {
     static final String TICKET = "$zlink.admission.ticket";
     static final String REQUIRED = "$zlink.admission.queueRequired";
 
+    // Matches ZLinkAdmissionTickets.ENCODED_LENGTH in Framework core.
+    private static final int TICKET_ENCODED_LENGTH = 66;
+    private static final long REREGISTRATION_SILENCE_SECONDS = 15;
+
     private static final ObjectMapper JSON =
             new ObjectMapper()
                     .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
@@ -102,7 +106,11 @@ final class ZLinkStreamAdmissionQueue {
         waiting.cancelTimer();
         var silence = new Silence();
         waiting.silence = silence;
-        silence.task = scheduler.schedule(() -> register(waiting, silence), 15, TimeUnit.SECONDS);
+        silence.task =
+                scheduler.schedule(
+                        () -> register(waiting, silence),
+                        REREGISTRATION_SILENCE_SECONDS,
+                        TimeUnit.SECONDS);
     }
 
     boolean response(
@@ -253,7 +261,7 @@ final class ZLinkStreamAdmissionQueue {
     }
 
     private static boolean validTicket(String value) {
-        if (value.length() != 66) {
+        if (value.length() != TICKET_ENCODED_LENGTH) {
             return false;
         }
         try {

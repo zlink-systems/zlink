@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -16,31 +15,12 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.streams.ZLinkSession;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Base64;
 import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
 
 final class ZLinkAdmissionQueueStartupConformanceTest {
     static Stream<Arguments> startupScenarios() throws Exception {
-        for (Path directory = Path.of("").toAbsolutePath();
-                directory != null;
-                directory = directory.getParent()) {
-            var fixture =
-                    directory.resolve(
-                            "framework/runtime/conformance/login-admission-queue-v1.json");
-            if (Files.isRegularFile(fixture)) {
-                var scenarios =
-                        new ObjectMapper().readTree(fixture.toFile()).required("startupScenarios");
-                assertEquals(7, scenarios.size());
-                return StreamSupport.stream(scenarios.spliterator(), false)
-                        .map(
-                                scenario ->
-                                        Arguments.of(scenario.required("name").asText(), scenario));
-            }
-        }
-        throw new AssertionError("login-admission-queue-v1.json was not found");
+        return AdmissionQueueFixture.scenarios("startupScenarios", 7);
     }
 
     @ParameterizedTest(name = "{0}")
