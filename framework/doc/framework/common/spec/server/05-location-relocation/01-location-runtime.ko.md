@@ -1636,7 +1636,9 @@ Page 분할은 저장 bytes만으로 정해서, 같은 목록은 어느 언어�
 - Authority의 `aggregate.relocation.sourceInventorySha256`도 seal 때 고정한 이동 대상 목록 root의
   `digestSha256`과 같은 값이다. 항목의 `expectedStoreVersion`은 준비 때 읽은 값이므로 이 값은 `preparing`
   뒤에 바뀌지 않는다. Aggregate 기록이 없는 Actor 하나의 이동은 그 Actor 하나를 항목으로 가진 목록의
-  root `digestSha256`을 쓴다.
+  root `digestSha256`을 쓴다. 이 이동은 key에 쓸 `aggregateId`가 없으므로 목록 root·page·participant
+  record를 저장하지 않는다. Target은 읽은 authority record로 한 항목 목록을 만들어 root `digestSha256`을
+  계산하고 `sourceInventorySha256`과 비교하며, Store에서 목록 record를 읽지 않는다.
 
 목록 root, page와 participant 변경 bytes record는 한 번 쓰면 바꾸지 않는다. 같은
 `(aggregateId, aggregateGeneration)`의 record를 다른 내용으로 다시 쓰지 않으며, 다른 내용이 필요하면
