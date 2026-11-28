@@ -24,8 +24,7 @@ type Received struct {
 	parts           []*Message
 	nativeParts     []C.zlink_msg_t
 	token           ReplyToken
-	reply           func([]*Message) error
-	send            func(context.Context, []sendBuilderPart) (SendSubmission, error)
+	source          *socketCore
 	routeGeneration uint64
 }
 
@@ -57,28 +56,29 @@ func (r *Received) beginReceive() []*Message {
 			_ = part.Close()
 		}
 	}
+	r.clearRecord()
+	return previous
+}
+
+func (r *Received) clearRecord() {
 	r.routingID = RoutingID{}
 	r.parts = nil
 	r.token = ReplyToken{}
-	r.reply = nil
-	r.send = nil
+	r.source = nil
 	r.routeGeneration = 0
-	return previous
 }
 
 func (r *Received) replace(
 	routingID RoutingID,
 	parts []*Message,
 	token ReplyToken,
-	reply func([]*Message) error,
-	send func(context.Context, []sendBuilderPart) (SendSubmission, error),
+	source *socketCore,
 	routeGeneration uint64,
 ) {
 	r.routingID = routingID
 	r.parts = parts
 	r.token = token
-	r.reply = reply
-	r.send = send
+	r.source = source
 	r.routeGeneration = routeGeneration
 }
 
@@ -131,13 +131,12 @@ func (r *Received) Reply() ReplyOp {
 			return newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
 		})
 	}
-	reply := r.reply
-	token := r.token
+	source, rid, token := r.source, r.routingID, r.token
 	return newReplyBuilder(func(parts []*Message) error {
-		if reply == nil || token.owner == nil || token.value == 0 {
+		if source == nil || token.owner == nil || token.value == 0 {
 			return newSubmitError(SubmitInvalidState, int(C.EBUSY))
 		}
-		return reply(parts)
+		return source.submitReply(rid, token.value, parts...)
 	})
 }
 
@@ -149,12 +148,12 @@ func (r *Received) Send() SendOp {
 			return nil, newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
 		})
 	}
-	send := r.send
+	source, rid := r.source, r.routingID
 	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) (SendSubmission, error) {
-		if send == nil {
+		if source == nil || rid.Size() == 0 {
 			return nil, newSubmitError(SubmitInvalidArgument, int(C.EINVAL))
 		}
-		return send(ctx, parts)
+		return submitManagedSend(ctx, source, &rid, parts)
 	})
 }
 
@@ -171,11 +170,6 @@ func (r *Received) Close() error {
 			first = err
 		}
 	}
-	r.routingID = RoutingID{}
-	r.parts = nil
-	r.token = ReplyToken{}
-	r.reply = nil
-	r.send = nil
-	r.routeGeneration = 0
+	r.clearRecord()
 	return first
 }
