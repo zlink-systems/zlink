@@ -16,7 +16,7 @@ impl std::panic::RefUnwindSafe for PairSocket {}
 
 impl PairSocket {
     /// Begins a multipart send: add parts on the returned builder, then submit.
-    /// A part is consumed on a successful submit (see [`SendOp`]).
+    /// A part moves into the builder and is consumed by submit whatever the result (see [`SendOp`]).
     pub fn send(&self) -> SendOp<Empty> {
         self.inner.socket_send_op()
     }

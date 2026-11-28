@@ -102,7 +102,8 @@ pub fn version() -> (i32, i32, i32) {
     CoreUtilities::version()
 }
 
-/// Reports whether Core supports the named capability.
+/// Reports whether Core supports the named capability. A name containing a NUL
+/// byte cannot name any capability, so it reports `false`.
 pub fn has(capability: &str) -> bool {
     CoreUtilities::has(capability)
 }

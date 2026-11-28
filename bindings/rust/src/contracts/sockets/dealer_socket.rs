@@ -16,7 +16,7 @@ impl std::panic::RefUnwindSafe for DealerSocket {}
 
 impl DealerSocket {
     /// Begins a multipart send: add parts on the returned builder, then submit.
-    /// A part is consumed on a successful submit (see [`SendOp`]).
+    /// A part moves into the builder and is consumed by submit whatever the result (see [`SendOp`]).
     pub fn send(&self) -> SendOp<Empty> {
         self.inner.dealer_send_op()
     }
@@ -30,7 +30,7 @@ impl DealerSocket {
     }
 
     /// Begins a request: add parts on the returned builder, then submit and
-    /// await a reply. Parts are consumed on a successful submit (see
+    /// await a reply. Parts move into the builder and are consumed by submit whatever the result (see
     /// [`SendOp`]).
     pub fn request(&self) -> RequestOp<Empty> {
         self.inner.dealer_request_op()

@@ -30,7 +30,7 @@ impl std::panic::RefUnwindSafe for RouterSocket {}
 
 impl RouterSocket {
     /// Begins a multipart send addressed to `target`: add parts on the returned
-    /// builder, then submit. A part is consumed on a successful submit (see
+    /// builder, then submit. A part moves into the builder and is consumed by submit whatever the result (see
     /// [`SendOp`]).
     pub fn send(&self, target: &RoutingId) -> SendOp<Empty> {
         let inner = &self.inner;
@@ -63,13 +63,13 @@ impl RouterSocket {
     }
 
     /// Begins a request addressed to peer `peer_rid`: add parts, then submit and
-    /// await a reply. Parts are consumed on a successful submit (see [`SendOp`]).
+    /// await a reply. Parts move into the builder and are consumed by submit whatever the result (see [`SendOp`]).
     pub fn request(&self, peer_rid: &RoutingId) -> RequestOp<Empty> {
         self.inner.router_request_op(*peer_rid)
     }
 
     /// Begins a reply to the request token from peer `rid`: add parts,
-    /// then submit. Parts are consumed on a successful submit (see [`SendOp`]).
+    /// then submit. Parts move into the builder and are consumed by submit whatever the result (see [`SendOp`]).
     pub fn reply(&self, rid: &RoutingId, reply_token: ReplyToken) -> ReplyOp<Empty> {
         let inner = &self.inner;
         crate::contracts::messaging::operations::ReplyOpStorage::router_reply_op(

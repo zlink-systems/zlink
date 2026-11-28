@@ -67,7 +67,7 @@ impl std::panic::RefUnwindSafe for StreamSocket {}
 
 impl StreamSocket {
     /// Begins a multipart send addressed to `target`: add parts on the returned
-    /// builder, then submit. A part is consumed on a successful submit (see
+    /// builder, then submit. A part moves into the builder and is consumed by submit whatever the result (see
     /// [`SendOp`]).
     pub fn send(&self, target: &RoutingId) -> SendOp<Empty> {
         let inner = &self.inner;

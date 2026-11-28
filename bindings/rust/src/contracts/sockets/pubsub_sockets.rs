@@ -37,7 +37,7 @@ define_pubsub_socket!(
 
 impl PubSocket {
     /// Begins publishing under `topic`: add parts on the returned builder, then
-    /// submit. A part is consumed on a successful submit (see [`crate::SendOp`]).
+    /// submit. A part moves into the builder and is consumed by submit whatever the result (see [`crate::SendOp`]).
     pub fn publish(&self, topic: &str) -> PublishOp<Empty> {
         self.inner.socket_publish_op(topic)
     }
@@ -93,7 +93,7 @@ impl SubSocket {
 
 impl XPubSocket {
     /// Begins publishing under `topic`: add parts on the returned builder, then
-    /// submit. A part is consumed on a successful submit (see [`crate::SendOp`]).
+    /// submit. A part moves into the builder and is consumed by submit whatever the result (see [`crate::SendOp`]).
     pub fn publish(&self, topic: &str) -> PublishOp<Empty> {
         self.inner.socket_publish_op(topic)
     }
