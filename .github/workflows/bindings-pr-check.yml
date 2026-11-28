@@ -83,7 +83,12 @@ jobs:
             "$rust" "$go" "$python" "$docs" >> "$GITHUB_OUTPUT"
 
   check:
-    name: Bindings ${{ matrix.name }}
+    # A Mergify batch also gets a draft PR whose pull_request run skips these
+    # jobs; the push run on the batch branch is the real check. A distinct name
+    # keeps that skipped run from shadowing a required check on the same SHA.
+    name: >-
+      Bindings ${{ matrix.name }}${{ startsWith(github.head_ref, 'mergify/merge-queue/')
+      && ' (queue draft PR)' || '' }}
     needs: changes
     runs-on: ubuntu-24.04
     strategy:
