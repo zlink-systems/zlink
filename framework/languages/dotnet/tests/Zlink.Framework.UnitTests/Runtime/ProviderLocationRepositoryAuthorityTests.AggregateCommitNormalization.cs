@@ -6,10 +6,12 @@ namespace Zlink.Framework.UnitTests;
 public sealed partial class ProviderLocationRepositoryAuthorityTests
 {
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task AggregateCommitNormalizationDistinguishesDeadlineFromCallerCancellation(
-        bool loseCommitReply
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    public async Task AggregateCommitDistinguishesInternalDeadlineFromCallerCancellation(
+        bool loseCommitReply,
+        bool stallBeforeConfirmation
     )
     {
         var fixture = await PrepareInventoryFixtureAsync(1);
@@ -32,7 +34,10 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             )
                 inspect.BeforeRead = key =>
                 {
-                    if (!key.Value.Contains(":inventory:", StringComparison.Ordinal))
+                    var shouldStall = stallBeforeConfirmation
+                        ? key == aggregateKey
+                        : key.Value.Contains(":inventory:", StringComparison.Ordinal);
+                    if (!shouldStall)
                         return Task.CompletedTask;
                     readStarted.TrySetResult();
                     return releaseRead.Task.WaitAsync(caller.Token);
