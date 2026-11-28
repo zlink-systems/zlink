@@ -125,6 +125,8 @@ step mkdir "$campaign"
 step mkdir -p "$campaign/home" "$campaign/tmp" "$campaign/cargo"
 step git clone --quiet --shared --single-branch --branch "$branch" -- "$repo" "$stage"
 step cp -a --reflink=auto /root/toolchains/cargo/registry "$campaign/cargo/"
+# NuGet restores offline from a copy of the local cache; the isolated HOME has no package source.
+step cp -a --reflink=auto /root/.nuget/packages "$campaign/nuget"
 if (( execute )); then
     [[ $(git -C "$stage" rev-parse HEAD) == "$head" ]] || fail "Source HEAD changed during staging"
     : > "$index"
