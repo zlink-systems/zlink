@@ -9,8 +9,8 @@ fn main() {
     let ctx = Context::new().expect("context creation failed");
     let endpoint = sample_support::tcp_endpoint();
 
-    let pub_sock = ctx.pub_socket().expect("pub socket failed");
-    let sub_sock = ctx.sub_socket().expect("sub socket failed");
+    let pub_sock = ctx.create_pub_socket().expect("pub socket failed");
+    let sub_sock = ctx.create_sub_socket().expect("sub socket failed");
 
     sub_sock
         .set_subscription("prices")
@@ -42,7 +42,7 @@ fn main() {
     assert_eq!(topic_msg.topic(), "prices");
     assert_eq!(topic_msg.parts()[0].as_str().unwrap(), "101.25");
     println!(
-        "[pubsub/recv] publish: \"{}/101.25\" → subscribe: \"{}/{}\"",
+        "[pubsub/recv] publish: \"{}/101.25\" -> subscribe: \"{}/{}\"",
         topic_msg.topic(),
         topic_msg.topic(),
         topic_msg.parts()[0].as_str().unwrap()

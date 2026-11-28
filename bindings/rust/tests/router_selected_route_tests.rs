@@ -19,7 +19,7 @@ fn tcp_endpoint() -> String {
 }
 
 fn make_router(ctx: &Context, name: &str) -> RouterSocket {
-    let router = ctx.router_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
     router.set_routing_id(&RoutingId::from(name)).unwrap();
     router.common_options().set_linger(0).unwrap();
     router
@@ -147,7 +147,7 @@ fn snapshot_pollroute_and_record_generation() {
     assert_eq!(received.route_generation(), selected);
 
     // A DEALER record carries no ROUTER route generation.
-    let dealer: DealerSocket = ctx.dealer_socket().unwrap();
+    let dealer: DealerSocket = ctx.create_dealer_socket().unwrap();
     dealer
         .set_routing_id(&RoutingId::from("route-dealer"))
         .unwrap();

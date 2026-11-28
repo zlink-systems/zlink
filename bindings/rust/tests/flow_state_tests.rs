@@ -29,7 +29,7 @@ fn receive_flow_state_enum_matches_c_abi_values() {
 #[test]
 fn dealer_accepts_receive_flow_state_and_is_idempotent() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.dealer_socket().unwrap();
+    let sock = ctx.create_dealer_socket().unwrap();
     let options = sock.common_options();
 
     options
@@ -50,7 +50,7 @@ fn dealer_accepts_receive_flow_state_and_is_idempotent() {
 #[test]
 fn router_accepts_receive_flow_state_and_is_idempotent() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.router_socket().unwrap();
+    let sock = ctx.create_router_socket().unwrap();
     let options = sock.common_options();
 
     options
@@ -74,7 +74,7 @@ fn router_accepts_receive_flow_state_and_is_idempotent() {
 #[test]
 fn pair_reports_not_supported() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     let err = sock
         .common_options()
         .set_receive_flow_state(ReceiveFlowState::Paused)
@@ -85,7 +85,7 @@ fn pair_reports_not_supported() {
 #[test]
 fn pub_reports_not_supported() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pub_socket().unwrap();
+    let sock = ctx.create_pub_socket().unwrap();
     let err = sock
         .common_options()
         .set_receive_flow_state(ReceiveFlowState::Paused)
@@ -96,7 +96,7 @@ fn pub_reports_not_supported() {
 #[test]
 fn sub_reports_not_supported() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.sub_socket().unwrap();
+    let sock = ctx.create_sub_socket().unwrap();
     let err = sock
         .common_options()
         .set_receive_flow_state(ReceiveFlowState::Paused)
@@ -107,7 +107,7 @@ fn sub_reports_not_supported() {
 #[test]
 fn xpub_reports_not_supported() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.xpub_socket().unwrap();
+    let sock = ctx.create_xpub_socket().unwrap();
     let err = sock
         .common_options()
         .set_receive_flow_state(ReceiveFlowState::Paused)
@@ -118,7 +118,7 @@ fn xpub_reports_not_supported() {
 #[test]
 fn xsub_reports_not_supported() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.xsub_socket().unwrap();
+    let sock = ctx.create_xsub_socket().unwrap();
     let err = sock
         .common_options()
         .set_receive_flow_state(ReceiveFlowState::Paused)
@@ -129,7 +129,7 @@ fn xsub_reports_not_supported() {
 #[test]
 fn stream_reports_not_supported() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.stream_socket().unwrap();
+    let sock = ctx.create_stream_socket().unwrap();
     let err = sock
         .common_options()
         .set_receive_flow_state(ReceiveFlowState::Paused)
@@ -144,7 +144,7 @@ fn stream_reports_not_supported() {
 #[test]
 fn closed_socket_reports_invalid_handle() {
     let ctx = Context::new().unwrap();
-    let mut sock = ctx.dealer_socket().unwrap();
+    let mut sock = ctx.create_dealer_socket().unwrap();
     sock.close().unwrap();
     let err = sock
         .common_options()
@@ -189,7 +189,7 @@ fn receive_flow_state_type_cannot_represent_an_out_of_range_value() {
 fn set_before_close_then_close_yields_only_expected_results() {
     for _ in 0..20 {
         let ctx = Context::new().unwrap();
-        let mut sock = ctx.router_socket().unwrap();
+        let mut sock = ctx.create_router_socket().unwrap();
         match sock
             .common_options()
             .set_receive_flow_state(ReceiveFlowState::Paused)
@@ -208,7 +208,7 @@ fn set_before_close_then_close_yields_only_expected_results() {
 fn close_then_set_yields_only_invalid_handle() {
     for _ in 0..20 {
         let ctx = Context::new().unwrap();
-        let mut sock = ctx.router_socket().unwrap();
+        let mut sock = ctx.create_router_socket().unwrap();
         sock.close().unwrap();
         let err = sock
             .common_options()
@@ -260,8 +260,8 @@ impl NoSendBypassFlowPause for zlink::RouterSocket {}
 #[test]
 fn dealer_and_router_have_no_flow_frame_or_pause_bypass_api() {
     let ctx = Context::new().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
-    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
 
     assert_eq!(dealer.recv_flow_frame(), "absent");
     assert_eq!(router.recv_flow_frame(), "absent");
@@ -278,7 +278,7 @@ fn dealer_and_router_have_no_flow_frame_or_pause_bypass_api() {
 #[test]
 fn existing_high_water_mark_options_are_unaffected() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     let options = sock.common_options();
     options.set_send_high_water_mark(250).unwrap();
     assert_eq!(options.send_high_water_mark().unwrap(), 250);

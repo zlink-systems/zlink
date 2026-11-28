@@ -20,8 +20,8 @@ fn await_send(
 #[test]
 fn sync_blocking_terminal_admits_a_send() {
     let ctx = Context::new().unwrap();
-    let receiver = ctx.pair_socket().unwrap();
-    let sender = ctx.pair_socket().unwrap();
+    let receiver = ctx.create_pair_socket().unwrap();
+    let sender = ctx.create_pair_socket().unwrap();
     receiver.bind("inproc://rust-sync-send-admit").unwrap();
     test_support::connect_pair_and_confirm(&receiver, &sender, || {
         sender.connect("inproc://rust-sync-send-admit").unwrap()
@@ -46,8 +46,8 @@ fn sync_blocking_terminal_admits_a_send() {
 #[test]
 fn async_terminal_still_completes_after_sync_terminal_is_added() {
     let ctx = Context::new().unwrap();
-    let receiver = ctx.pair_socket().unwrap();
-    let sender = ctx.pair_socket().unwrap();
+    let receiver = ctx.create_pair_socket().unwrap();
+    let sender = ctx.create_pair_socket().unwrap();
     receiver
         .bind("inproc://rust-async-send-regression")
         .unwrap();
@@ -71,7 +71,7 @@ fn async_terminal_still_completes_after_sync_terminal_is_added() {
 fn routed_send_to_missing_target_is_immediately_not_connected() {
     // ROUTER with mandatory=true, no connected peers
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
     router.bind("inproc://sf-router-mandatory").unwrap();
     router.router_options().set_mandatory(true).unwrap();
     let poller = Poller::new().unwrap();
@@ -88,8 +88,8 @@ fn routed_send_to_missing_target_is_immediately_not_connected() {
 #[test]
 fn router_request_to_a_dealer_is_immediately_not_admitted() {
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     let dealer_rid = RoutingId::from(b"request-rejecting-dealer");
     dealer.set_routing_id(&dealer_rid).unwrap();
     router.bind("inproc://sf-request-not-admitted").unwrap();
@@ -124,7 +124,7 @@ fn router_request_to_a_dealer_is_immediately_not_admitted() {
 fn blocking_publish_failure_surfaces_error() {
     // PUB with nodrop=true and send timeout, no subscribers
     let ctx = Context::new().unwrap();
-    let pub_sock = ctx.pub_socket().unwrap();
+    let pub_sock = ctx.create_pub_socket().unwrap();
     pub_sock.bind("inproc://sf-pub-nodrop").unwrap();
     // The socket default is lossy fanout, so NODROP must be set explicitly for
     // this scenario.
@@ -147,7 +147,7 @@ fn blocking_publish_failure_surfaces_error() {
 #[test]
 fn send_without_peer_keeps_only_a_payload_free_token_after_drop() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     sock.bind("inproc://sf-try-send-nr").unwrap();
     let _completion_driver = test_support::CompletionPollerDriver::new(&sock);
     // No peer connected: Core keeps the wait token and the Future retains the
@@ -167,7 +167,7 @@ fn send_without_peer_keeps_only_a_payload_free_token_after_drop() {
 #[test]
 fn try_publish_returns_explicit_outcome() {
     let ctx = Context::new().unwrap();
-    let pub_sock = ctx.pub_socket().unwrap();
+    let pub_sock = ctx.create_pub_socket().unwrap();
     pub_sock.bind("inproc://sf-try-pub-out").unwrap();
 
     let msg = Message::try_from(b"data").unwrap();
@@ -182,14 +182,14 @@ fn try_publish_returns_explicit_outcome() {
 fn try_publish_backpressure_or_not_ready() {
     // PUB socket with HWM=1, connected subscriber, fill queue
     let ctx = Context::new().unwrap();
-    let pub_sock = ctx.pub_socket().unwrap();
+    let pub_sock = ctx.create_pub_socket().unwrap();
     pub_sock
         .common_options()
         .set_send_high_water_mark(1)
         .unwrap();
     pub_sock.bind("inproc://sf-try-pub-bp").unwrap();
 
-    let sub_sock = ctx.sub_socket().unwrap();
+    let sub_sock = ctx.create_sub_socket().unwrap();
     sub_sock.connect("inproc://sf-try-pub-bp").unwrap();
     sub_sock.set_subscription("").unwrap();
     thread::sleep(Duration::from_millis(100));
@@ -218,7 +218,7 @@ fn try_send_non_eagain_error_not_swallowed() {
     // Verify that errors other than EAGAIN propagate as Err, not as
     // a SendResult variant. Close socket then send_no_wait_result → must error.
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     sock.bind("inproc://sf-try-send-non-eagain").unwrap();
 
     // Shutdown context to force ETERM on any subsequent send

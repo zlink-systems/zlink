@@ -6,7 +6,7 @@ use zlink::{Context, Received, RecvFlags, SubscriptionEvent, TopicMessage};
 #[test]
 fn eagain_returns_false_not_error() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     sock.bind("inproc://rf-eagain").unwrap();
 
     let mut received = Received::empty();
@@ -19,7 +19,7 @@ fn eagain_returns_false_not_error() {
 #[test]
 fn eagain_sub_returns_none() {
     let ctx = Context::new().unwrap();
-    let sub = ctx.sub_socket().unwrap();
+    let sub = ctx.create_sub_socket().unwrap();
     sub.bind("inproc://rf-sub-eagain-target").unwrap();
     sub.set_subscription("").unwrap();
 
@@ -31,7 +31,7 @@ fn eagain_sub_returns_none() {
 #[test]
 fn eagain_xpub_subscription_event_returns_none() {
     let ctx = Context::new().unwrap();
-    let xpub = ctx.xpub_socket().unwrap();
+    let xpub = ctx.create_xpub_socket().unwrap();
     xpub.bind("inproc://rf-xpub-eagain").unwrap();
 
     let mut event = SubscriptionEvent::empty();
@@ -44,7 +44,7 @@ fn direct_recv_error_not_hidden_as_empty() {
     // Verify that a non-EAGAIN recv error surfaces as Err, not Ok(None).
     // Shutdown the context → recv returns ETERM, which must be Err.
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     sock.bind("inproc://rf-recv-error-nothidden").unwrap();
 
     ctx.shutdown().unwrap();
@@ -61,9 +61,9 @@ fn direct_recv_error_not_hidden_as_empty() {
 #[test]
 fn reused_receive_preserves_parts_on_no_data_and_error() {
     let ctx = Context::new().unwrap();
-    let receiver = ctx.pair_socket().unwrap();
+    let receiver = ctx.create_pair_socket().unwrap();
     receiver.bind("inproc://rf-reused-parts").unwrap();
-    let sender = ctx.pair_socket().unwrap();
+    let sender = ctx.create_pair_socket().unwrap();
     sender.connect("inproc://rf-reused-parts").unwrap();
     let mut received = Received::empty();
 
@@ -98,9 +98,9 @@ fn reused_receive_preserves_parts_on_no_data_and_error() {
 #[test]
 fn reused_subscription_replaces_topic_and_truncates_parts() {
     let ctx = Context::new().unwrap();
-    let publisher = ctx.xpub_socket().unwrap();
+    let publisher = ctx.create_xpub_socket().unwrap();
     publisher.bind("inproc://rf-reused-topic").unwrap();
-    let subscriber = ctx.sub_socket().unwrap();
+    let subscriber = ctx.create_sub_socket().unwrap();
     subscriber.set_subscription("topic.").unwrap();
     subscriber.connect("inproc://rf-reused-topic").unwrap();
     let mut subscription = SubscriptionEvent::empty();

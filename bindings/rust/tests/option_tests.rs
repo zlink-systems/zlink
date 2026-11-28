@@ -67,7 +67,7 @@ fn context_core_hwm_budget_options_and_snapshot() {
 #[test]
 fn common_option_send_high_water_mark() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     let options = sock.common_options();
     options.set_send_high_water_mark(500).unwrap();
     assert_eq!(options.send_high_water_mark().unwrap(), 500);
@@ -76,7 +76,7 @@ fn common_option_send_high_water_mark() {
 #[test]
 fn common_option_receive_high_water_mark() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.dealer_socket().unwrap();
+    let sock = ctx.create_dealer_socket().unwrap();
     let options = sock.common_options();
     options.set_receive_high_water_mark(1500).unwrap();
     assert_eq!(options.receive_high_water_mark().unwrap(), 1500);
@@ -102,14 +102,14 @@ fn common_signed_millisecond_options_preserve_core_values() {
 #[test]
 fn common_option_linger_milliseconds() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     sock.common_options().set_linger(200).unwrap();
 }
 
 #[test]
 fn common_option_tcp_keepalive_boolean() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     // Boolean, not raw int
     sock.common_options().set_tcp_keepalive(true).unwrap();
 }
@@ -117,7 +117,7 @@ fn common_option_tcp_keepalive_boolean() {
 #[test]
 fn common_option_tcp_no_delay_boolean() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     sock.common_options().set_tcp_no_delay(true).unwrap();
 }
 
@@ -131,14 +131,14 @@ fn common_option_ipv6_boolean() {
 #[test]
 fn router_option_mandatory() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.router_socket().unwrap();
+    let sock = ctx.create_router_socket().unwrap();
     sock.router_options().set_mandatory(true).unwrap();
 }
 
 #[test]
 fn common_option_rid_duplicate_policy() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.router_socket().unwrap();
+    let sock = ctx.create_router_socket().unwrap();
     sock.common_options()
         .set_rid_duplicate_policy(RidDuplicatePolicy::Handover)
         .unwrap();
@@ -151,21 +151,21 @@ fn common_option_rid_duplicate_policy() {
 #[test]
 fn router_option_probe() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.router_socket().unwrap();
+    let sock = ctx.create_router_socket().unwrap();
     sock.router_options().set_probe(true).unwrap();
 }
 
 #[test]
 fn dealer_option_probe() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.dealer_socket().unwrap();
+    let sock = ctx.create_dealer_socket().unwrap();
     sock.dealer_options().set_probe(true).unwrap();
 }
 
 #[test]
 fn router_option_weight() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.router_socket().unwrap();
+    let sock = ctx.create_router_socket().unwrap();
     let opts = sock.router_options();
     let initial = opts.weight().unwrap();
     opts.set_weight(50).unwrap();
@@ -176,7 +176,7 @@ fn router_option_weight() {
 #[test]
 fn dealer_option_weight() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.dealer_socket().unwrap();
+    let sock = ctx.create_dealer_socket().unwrap();
     let opts = sock.dealer_options();
     assert_eq!(opts.weight().unwrap(), 100); // default
     opts.set_weight(75).unwrap();
@@ -186,28 +186,28 @@ fn dealer_option_weight() {
 #[test]
 fn pub_option_verbose() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pub_socket().unwrap();
+    let sock = ctx.create_pub_socket().unwrap();
     sock.pub_options().set_verbose(false).unwrap();
 }
 
 #[test]
 fn pub_option_nodrop() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pub_socket().unwrap();
+    let sock = ctx.create_pub_socket().unwrap();
     sock.pub_options().set_no_drop(false).unwrap();
 }
 
 #[test]
 fn pub_option_verboser() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pub_socket().unwrap();
+    let sock = ctx.create_pub_socket().unwrap();
     sock.pub_options().set_verboser(true).unwrap();
 }
 
 #[test]
 fn stream_option_notify_boolean() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.stream_socket().unwrap();
+    let sock = ctx.create_stream_socket().unwrap();
     let options = sock.stream_options();
     options.set_notify(true).unwrap();
     assert!(options.notify().unwrap());
@@ -218,21 +218,21 @@ fn stream_option_notify_boolean() {
 #[test]
 fn xpub_option_verbose() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.xpub_socket().unwrap();
+    let sock = ctx.create_xpub_socket().unwrap();
     sock.pub_options().set_verbose(true).unwrap();
 }
 
 #[test]
 fn xpub_option_verboser() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.xpub_socket().unwrap();
+    let sock = ctx.create_xpub_socket().unwrap();
     sock.pub_options().set_verboser(true).unwrap();
 }
 
 #[test]
 fn sub_option_topics_count() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.sub_socket().unwrap();
+    let sock = ctx.create_sub_socket().unwrap();
     sock.bind("inproc://opt-sub-topics").unwrap();
     sock.set_subscription("a").unwrap();
     sock.set_subscription("b").unwrap();
@@ -243,7 +243,7 @@ fn sub_option_topics_count() {
 #[test]
 fn xsub_option_topics_count() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.xsub_socket().unwrap();
+    let sock = ctx.create_xsub_socket().unwrap();
     sock.bind("inproc://opt-xsub-topics").unwrap();
     sock.set_subscription("a").unwrap();
     sock.set_subscription("b").unwrap();
@@ -254,8 +254,8 @@ fn xsub_option_topics_count() {
 #[test]
 fn dealer_and_router_expose_working_routing_id_options() {
     let ctx = Context::new().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
-    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
     let dealer_rid = RoutingId::from(b"dealer-opt-rid");
     let router_rid = RoutingId::from(b"router-opt-rid");
     dealer.set_routing_id(&dealer_rid).unwrap();

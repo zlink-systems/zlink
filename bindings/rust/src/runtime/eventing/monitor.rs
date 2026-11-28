@@ -4,8 +4,9 @@ use std::mem::MaybeUninit;
 use crate::contracts::core::context::AutoHwmRecalcReason;
 use crate::contracts::errors::errors::{CloseError, ConfigError, RecvError};
 use crate::contracts::eventing::monitor::{
-    MonitorEvent, MonitorEventFlags, MonitorEventType, MonitorSourceKind, MonitorStatus,
-    Monitorable, SocketMonitor, SocketMonitorOpenOptions,
+    MonitorEvent, MonitorEventFlags, MonitorEventType, MonitorSourceKind, MonitorStateFlags,
+    MonitorStatus, MonitorStatusDetailFlags, Monitorable, SocketMonitor, SocketMonitorOpenOptions,
+    TransportLane,
 };
 use crate::contracts::messaging::message::RoutingId;
 use crate::internal::MonitorStorage;
@@ -21,13 +22,13 @@ use crate::runtime::native::ffi;
 impl MonitorEvent {
     fn from_raw(raw: &ffi::zlink_monitor_event_t) -> Self {
         Self {
-            event: MonitorEventType(raw.event),
+            event: MonitorEventType::from_raw(raw.event),
             value: raw.value,
             routing_id: RoutingId::from_raw_optional(raw.routing_id),
             local_addr: cstr_array_to_string(&raw.local_addr),
             remote_addr: cstr_array_to_string(&raw.remote_addr),
             connection_id: raw.connection_id,
-            transport_lane: raw.transport_lane,
+            transport_lane: TransportLane::from_raw(raw.transport_lane),
             flags: MonitorEventFlags::from_raw(raw.flags),
         }
     }
@@ -65,7 +66,7 @@ mod tests {
         assert_eq!(event.value, large_value);
         assert!(event.value > u64::from(u32::MAX));
         assert_eq!(event.connection_id, 0xAAAA_BBBB_CCCC_DDDD);
-        assert_eq!(event.transport_lane, 3);
+        assert_eq!(event.transport_lane, TransportLane::Unknown(3));
         assert!(
             event
                 .flags
@@ -90,8 +91,8 @@ impl MonitorStatus {
             },
             abi_version: raw.abi_version,
             struct_size: raw.struct_size,
-            state_flags: raw.state_flags,
-            detail_flags: raw.detail_flags,
+            state_flags: MonitorStateFlags::from_raw(raw.state_flags),
+            detail_flags: MonitorStatusDetailFlags::from_raw(raw.detail_flags),
             snd_pending_msgs: raw.snd_pending_msgs,
             rcv_pending_msgs: raw.rcv_pending_msgs,
             snd_pending_bytes: raw.snd_pending_bytes,
@@ -126,20 +127,6 @@ impl MonitorStatus {
             flow_state_stale_total: raw.flow_state_stale_total,
             flow_pause_duration_ms: raw.flow_pause_duration_ms,
         }
-    }
-}
-
-impl MonitorStatus {
-    pub(crate) fn native_is_ready(&self) -> bool {
-        self.state_flags & ffi::ZLINK_MONITOR_STATE_READY != 0
-    }
-
-    pub(crate) fn native_is_closed(&self) -> bool {
-        self.state_flags & ffi::ZLINK_MONITOR_STATE_CLOSED != 0
-    }
-
-    pub(crate) fn native_has_flow_state_detail(&self) -> bool {
-        self.detail_flags & ffi::ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE != 0
     }
 }
 

@@ -27,7 +27,9 @@ pub use contracts::core::context::{
     AutoHwmProfile, AutoHwmRecalcReason, Context, ContextOptions, CoreHwmBudgetSnapshot,
 };
 pub use contracts::core::routing_id::RoutingId;
-pub use contracts::core::utilities::{AtomicCounter, Stopwatch, Thread};
+pub use contracts::core::utilities::{
+    AtomicCounter, Stopwatch, Thread, has, proxy, sleep, strerror, version,
+};
 pub use contracts::errors::errors::{
     BindError, CloseError, ConfigError, ConnectError, HandlerError, RecvError, RequestError,
     SubmitError, ZlinkError,
@@ -38,12 +40,13 @@ pub use contracts::errors::results::{
 };
 pub use contracts::eventing::monitor::{
     MONITOR_EVENT_ALL, MONITOR_EVENT_CONNECTION_READY, MonitorEvent, MonitorEventFlags,
-    MonitorEventType, MonitorSourceKind, MonitorStatus, Monitorable, SocketMonitor,
-    SocketMonitorEventMask, SocketMonitorOpenOptions,
+    MonitorEventType, MonitorSourceKind, MonitorStateFlags, MonitorStatus,
+    MonitorStatusDetailFlags, Monitorable, SocketMonitor, SocketMonitorEventMask,
+    SocketMonitorOpenOptions, TransportLane,
 };
 pub use contracts::eventing::poller::{
     POLLCOMPLETION, POLLCONNECT, POLLIN, POLLOUT, POLLROUTE, PollEvent, PollItem, PollSourceKind,
-    Pollable, Poller,
+    Pollable, Poller, poll,
 };
 pub use contracts::eventing::timer::Timer;
 pub use contracts::messaging::message::Message;
@@ -69,6 +72,4 @@ pub use contracts::sockets::socket_options::{
 };
 pub use contracts::sockets::stream_socket::{StreamPacket, StreamSocket};
 
-pub use runtime::core::runtime::{multipart_close, proxy, sleep};
-pub use runtime::eventing::poller::poll;
-pub use runtime::handles::ctx::{has, strerror, version};
+pub use runtime::core::runtime::multipart_close;
