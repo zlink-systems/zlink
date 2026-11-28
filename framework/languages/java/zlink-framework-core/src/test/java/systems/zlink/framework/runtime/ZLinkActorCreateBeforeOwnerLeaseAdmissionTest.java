@@ -59,7 +59,7 @@ final class ZLinkActorCreateBeforeOwnerLeaseAdmissionTest {
                                 () -> runtime.actorManager().create("player-1", "player").submit());
                 assertTrue(ZLinkLocationRuntime.isExecutionPaused(error));
                 assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN, error.kind());
-                assertEquals("The owner lease admission deadline has expired.", error.getMessage());
+                assertEquals("The owner lease admission is not open yet.", error.getMessage());
                 assertFalse(startup.isDone());
             } finally {
                 store.releaseClaim.complete(null);
