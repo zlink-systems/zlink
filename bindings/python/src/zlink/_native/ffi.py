@@ -222,7 +222,7 @@ ZLINK_DONTWAIT = 1
 
 
 class _Lib:
-    """Own the Core 0.17.0 raw symbol and layout declaration used by Python."""
+    """Declare the Core ABI symbols and layouts used by Python."""
 
     def __init__(self):
         self.lib = load_native_library(self._bind_loaded)
