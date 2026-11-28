@@ -312,6 +312,69 @@ class scenario_client_t final : public zf::hosted_service_t
           .result ();
     }
 
+    void context_close_joins_after_authority_release (zf::service_provider_t &services,
+                                                      const std::string &spot_id)
+    {
+        auto route = _app->advanced ().zlink ().route_client (
+          services.get_required<zf::serializer_registry_t> ());
+        const auto activated =
+          route.request_to_spot (zf::spot_id_t (spot_id), close_probe_request_t{0})
+            .instance_spot ("session")
+            .timeout (3s)
+            .async<close_probe_reply_t> ()
+            .result ();
+        if (!activated)
+            throw std::runtime_error ("Instance Spot activation failed");
+        const auto state = current ().session_state;
+        const auto owner = state->lane_owner.lock ();
+        if (!owner)
+            throw std::runtime_error ("Instance Spot owner is unavailable");
+
+        auto released = std::make_shared<std::promise<void>> ();
+        auto authority_released = released->get_future ();
+        auto acknowledge = std::make_shared<zf::task_completion_source_t<void>> ();
+        _store->after_authority_release = [released, acknowledge] {
+            released->set_value ();
+            return acknowledge->task ();
+        };
+        const std::shared_ptr<void> acknowledge_on_exit (nullptr, [acknowledge] (void *) {
+            acknowledge->complete (zf::result_t<void>::success ());
+        });
+
+        auto context = zf::detail::spot_context_access_t::create (state);
+        auto first = context.close ();
+        if (authority_released.wait_for (3s) != std::future_status::ready)
+            throw std::runtime_error ("Spot authority release was not observed");
+        actual["authorityBeforeJoin"] = authority_state (services, spot_id);
+        actual["activationDetachedBeforeJoin"] =
+          owner->lane
+            .run ([&] {
+                return state->closed == zf::spot_close_reason_t::explicit_close && !state->node
+                       && !state->spot_instance && !state->activation_scope;
+            })
+            .get ();
+        auto joined = context.close ();
+        actual["joinedBeforeAcknowledgment"] =
+          owner->lane.run ([&] { return state->merged_close_results.size (); }).get ();
+        actual["firstCompletedBeforeAcknowledgment"] = first.await_ready ();
+        actual["joinedCompletedBeforeAcknowledgment"] = joined.await_ready ();
+
+        acknowledge->complete (zf::result_t<void>::success ());
+        const auto first_result = first.result_for (3s);
+        const auto joined_result = joined.result_for (3s);
+        if (!first_result || !joined_result)
+            throw std::runtime_error ("A Close caller did not receive its result");
+        actual["firstResult"] = close_result (*first_result);
+        actual["joinedResult"] = close_result (*joined_result);
+        owner->lane
+          .run ([&] {
+              actual["closeTransactionsAfterResults"] = state->close_reservation == 0 ? 0 : 1;
+              actual["remainingJoiners"] = state->merged_close_results.size ();
+          })
+          .get ();
+        actual["nextResult"] = close_result (context.close ().result_for (3s).value ());
+    }
+
     void join_member (zf::service_provider_t &services,
                       const std::string &room,
                       const std::string &actor_id)
@@ -350,6 +413,10 @@ class scenario_client_t final : public zf::hosted_service_t
         }
         auto &store = *_store;
 
+        if (act == "contextCloseJoinsAfterAuthorityRelease") {
+            context_close_joins_after_authority_release (services, spot_id);
+            return;
+        }
         if (act == "closeAfterLifecycleCallback") {
             const auto other_ref = create_room (services, spot_id + "-other");
             auto other = zf::detail::spot_context_access_t::create (current ().room_state);

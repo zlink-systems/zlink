@@ -456,6 +456,7 @@ class close_fault_store_t final : public zf::location_store_t
     // The next Closing commit stays pending until release_held_commit.
     std::atomic_bool hold_closing_commit_once{false};
     std::atomic_bool hold_authority_release_once{false};
+    std::function<zf::task_t<void> ()> after_authority_release;
     // Zero disables this fixture; Ready/cursor/pointer are prepared puts 1/2/3.
     std::size_t hold_prepared_authority_put = 0;
     std::atomic_bool owner_lease_released{false};
@@ -591,8 +592,11 @@ class close_fault_store_t final : public zf::location_store_t
         auto result = co_await _inner->write (std::move (request));
         if (owner_delete && std::holds_alternative<zf::store_write_applied_t> (result))
             owner_lease_released.store (true);
-        if (watched_delete && std::holds_alternative<zf::store_write_applied_t> (result))
+        if (watched_delete && std::holds_alternative<zf::store_write_applied_t> (result)) {
             current ().record ("authorityReleased");
+            if (after_authority_release)
+                co_await after_authority_release ();
+        }
         co_return result;
     }
 

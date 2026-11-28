@@ -1003,12 +1003,25 @@ void spot_context_state_t::request_close (service::spot_close_begin_t begin,
         std::atomic_bool reported{false};
     };
     auto report = std::make_shared<close_report_t> (std::move (done));
-    // 진행 중인 Close 합류는 닫힐 수 있는 lifecycle queue에 접근하기 전에 결정합니다.
-    if (state_sync ([this, report] {
-            return merge_into_running_close_core (
-              [report] (result_t<bool> result) { (*report) (std::move (result)); });
-        }))
+    enum class close_submission_t
+    {
+        joined,
+        detached,
+        submit
+    };
+    // A Close registration stays eligible for joins through local detachment.
+    const auto submission = state_sync ([this, report] {
+        if (merge_into_running_close_core (
+              [report] (result_t<bool> result) { (*report) (std::move (result)); }))
+            return close_submission_t::joined;
+        return node ? close_submission_t::submit : close_submission_t::detached;
+    });
+    if (submission == close_submission_t::joined)
         return;
+    if (submission == close_submission_t::detached) {
+        (*report) (result_t<bool>::success (false));
+        return;
+    }
     auto shared_begin = std::make_shared<service::spot_close_begin_t> (std::move (begin));
     auto run = [state = shared_from_this (), shared_begin, reason, deadline, cleanup_cancellation,
                 report] (std::function<void ()> finished, detail::task_scheduler_t resume,
@@ -2275,7 +2288,7 @@ task_t<bool> spot_context_t::close ()
 
 task_t<bool> spot_context_t::close_erased ()
 {
-    if (!_state || !_state->node)
+    if (!_state)
         return task_t<bool> (result_t<bool>::success (false));
     const auto state = _state;
     state->ensure_relocation_turn_open ();
