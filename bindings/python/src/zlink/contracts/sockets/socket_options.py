@@ -33,9 +33,6 @@ class CommonSocketOptions(Protocol):
         ipv6: Whether IPv6 connections are enabled.
         tcp_no_delay: Whether Nagle's algorithm is disabled (``TCP_NODELAY``).
         tcp_keepalive: Whether TCP keep-alive probes are enabled.
-        heartbeat_interval_ms: Interval, in ms, between heartbeat pings on an idle connection.
-        heartbeat_ttl_ms: How long, in ms, the remote keeps the connection alive without a heartbeat.
-        heartbeat_timeout_ms: How long, in ms, to wait for a heartbeat reply before treating the connection as dead.
         max_message_size: Maximum inbound message size in bytes; -1 means no limit.
         backlog: Maximum length of the pending-connection queue on a bound endpoint.
         reconnect_interval_ms: Base delay, in ms, before reconnecting a broken connection.
@@ -56,9 +53,6 @@ class CommonSocketOptions(Protocol):
     ipv6 = _contract_property()
     tcp_no_delay = _contract_property()
     tcp_keepalive = _contract_property()
-    heartbeat_interval_ms = _contract_property()
-    heartbeat_ttl_ms = _contract_property()
-    heartbeat_timeout_ms = _contract_property()
     max_message_size = _contract_property()
     backlog = _contract_property()
     reconnect_interval_ms = _contract_property()
