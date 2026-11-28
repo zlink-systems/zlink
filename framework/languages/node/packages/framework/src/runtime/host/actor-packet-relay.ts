@@ -901,9 +901,10 @@ export class ZLinkActorPacketRelay {
     ) {
       return false;
     }
-    const responseTarget = await this.options
-      .streamBindingRuntime()
-      .captureBoundSessionResponseTarget(actor);
+    const responseTarget =
+      frameHeader.kind === ZLinkStreamMessageKind.Send
+        ? undefined
+        : await this.options.streamBindingRuntime().captureBoundSessionResponseTarget(actor);
     const encodedHeader = encodeStreamHeader(frameHeader);
     //  encodeStreamHeader returns a fresh, unaliased array; view it without re-copying.
     const header = RuntimeMessage.fromOwned(
@@ -913,8 +914,12 @@ export class ZLinkActorPacketRelay {
     const returnResponse =
       frameHeader.kind === ZLinkStreamMessageKind.Request && frameHeader.requestSeq !== undefined;
     try {
+      const runtime = this.requireSpotNodeRuntime();
+      if (frameHeader.kind === ZLinkStreamMessageKind.Send) {
+        return this.submitLocalActorSend(runtime, actor, header, body);
+      }
       let responseSubmission: Promise<boolean> | undefined;
-      const dispatch = this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+      const dispatch = runtime.dispatchEntryActorPacket(
         'local',
         actor.actorId,
         [header, body],
@@ -971,6 +976,47 @@ export class ZLinkActorPacketRelay {
       body.close();
       throw error;
     }
+  }
+
+  private async submitLocalActorSend(
+    runtime: ZLinkSpotNodeRuntimeManager,
+    actor: ZLinkSessionActor,
+    header: Message,
+    body: Message
+  ): Promise<boolean> {
+    let onAdmitted!: () => void;
+    let rejectAdmission!: (error: unknown) => void;
+    const admission = new Promise<void>((resolve, reject) => {
+      onAdmitted = resolve;
+      rejectAdmission = reject;
+    });
+    const dispatch = (async () => {
+      try {
+        await runtime.dispatchEntryActorPacket(
+          'local',
+          actor.actorId,
+          [header, body],
+          false,
+          undefined,
+          actor.ref,
+          undefined,
+          undefined,
+          undefined,
+          onAdmitted
+        );
+      } finally {
+        header.close();
+        body.close();
+      }
+    })();
+    // Entry preparation and enqueue rejection settle the same submission.
+    // Once admitted, only the detached terminal observes execution failures.
+    // A dispatch that ends without passing a FIFO admission point also settles it,
+    // so the caller never waits on a signal that will not come.
+    void dispatch.then(() => onAdmitted(), rejectAdmission);
+    await admission;
+    this.options.detachedTaskRunner.runDetached('local actor packet relay', () => dispatch);
+    return true;
   }
 
   private async sendCapturedOrCurrentBoundSessionResponse(

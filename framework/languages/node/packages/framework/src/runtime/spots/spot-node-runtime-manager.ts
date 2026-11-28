@@ -98,6 +98,7 @@ import {
 import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import type { ZLinkDetachedTaskRunner } from './spot-actor-join-dispatch';
 import { ZLinkEntrySpotActivation } from './spot-entry-activation';
+import type { ZLinkActorPacketDelivery } from './spot-actor-packet-dispatch';
 import {
   createSpotNodeLocationAutoConnectContext,
   spotNodeAutoConnectCapability,
@@ -1209,7 +1210,7 @@ export class ZLinkSpotNodeRuntimeManager {
     return this.entryActivations.values().next().value;
   }
 
-  async dispatchEntryActorPacket(
+  dispatchEntryActorPacket(
     origin: ApplicationJobOrigin,
     actorId: string,
     parts: readonly Message[],
@@ -1218,7 +1219,30 @@ export class ZLinkSpotNodeRuntimeManager {
     fallbackActorRef?: ActorRef,
     requestTerminal?: (response: unknown) => Promise<void> | void,
     messageFollowOrigin?: ZLinkMessageFollowOrigin,
-    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
+    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation,
+    onLocalSendAdmitted?: () => void
+  ): Promise<unknown> {
+    return this.dispatchEntryActorDelivery(
+      {
+        origin,
+        actorId,
+        parts,
+        returnResponse,
+        remoteBoundSessionTarget,
+        fallbackActorRef,
+        requestTerminal,
+        messageFollowOrigin,
+        onLocalSendAdmitted
+      },
+      preparation,
+      onLocalSendAdmitted === undefined ? undefined : { onAdmitted: onLocalSendAdmitted }
+    );
+  }
+
+  async dispatchEntryActorDelivery(
+    delivery: ZLinkActorPacketDelivery,
+    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation,
+    workOptions?: import('../execution/serial-execution-queue').ZLinkSerialWorkOptions
   ): Promise<unknown> {
     let activation = this.primaryEntryActivation();
     if (activation === undefined) {
@@ -1250,19 +1274,7 @@ export class ZLinkSpotNodeRuntimeManager {
         'Entry Spot actor packet dispatch requires an Entry Spot.'
       );
     }
-    return await activation.dispatchActorPacket(
-      {
-        origin,
-        actorId,
-        parts,
-        returnResponse,
-        remoteBoundSessionTarget,
-        fallbackActorRef,
-        requestTerminal,
-        messageFollowOrigin
-      },
-      preparation
-    );
+    return await activation.dispatchActorPacket(delivery, preparation, workOptions);
   }
 
   async dispatchEntryActorJoin(

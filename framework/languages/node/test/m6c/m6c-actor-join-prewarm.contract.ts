@@ -287,7 +287,7 @@ test('Entry Join commit failure after accepted reply reaches completion without 
           events.push('entry-commit');
           if (stage === 'entry-commit') throw new Error('target Entry commit failed');
         },
-        dispatchEntryActorPacket: async () => {
+        dispatchEntryActorDelivery: async () => {
           events.push('handoff-replay');
           throw new Error('target Entry handoff failed');
         },

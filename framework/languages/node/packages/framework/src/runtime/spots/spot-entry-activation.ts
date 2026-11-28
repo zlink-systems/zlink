@@ -505,14 +505,15 @@ export class ZLinkEntrySpotActivation {
 
   async dispatchActorPacket(
     delivery: ZLinkActorPacketDelivery,
-    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
+    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation,
+    workOptions?: import('../execution/serial-execution-queue').ZLinkSerialWorkOptions
   ): Promise<unknown> {
     return dispatchActorPacketInMailbox(
       (operation) =>
         this.spotSerialExecutor.executeActor(
           delivery.actorId,
           operation,
-          undefined,
+          workOptions,
           undefined,
           preparation
         ),
