@@ -114,7 +114,8 @@ public final class Message implements AutoCloseable {
 
             @Override
             public Message sharedCopyOf(Message message) {
-                return Message.sharedFrom(message);
+                message.requireValidNativeOwnership();
+                return message.copyShared();
             }
 
             @Override
@@ -284,9 +285,12 @@ public final class Message implements AutoCloseable {
         return msg;
     }
 
-    /** Returns a new message sharing this message's native payload. */
+    /**
+     * Returns a new message sharing this message's native payload, or a new
+     * empty message if this message was consumed or closed.
+     */
     public Message copy() {
-        return sharedFrom(this);
+        return valid() ? copyShared() : new Message();
     }
 
     /** Returns a new message holding an independent copy of this payload. */
@@ -348,9 +352,7 @@ public final class Message implements AutoCloseable {
         return from(value.getBytes(StandardCharsets.UTF_8));
     }
 
-    static Message sharedFrom(Message source) {
-        Objects.requireNonNull(source, "source");
-        source.requireValidNativeOwnership();
+    private Message copyShared() {
         Message msg = new Message(true);
         int rc = ContractAccess.nativeMessageInit(msg.msg);
         if (rc != 0) {
@@ -364,7 +366,7 @@ public final class Message implements AutoCloseable {
             throw failure;
         }
         msg.valid = true;
-        rc = ContractAccess.nativeMessageCopy(msg.msg, source.msg);
+        rc = ContractAccess.nativeMessageCopy(msg.msg, this.msg);
         if (rc != 0) {
             int errno = ContractAccess.nativeErrno();
             ZlinkConfigException failure = new ZlinkConfigException(ConfigResult.fromValue(rc), errno);
@@ -376,8 +378,8 @@ public final class Message implements AutoCloseable {
             throw failure;
         }
         msg.recvArmed = false;
-        msg.more = source.more;
-        msg.cachePayload(source.cachedSize);
+        msg.more = more;
+        msg.cachePayload(cachedSize);
         return msg;
     }
 
@@ -444,7 +446,7 @@ public final class Message implements AutoCloseable {
     }
 
     public int size() {
-        return valid && !closed ? cachedSize : 0;
+        return valid() ? cachedSize : 0;
     }
 
     public boolean more() {
@@ -452,18 +454,17 @@ public final class Message implements AutoCloseable {
     }
 
     public int refCount() {
-        requireValidNativeOwnership();
-        return ContractAccess.nativeMessageRefCount(msg);
+        return valid() ? ContractAccess.nativeMessageRefCount(msg) : 0;
     }
 
     Object dataSegment() {
-        return valid && !closed && cachedPayload != null
+        return valid() && cachedPayload != null
             ? cachedPayload
             : ContractAccess.nativeMessageHandleFromAddress(0L);
     }
 
     Object dataSegment(int knownSize) {
-        if (!valid || closed || knownSize <= 0 || cachedPayload == null)
+        if (!valid() || knownSize <= 0 || cachedPayload == null)
             return ContractAccess.nativeMessageHandleFromAddress(0L);
         return NATIVE_ACCESS.slice(cachedPayload, 0, knownSize);
     }
@@ -520,7 +521,7 @@ public final class Message implements AutoCloseable {
     }
 
     public ByteBuffer dataBuffer() {
-        if (!valid || closed || cachedPayload == null)
+        if (!valid() || cachedPayload == null)
             return ByteBuffer.allocate(0).asReadOnlyBuffer();
         ByteBuffer base = cachedReadOnlyDataBuffer;
         if (base == null) {

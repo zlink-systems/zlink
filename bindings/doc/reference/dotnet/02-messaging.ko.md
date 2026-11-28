@@ -41,10 +41,12 @@ using Message fromString = Message.From("hello", Encoding.UTF8);
 | `ToArray()` / `GetString()` / `GetString(Encoding)` | — | 독립된 managed 복사본 |
 | `CopyTo(Span<byte>)` / `CopyTo(IBufferWriter<byte>)` / `TryCopyTo(Span<byte>, out int)` | — | caller buffer로 복사 |
 
-**완료 결과.** 모두 동기다. `Message`는 `IDisposable`/`IAsyncDisposable`이다 — 해제하면
-payload storage가 반환된다. 이 메시지를 소비하는 submit(아래 Sockets/Messaging builder
-형태)은 성공 후 managed instance를 빈 상태로 남긴다 — 그 후 `Size`는 0, payload 읽기는 빈 값이고,
-다시 submit하면 `ZlinkSubmitException`(`InvalidHandle`)이 발생한다. disposing은 여전히 안전하고 여전히 필요하다.
+**완료 결과.** 모두 동기다. `Message`는 `IDisposable`과 `IAsyncDisposable`을 구현한다.
+submit에서 메시지를 소비하거나 호출자가 메시지를 해제하면
+`Size`와 `RefCount`는 0이고 payload 읽기는 빈 값을 반환한다. `Copy()`와 `Clone()`은
+새 빈 메시지를 반환한다. 닫힌 메시지를 다시 제출하면
+`ZlinkSubmitException`(`InvalidHandle`)이 발생한다. submit에서 소비된 메시지와
+복사로 만든 빈 메시지를 포함해 호출자가 소유한 메시지는 각각 해제한다.
 
 **선택 기준.** outbound payload를 만들 땐 크기 지정 또는 스냅샷 복사 생성자/factory를
 사용한다. 추가 복사 없이 그대로 읽거나 사용할 땐 `AsSpan()`/`AsReadOnlySpan()`을, 독립된
