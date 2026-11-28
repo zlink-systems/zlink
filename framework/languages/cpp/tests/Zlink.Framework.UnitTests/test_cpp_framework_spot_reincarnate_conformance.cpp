@@ -4,6 +4,7 @@
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
+#include "runtime/locations/base64.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/location_record_fields.hpp"
 #include "runtime/locations/provider_location_repository.hpp"

@@ -319,9 +319,10 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
                 return detail::spot_node_runtime_t (spot_state)
                   .materialize_relocation_state (frozen, object, spot, cancellation);
             },
-            [spot_state] (const std::vector<object_ref_t> &objects) {
+            [spot_state] (const std::vector<object_ref_t> &objects,
+                          const auto &before_join_completion) {
                 return detail::spot_node_runtime_t (spot_state)
-                  .commit_relocation_materialization (objects);
+                  .commit_relocation_materialization (objects, before_join_completion);
             },
             [spot_state] (const std::vector<object_ref_t> &objects) {
                 return detail::spot_node_runtime_t (spot_state)

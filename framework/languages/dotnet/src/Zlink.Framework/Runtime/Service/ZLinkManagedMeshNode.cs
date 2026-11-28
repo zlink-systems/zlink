@@ -5324,7 +5324,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 || readyRoute is not null
             )
                 return SubmitResult.NotFound;
-            targetAdmission = ConfirmSpotTargetRequest(
+            targetAdmission = ConfirmSpotTargetIngress(
                 targetSpotId,
                 targetSpotGeneration,
                 localAuthority,
@@ -5413,15 +5413,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return SubmitResult.Ok;
     }
 
-    private Func<Task<bool>>? ConfirmSpotTargetRequest(
+    private Func<Task<bool>>? ConfirmSpotTargetIngress(
         string spotId,
         ulong spotGeneration,
         ObservedAuthority authority,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkPlacementObjectKind objectKind = ZLinkPlacementObjectKind.UserSpot
     ) =>
         RunState(() => _canonicalRelocationTarget)
-            ?.ConfirmSpotRequest(
-                new SpotRelocationRequest(
+            ?.ConfirmSpotIngress(
+                new SpotRelocationIngress(
+                    objectKind,
                     spotId,
                     spotGeneration,
                     authority.TargetNodeGeneration,
@@ -5430,6 +5432,51 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ),
                 cancellationToken
             );
+
+    private bool TryAcceptStagedInstanceSpotFollow(
+        ZLinkManagedSpot spot,
+        ZLinkServiceWireCodec.StatefulRecord follow,
+        RoutingId sourceRid,
+        ObservedAuthority authority,
+        out SpotTargetAdmission? admission
+    )
+    {
+        var confirm = ConfirmSpotTargetIngress(
+            follow.TargetSpotId,
+            follow.TargetSpotGeneration,
+            authority,
+            _stop?.Token ?? CancellationToken.None,
+            ZLinkPlacementObjectKind.InstanceSpot
+        );
+        if (confirm is null)
+        {
+            admission = null;
+            return IsPublishedTarget();
+        }
+
+        admission = new SpotTargetAdmission(
+            async () => await confirm().ConfigureAwait(false) || IsPublishedTarget(),
+            () =>
+                ReportReadyInstanceSpotRejection(
+                    follow,
+                    sourceRid,
+                    request: false,
+                    ServiceWireConstants.FrameworkErrorCode.SpotMoving
+                )
+        );
+        return true;
+
+        // Publication can advance while ingress resolves staging or reads the Store.
+        bool IsPublishedTarget() =>
+            TryAcceptDirectSpot(
+                follow.TargetSpotId,
+                follow.TargetSpotGeneration,
+                authority,
+                null,
+                out var current,
+                exactGeneration: true
+            ) && ReferenceEquals(current, spot);
+    }
 
     private bool TryAcceptDirectSpot(
         string spotId,
@@ -9198,6 +9245,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     return false;
                 accepted = false;
             }
+            else if (
+                !accepted
+                && instanceFollow
+                && spot is { IsActive: true }
+                && spot.LifecycleGeneration == stateful.TargetSpotGeneration
+            )
+                accepted = TryAcceptStagedInstanceSpotFollow(
+                    spot,
+                    stateful,
+                    sourceRid,
+                    authority,
+                    out spotTargetAdmission
+                );
+
             var hasTargetSpot = spot is not null;
             var localOwnerLeaseGeneration = checked(
                 (ulong)Volatile.Read(ref _localOwnerLeaseGeneration)
@@ -9208,7 +9269,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 && hasTargetSpot
                 && !instanceReadyRoute
                 && stateful.MessageFollowHopCount == 0
-                && ConfirmSpotTargetRequest(
+                && ConfirmSpotTargetIngress(
                     stateful.TargetSpotId,
                     stateful.TargetSpotGeneration,
                     authority,

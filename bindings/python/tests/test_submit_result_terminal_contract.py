@@ -65,7 +65,7 @@ def test_ownerless_async_request_fails_before_native_submission():
                     with pytest.raises(zlink.SubmitError) as raised:
                         client.request().message(b"ownerless").submit()
                 assert raised.value.result == zlink.SubmitResult.INVALID_STATE
-                assert raised.value.native_errno == 0
+                assert raised.value.internal_errno == 0
                 submit.assert_not_called()
                 assert not owner._entries
                 assert not owner._entries_by_id
@@ -89,7 +89,7 @@ def test_ownerless_backpressured_send_fails_fast_without_runtime_drain():
                     with pytest.raises(zlink.SubmitError) as raised:
                         client.send().message(b"ownerless").submit()
                 assert raised.value.result == zlink.SubmitResult.INVALID_STATE
-                assert raised.value.native_errno == 0
+                assert raised.value.internal_errno == 0
                 assert not hasattr(owner, "_runtime_handle")
                 assert owner._entries
                 assert owner._entries_by_id

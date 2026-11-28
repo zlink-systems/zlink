@@ -11,6 +11,19 @@ from .helpers import (
 )
 
 class XpubXsubScenarioTest(unittest.TestCase):
+    def test_subscription_event_initial_routing_id(self):
+        self.assertIsNone(zlink.create_subscription_event().routing_id)
+
+        raw = b"\x00peer\xff"
+        event = zlink.create_subscription_event(routing_id=raw)
+        self.assertIsInstance(event.routing_id, zlink.RoutingId)
+        self.assertEqual(event.routing_id, raw)
+        self.assertEqual(bytes(event.routing_id), raw)
+
+        routing_id = zlink.RoutingId(raw)
+        event = zlink.create_subscription_event(routing_id=routing_id)
+        self.assertIs(event.routing_id, routing_id)
+
     def test_xpub_xsub_subscription(self):
         ctx = zlink.create_context()
         for name, endpoint in transports("xpub"):
@@ -51,6 +64,7 @@ class XpubXsubScenarioTest(unittest.TestCase):
             self.assertTrue(xpub.receive_subscription_event_into(event))
             self.assertTrue(event.subscribed)
             self.assertEqual(event.topic, topic.decode("ascii"))
+            self.assertIsInstance(event.routing_id, zlink.RoutingId)
         finally:
             xpub.close()
             xsub.close()
