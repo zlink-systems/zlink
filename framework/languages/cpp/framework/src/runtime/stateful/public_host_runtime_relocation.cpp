@@ -714,14 +714,6 @@ task_t<void> public_host_runtime_t::discard_relocation_target_attempts (
                     _actors.erase (current);
             }
         });
-        if (attempt.authority_fence && _aggregate_relocation_authority) {
-            try {
-                _aggregate_relocation_authority->abort (*attempt.authority_fence);
-            }
-            catch (...) {
-                _options.mesh.runtime_failures->report (std::current_exception ());
-            }
-        }
         for (const auto &object : attempt.wire_objects) {
             try {
                 (void) _relocation_wire->unregister_target (
@@ -751,6 +743,14 @@ task_t<void> public_host_runtime_t::discard_relocation_target_attempts (
                     _options.mesh.runtime_failures->report (std::current_exception ());
                 }
             }
+        if (relocation_target_wire_ready (attempt) && _actor_join_recovery_rollback) {
+            std::vector<std::pair<std::string, stateful::object_ref_t>> consumed;
+            for (std::size_t index = 0; index < attempt.targets.size (); ++index)
+                if (attempt.targets[index].kind == stateful::object_kind_t::actor)
+                    consumed.emplace_back (attempt.wire_objects[index].stable_type,
+                                           attempt.targets[index]);
+            co_await rollback_actor_join_recoveries (consumed);
+        }
         const relocation_attempt_key_t key{attempt.prepare.relocation.high,
                                            attempt.prepare.relocation.low,
                                            attempt.prepare.target_attempt_generation};
@@ -1883,6 +1883,42 @@ task_t<void> public_host_runtime_t::finish_relocation_assembly (
   std::shared_ptr<const pending_relocation_assembly_t> pending,
   std::shared_ptr<relocation_assembly_staging_t> staging)
 {
+    std::vector<relocation_target_attempt_t> discarded_attempts;
+    const auto can_stage = co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto previous = _relocation_target_attempts.find (
+          {pending->prepare.relocation.high, pending->prepare.relocation.low,
+           pending->prepare.target_attempt_generation - 1});
+        if (previous == _relocation_target_attempts.end ())
+            return true;
+        auto &attempt = previous->second;
+        if (attempt.prepare.coordinator != pending->prepare.coordinator
+            || attempt.prepare.object != pending->prepare.object
+            || attempt.prepare.target != pending->prepare.target
+            || attempt.phase != relocation_target_phase_t::waiting_cutover)
+            return false;
+        if (auto discarded = take_relocation_target_discard (attempt))
+            discarded_attempts.push_back (std::move (*discarded));
+        return !discarded_attempts.empty ();
+    });
+    if (!can_stage) {
+        co_await reply_relocation_assembly_failure (key, pending,
+                                                    protocol::framework_error_code::requestFailed);
+        co_return;
+    }
+    co_await discard_relocation_target_attempts (std::move (discarded_attempts));
+    std::size_t wire_count = 0;
+    for (; wire_count != staging->targets.size (); ++wire_count) {
+        if (register_relocation_target_queue (pending->prepare, staging->targets[wire_count],
+                                              staging->wire_objects[wire_count], wire_count + 1))
+            continue;
+        staging->wire_objects.resize (wire_count);
+        unregister_relocation_wire_targets (pending->prepare.relocation,
+                                            pending->prepare.target_attempt_generation,
+                                            staging->wire_objects);
+        co_await reply_relocation_assembly_failure (key, pending,
+                                                    protocol::framework_error_code::requestFailed);
+        co_return;
+    }
     std::vector<std::pair<std::string, stateful::object_ref_t>> consumed;
     std::optional<protocol::framework_error_code> consumption_failure;
     try {
@@ -2319,28 +2355,6 @@ void public_host_runtime_t::complete_relocation_assembly (
                                       + ":" + std::to_string (pending.prepare.relocation.low) + ":"
                                       + std::to_string (pending.prepare.target_attempt_generation),
                                     pending.prepare.payload_checksum_crc32c, inventory_digest};
-        std::size_t registered_count = 0;
-        for (; registered_count != targets.size (); ++registered_count) {
-            if (register_relocation_target_queue (pending.prepare, targets[registered_count],
-                                                  wire_objects[registered_count],
-                                                  registered_count + 1))
-                continue;
-            for (std::size_t index = 0; index != registered_count; ++index) {
-                try {
-                    (void) _relocation_wire->unregister_target (
-                      pending.prepare.relocation, pending.prepare.target_attempt_generation,
-                      wire_objects[index]);
-                }
-                catch (...) {
-                    _options.mesh.runtime_failures->report (std::current_exception ());
-                }
-            }
-            // Target relocation-wire registration failed (e.g. an existing
-            // registration for this object) — a staging conflict, not a
-            // payload integrity failure.
-            reply_failure (protocol::framework_error_code::requestFailed);
-            return;
-        }
         auto held_staging = std::make_shared<relocation_assembly_staging_t> (std::move (staging));
         auto preparing = std::make_shared<task_t<void>> (
           finish_relocation_assembly (key, held_pending, held_staging));
