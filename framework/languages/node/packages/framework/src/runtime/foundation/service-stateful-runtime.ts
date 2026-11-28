@@ -2136,12 +2136,17 @@ export class ServiceStatefulRuntime {
   leaveActor(
     actor: ServiceActorRef,
     expectedMembershipEpoch: bigint,
+    expectedAuthorityOwnerGeneration: bigint,
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
     const pending = this.operations.register(timeoutMs);
     queueMicrotask(() => {
       try {
-        const transition = this.registry.leaveActor(actor, expectedMembershipEpoch);
+        const transition = this.registry.leaveActor(
+          actor,
+          expectedMembershipEpoch,
+          expectedAuthorityOwnerGeneration
+        );
         this.enqueueActorControl(transition.actor.spot.spotId, {
           kind: 'actorControl',
           lifecycleKind: ActorLifecycleKind.Left,
