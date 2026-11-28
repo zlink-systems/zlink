@@ -7931,6 +7931,19 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         ZLinkAggregatePrepareRequest Request
     )> PrepareInventoryFixtureAsync(int participantCount)
     {
+        var (provider, repository, request) = await SeedInventoryFixtureAsync(participantCount);
+        var prepared = Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(
+            await repository.PrepareAggregateAsync(request)
+        );
+        return (provider, repository, prepared, request);
+    }
+
+    private static async ValueTask<(
+        ZLinkInMemoryProviderLocationStore Provider,
+        ZLinkProviderLocationRepository Repository,
+        ZLinkAggregatePrepareRequest Request
+    )> SeedInventoryFixtureAsync(int participantCount)
+    {
         var provider = new ZLinkInMemoryProviderLocationStore();
         var repository = new ZLinkProviderLocationRepository(provider);
         var sourceOwner = await ClaimAsync(
@@ -7969,10 +7982,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             participantCount
         );
         var request = AggregateRequest(participants, targetDescriptor, targetOwner);
-        var prepared = Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(
-            await repository.PrepareAggregateAsync(request)
-        );
-        return (provider, repository, prepared, request);
+        return (provider, repository, request);
     }
 
     private static JsonNode Property(JsonObject json, string propertyName) =>

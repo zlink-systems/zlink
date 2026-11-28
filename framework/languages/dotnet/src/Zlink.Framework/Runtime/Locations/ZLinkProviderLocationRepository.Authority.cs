@@ -1643,7 +1643,10 @@ internal sealed partial class ZLinkProviderLocationRepository
             }
             catch
             {
-                var reconciled = await ReadRecordForReconciliationAsync<AggregateRecord>(key)
+                var reconciled = await RunAmbiguousStoreStepAsync(
+                        token => ReadRecordAsync<AggregateRecord>(key, token),
+                        $"Confirmation of aggregate prepare '{fence.AggregateId:N}' exceeded its internal deadline."
+                    )
                     .ConfigureAwait(false);
                 if (
                     reconciled is not null
@@ -1868,14 +1871,14 @@ internal sealed partial class ZLinkProviderLocationRepository
             }
             catch
             {
-                var reconciled = await RunAmbiguousCommitStepAsync(
+                var reconciled = await RunAmbiguousStoreStepAsync(
                         token => ReadRecordAsync<AggregateRecord>(key, token),
                         $"Confirmation of aggregate commit '{fence.AggregateId:N}' exceeded its internal deadline."
                     )
                     .ConfigureAwait(false);
                 if (reconciled?.Record.Status != AggregateStatus.Committed)
                     throw;
-                return await RunAmbiguousCommitStepAsync(
+                return await RunAmbiguousStoreStepAsync(
                         async token =>
                         {
                             await NormalizeCommittedAggregateAsync(fence, reconciled.Record, token)
@@ -4128,7 +4131,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             .ConfigureAwait(false);
     }
 
-    private async ValueTask<TResult> RunAmbiguousCommitStepAsync<TResult>(
+    private async ValueTask<TResult> RunAmbiguousStoreStepAsync<TResult>(
         Func<CancellationToken, ValueTask<TResult>> operation,
         string timeoutMessage
     )

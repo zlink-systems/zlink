@@ -88,4 +88,71 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             releaseRead.TrySetResult();
         }
     }
+
+    [Fact]
+    public async Task AggregatePrepareReportsInternalDeadlineWithCauseWhenReplyIsLost()
+    {
+        var (inner, _, request) = await SeedInventoryFixtureAsync(1);
+        var time = new ControllableTimeProvider();
+        var readStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseRead = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var inspect = new InspectAuthorityBatchLocationStore(inner);
+        var provider = new ApplyThenThrowLocationStore(inspect);
+        var aggregateKey = new ZLinkStoreKey(
+            AggregatePrefix(
+                new ZLinkAggregateFence(request.AggregateId, request.AggregateGeneration)
+            )
+        );
+        inspect.Inspect = write =>
+        {
+            if (
+                write
+                    .Conditions.OfType<ZLinkStoreCondition.Version>()
+                    .Any(condition => condition.Key == aggregateKey)
+                && write
+                    .Mutations.OfType<ZLinkStoreMutation.Put>()
+                    .Any(put => put.Key == aggregateKey)
+            )
+            {
+                provider.ThrowAfterNextWrite = true;
+                inspect.BeforeRead = key =>
+                {
+                    if (key != aggregateKey)
+                        return Task.CompletedTask;
+                    if (readStarted.TrySetResult())
+                        return releaseRead.Task;
+                    throw new IOException("The provider is unavailable.");
+                };
+            }
+            return Task.CompletedTask;
+        };
+
+        var repository = new ZLinkProviderLocationRepository(provider, time);
+        var prepare = repository.PrepareAggregateAsync(request).AsTask();
+        var testLimit = TimeSpan.FromSeconds(15);
+
+        try
+        {
+            await readStarted.Task.WaitAsync(testLimit);
+            var timeout = TimeSpan.FromSeconds(5);
+            var deadlineScheduled = time.HasTimerDueIn(timeout);
+            time.AdvanceMonotonic(timeout);
+
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await prepare.WaitAsync(testLimit)
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+            var cause = Assert.IsAssignableFrom<OperationCanceledException>(failure.InnerException);
+            Assert.True(cause.CancellationToken.IsCancellationRequested);
+            Assert.True(deadlineScheduled);
+        }
+        finally
+        {
+            releaseRead.TrySetResult();
+        }
+    }
 }
