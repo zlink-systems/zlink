@@ -16,7 +16,6 @@ from .core import (
     Thread,
 )
 from .core.options import (
-    ContextOption,
     AutoHwmProfile,
     AutoHwmRecalcReason,
 )
@@ -24,7 +23,6 @@ from .sockets.codes import (
     SocketType,
     SendFlags,
     RecvFlags,
-    CompletionKind,
     SubmitResult,
     RequestResult,
     RecvResult,
@@ -121,12 +119,10 @@ __all__ = [
     "Stopwatch",
     "Thread",
     "SocketType",
-    "ContextOption",
     "AutoHwmProfile",
     "AutoHwmRecalcReason",
     "SendFlags",
     "RecvFlags",
-    "CompletionKind",
     "SubmitResult",
     "RequestResult",
     "RecvResult",

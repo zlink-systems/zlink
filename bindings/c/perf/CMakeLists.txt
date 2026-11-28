@@ -154,6 +154,8 @@ endif()
                            multi/src/perf_multi_pubsub_client.cpp)
     add_current_bench_multi(perf_multi_metrics_test
                            multi/tests/test_perf_multi_metrics.cpp)
+    add_current_bench_multi(perf_multi_echo_pacing_test
+                           multi/tests/test_perf_multi_echo_pacing.cpp)
     add_current_bench_multi(perf_relay_completion_progress_test
                            tests/test_relay_completion_progress.cpp)
     add_current_bench_multi(perf_reqrep_reply_progress_test
@@ -162,6 +164,10 @@ endif()
         add_test(NAME perf_multi_metrics_test COMMAND perf_multi_metrics_test)
         set_tests_properties(perf_multi_metrics_test PROPERTIES
             LABELS "perf-metric"
+            TIMEOUT 30)
+        add_test(NAME perf_multi_echo_pacing_test COMMAND perf_multi_echo_pacing_test)
+        set_tests_properties(perf_multi_echo_pacing_test PROPERTIES
+            LABELS "perf-regression"
             TIMEOUT 30)
         add_test(NAME perf_relay_completion_progress_test
                  COMMAND perf_relay_completion_progress_test)
