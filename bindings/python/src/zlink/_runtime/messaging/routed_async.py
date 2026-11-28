@@ -19,6 +19,7 @@ from ..._native.ffi import (
     ZlinkMsg,
     lib,
 )
+from ...contracts.core.routing_id import RoutingId
 from ...contracts.errors.codes import ConfigResult, ErrorCode
 from ...contracts.errors.errors import (
     ConfigError,
@@ -830,6 +831,8 @@ class CompletionOwner:
 
     def _submit_parts(self, target, native_parts, flags, entry=None, timeout_ms=None):
         if _native_extension is not None:
+            if isinstance(target, RoutingId):
+                target = target.to_bytes()
             return _native_extension.submit_storage(
                 self._socket._handle, target, native_parts, flags,
                 0 if entry is None else entry.context, timeout_ms,

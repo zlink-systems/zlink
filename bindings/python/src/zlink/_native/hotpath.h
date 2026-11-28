@@ -258,10 +258,11 @@ static PyObject *py_submit_storage (PyObject *self, PyObject *args)
     unsigned long long handle, context;
     PyObject *target, *parts, *timeout;
     unsigned long long reply_token = 0;
+    const char *publish_topic = NULL;
     int flags;
     (void) self;
-    if (!PyArg_ParseTuple (args, "KOOiKO|K", &handle, &target, &parts, &flags,
-                          &context, &timeout, &reply_token))
+    if (!PyArg_ParseTuple (args, "KOOiKO|Ky", &handle, &target, &parts, &flags,
+                          &context, &timeout, &reply_token, &publish_topic))
         return NULL;
     const int is_reply = PyTuple_GET_SIZE (args) == 7;
     if (!PyList_Check (parts)) {
@@ -280,8 +281,9 @@ static PyObject *py_submit_storage (PyObject *self, PyObject *args)
             goto fail;
         rid_ptr = &rid;
     }
-    long timeout_ms = timeout == Py_None ? 0 : PyLong_AsLong (timeout);
-    if (timeout_ms == -1 && PyErr_Occurred ())
+    unsigned long timeout_ms =
+      timeout == Py_None ? 0 : PyLong_AsUnsignedLong (timeout);
+    if (PyErr_Occurred ())
         goto fail;
     Py_ssize_t count = PyList_GET_SIZE (parts);
     Py_buffer inline_views[8] = {{0}};
@@ -325,7 +327,10 @@ static PyObject *py_submit_storage (PyObject *self, PyObject *args)
         void *ctx = context ? (void *) (uintptr_t) context : NULL;
         uint64_t *out = context ? &completion_id : NULL;
         Py_BEGIN_ALLOW_THREADS
-        if (is_reply)
+        if (publish_topic)
+            rc = zlink_publish ((void *) (uintptr_t) handle, publish_topic,
+                                native_parts, (size_t) count, flags);
+        else if (is_reply)
             rc = zlink_reply ((void *) (uintptr_t) handle, rid_ptr,
                               reply_token, native_parts, (size_t) count);
         else if (timeout != Py_None)

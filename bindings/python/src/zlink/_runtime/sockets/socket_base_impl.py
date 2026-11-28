@@ -230,16 +230,20 @@ class _PublisherSendOp(_PublishOpBase):
                 raise SubmitError(SubmitResult.BACKPRESSURED, errno.EAGAIN)
             return None
         native_parts = _clone_payload(payload)
-        part_count = len(native_parts)
-        rc = lib().zlink_publish(
-            self._socket._handle,
-            topic_bytes,
-            native_parts,
-            part_count,
-            int(self._flags),
-        )
+        if _native_extension is not None:
+            rc, internal_errno, _ = _native_extension.submit_storage(
+                self._socket._handle, None, native_parts, int(self._flags),
+                0, None, 0, topic_bytes,
+            )
+        else:
+            rc, internal_errno = _submit_parts(
+                native_parts,
+                lambda parts, count: lib().zlink_publish(
+                    self._socket._handle, topic_bytes, parts, count, int(self._flags)
+                ),
+            )
         if rc != 0:
-            _raise_result_error(SubmitError, SubmitResult, rc, lib().zlink_errno())
+            _raise_result_error(SubmitError, SubmitResult, rc, internal_errno)
         return None
 
 
