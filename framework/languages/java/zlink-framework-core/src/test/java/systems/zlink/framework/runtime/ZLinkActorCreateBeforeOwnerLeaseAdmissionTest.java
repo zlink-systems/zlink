@@ -23,8 +23,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
-import systems.zlink.framework.runtime.internal.backend.*;
-import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.internal.backend.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 
@@ -135,10 +134,6 @@ final class ZLinkActorCreateBeforeOwnerLeaseAdmissionTest {
                 ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
             return inner.scan(request, cancellation);
         }
-    }
-
-    private static DefaultZLinkFrameworkOptions optionsWithSpotNodeAndActorFactory() {
-        return optionsWithSpotNodeAndActorFactory(new ZLinkInMemoryLocationStore());
     }
 
     private static DefaultZLinkFrameworkOptions optionsWithSpotNodeAndActorFactory(
