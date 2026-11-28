@@ -11,6 +11,8 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.*;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
+import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.*;
@@ -29,6 +31,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkInstanceSpotActivationDeadlineTest {
     private static final String MESH = "activation-deadline";
@@ -211,8 +214,9 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                                                     }
                                                 }));
         try (var runtime =
-                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
                         options, backend, ZLinkHandlerActivator.reflection(), null, construction)) {
+            awaitServing(runtime);
             var send =
                     runtime.route()
                             .sendToSpot("new-lease-spot", new InitialMessage())
@@ -311,12 +315,13 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                                         ZLinkRegisteredLocationStores.fromUnified(repository),
                                         new ZLinkLocationOptions()));
         try (var runtime =
-                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
                         options,
                         new ZLinkJavaBackendAdapterFactory(),
                         ZLinkHandlerActivator.reflection(),
                         null,
                         construction)) {
+            awaitServing(runtime);
             var host =
                     systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess.spots(
                             runtime);
@@ -416,12 +421,13 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                                                     }
                                                 }));
         try (var runtime =
-                ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                ZLinkFrameworkRuntimeTestAccess.startHostWithConstruction(
                         options,
                         backendProvider,
                         ZLinkHandlerActivator.reflection(),
                         null,
                         construction)) {
+            awaitServing(runtime);
             try {
                 long started = System.currentTimeMillis();
                 var send =
@@ -453,6 +459,48 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                 admission.complete(null);
                 routeResolve.complete(Optional.empty());
             }
+        }
+    }
+
+    private static void awaitServing(ZLinkFrameworkRuntime runtime) throws Exception {
+        var serving = new CompletableFuture<Void>();
+        var subscription = new AtomicReference<Flow.Subscription>();
+        runtime.observe()
+                .subscribe(
+                        new Flow.Subscriber<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>() {
+                            @Override
+                            public void onSubscribe(Flow.Subscription value) {
+                                subscription.set(value);
+                                value.request(Long.MAX_VALUE);
+                            }
+
+                            @Override
+                            public void onNext(
+                                    ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus> observed) {
+                                if (observed.status().state()
+                                        == ZLinkFrameworkRuntimeState.SERVING) {
+                                    serving.complete(null);
+                                }
+                            }
+
+                            @Override
+                            public void onError(Throwable failure) {
+                                serving.completeExceptionally(failure);
+                            }
+
+                            @Override
+                            public void onComplete() {
+                                serving.completeExceptionally(
+                                        new IllegalStateException(
+                                                "Runtime observation completed before Serving"));
+                            }
+                        });
+        try {
+            serving.get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
+            assertTrue(runtime.isReady(), "Serving observation must match runtime readiness");
+        } finally {
+            var active = subscription.get();
+            if (active != null) active.cancel();
         }
     }
 
