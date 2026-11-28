@@ -36,6 +36,7 @@ jobs:
       python: ${{ steps.select.outputs.python }}
       dotnet: ${{ steps.select.outputs.dotnet }}
       cpp: ${{ steps.select.outputs.cpp }}
+      c: ${{ steps.select.outputs.c }}
       docs: ${{ steps.select.outputs.docs }}
     steps:
       - uses: actions/checkout@v5
@@ -62,26 +63,27 @@ jobs:
           changed="$RUNNER_TEMP/bindings-changed-files"
           git diff --no-renames --name-only -z "$range" -- > "$changed"
 
-          rust=false go=false python=false dotnet=false cpp=false docs=false
+          rust=false go=false python=false dotnet=false cpp=false c=false docs=false
           while IFS= read -r -d '' path; do
             case "$path" in
               # Test binding compatibility with the released Core from fetch-release.sh.
               # Core CI tests changes to Core itself.
-              core/include/*) rust=true go=true python=true dotnet=true cpp=true ;;
+              core/include/*) rust=true go=true python=true dotnet=true cpp=true c=true ;;
               bindings/rust/*) rust=true ;;
               bindings/go/*) go=true ;;
               bindings/python/*) python=true ;;
               bindings/dotnet/*) dotnet=true ;;
               bindings/cpp/*) cpp=true ;;
+              bindings/c/*) c=true ;;
               bindings/doc/*) docs=true ;;
               # A change to this workflow runs every check, enabled or in trial.
               .github/workflows/bindings-pr-check.yml)
-                rust=true go=true python=true dotnet=true cpp=true docs=true
+                rust=true go=true python=true dotnet=true cpp=true c=true docs=true
                 ;;
             esac
           done < "$changed"
-          printf 'rust=%s\ngo=%s\npython=%s\ndotnet=%s\ncpp=%s\ndocs=%s\n' \
-            "$rust" "$go" "$python" "$dotnet" "$cpp" "$docs" >> "$GITHUB_OUTPUT"
+          printf 'rust=%s\ngo=%s\npython=%s\ndotnet=%s\ncpp=%s\nc=%s\ndocs=%s\n' \
+            "$rust" "$go" "$python" "$dotnet" "$cpp" "$c" "$docs" >> "$GITHUB_OUTPUT"
 
   check:
     # A Mergify batch also gets a draft PR whose pull_request run skips these
@@ -94,7 +96,7 @@ jobs:
     needs: changes
     # Fork PRs run on GitHub-hosted runners.
     runs-on: >-
-      ${{ matrix.scope == 'cpp' && needs.changes.outputs.cpp == 'true' &&
+      ${{ matrix.cmake && needs.changes.outputs[matrix.scope] == 'true' &&
           (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
           vars.ZLINK_CPP_LINUX_RUNNER && fromJSON(vars.ZLINK_CPP_LINUX_RUNNER) || 'ubuntu-24.04' }}
     strategy:
@@ -111,6 +113,10 @@ jobs:
             name: .NET
           - scope: cpp
             name: C++
+            cmake: true
+          - scope: c
+            name: C
+            cmake: true
           - scope: docs
             name: document links
     env:
@@ -149,11 +155,38 @@ jobs:
             8.0.x
             10.0.x
 
-      - name: Install C++ build dependencies
-        if: matrix.scope == 'cpp' && needs.changes.outputs.cpp == 'true'
+      - name: Install C and C++ build dependencies on GitHub-hosted runners
+        if: >-
+          matrix.cmake && needs.changes.outputs[matrix.scope] == 'true' &&
+          runner.environment == 'github-hosted'
+        shell: bash
+        env:
+          BINDING_SCOPE: ${{ matrix.scope }}
         run: |
+          packages=(build-essential cmake pkg-config libssl-dev)
+          # C comparison benches use the repository's bundled Boost.
+          if [[ "$BINDING_SCOPE" == cpp ]]; then
+            packages+=(libboost-dev)
+          fi
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libssl-dev libboost-dev
+          sudo apt-get install -y "${packages[@]}"
+
+      - name: Verify C and C++ build tools on self-hosted runners
+        if: >-
+          matrix.cmake && needs.changes.outputs[matrix.scope] == 'true' &&
+          runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          for tool in cmake ctest gcc g++ make pkg-config curl; do
+            if ! command -v "$tool" >/dev/null; then
+              echo "::error::Required tool '$tool' is missing from PATH on the self-hosted runner."
+              exit 1
+            fi
+          done
+          if ! pkg-config --exists openssl; then
+            echo "::error::OpenSSL development files (openssl.pc) are missing on the self-hosted runner."
+            exit 1
+          fi
 
       - name: Prepare verified Linux x64 Core release
         if: matrix.scope != 'docs' && needs.changes.outputs[matrix.scope] == 'true'
@@ -196,6 +229,12 @@ jobs:
         env:
           ZLINK_BUILD_JOBS: '4'
         run: nice -n 10 bash bindings/cpp/tests/run_tests.sh
+
+      - name: Test C binding and build native comparison benches
+        if: matrix.scope == 'c' && needs.changes.outputs.c == 'true'
+        env:
+          ZLINK_BUILD_JOBS: '4'
+        run: nice -n 10 bash bindings/c/tests/run_tests.sh
 
       - name: Check document links and anchors
         if: matrix.scope == 'docs' && needs.changes.outputs.docs == 'true'
