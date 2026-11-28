@@ -9,35 +9,113 @@ namespace Systems.Zlink.Tests;
 public sealed class InvalidWaitTokenErrnoTests
 {
     private const string ScenarioVariable = "ZLINK_DOTNET_INVALID_WAIT_TOKEN";
+    private static readonly TimeSpan DrainDeadline = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ScenarioDeadline = TimeSpan.FromSeconds(5);
     private const string ShimSource = """
-        #include <stdint.h>
+        #include <dlfcn.h>
         #include <stdlib.h>
         #include <string.h>
-        #include "zlink_errno.h"
+        #include "zlink.h"
 
-        static zlink_submit_result_t reject(int flags, uint64_t *id)
+        static unsigned calls;
+        static int closed;
+        static void *rejected_context;
+        static void *next_context;
+        static void (*drain_before_return)(void);
+        static zlink_completion_kind_t late_kind;
+        static zlink_completion_kind_t queued_kind;
+        static void *queued_context;
+        static const zlink_completion_id_t token = 71;
+
+        void fixture_prepare_late_record(zlink_completion_kind_t kind, void (*drain)(void))
         {
-            static unsigned calls;
-            const char *scenario = getenv("ZLINK_DOTNET_INVALID_WAIT_TOKEN");
-            if (flags != 1 || !id || !scenario)
+            late_kind = kind;
+            drain_before_return = drain;
+        }
+
+        void fixture_queue_next_writable(void)
+        {
+            if (calls != 2 || queued_kind || !next_context)
                 abort();
-            int valid_wait = strstr(scenario, "retry") && calls == 0;
-            *id = 71 + calls++;
+            queued_kind = ZLINK_COMPLETION_WRITABLE;
+            queued_context = next_context;
+        }
+
+        int fixture_closed_records(void)
+        {
+            return closed;
+        }
+
+        zlink_recv_result_t zlink_completion_recv(void *socket,
+            zlink_completion_t *completion, zlink_recv_flags_t flags)
+        {
+            if (flags != ZLINK_RECV_FLAGS_DONTWAIT || completion->struct_size != sizeof(*completion))
+                abort();
+            if (!queued_kind)
+                return ZLINK_RECV_NO_DATA;
+            completion->kind = queued_kind;
+            completion->completion_id = token;
+            completion->user_context = queued_context;
+            queued_kind = 0;
+            return ZLINK_RECV_OK;
+        }
+
+        void zlink_completion_close(zlink_completion_t *completion)
+        {
+            void (*close_record)(zlink_completion_t *) = dlsym(RTLD_NEXT, "zlink_completion_close");
+            if (!close_record || completion->completion_id != token)
+                abort();
+            close_record(completion);
+            ++closed;
+        }
+
+        static zlink_submit_result_t submit(zlink_msg_t *parts, size_t count,
+            zlink_send_flags_t flags, void *context, zlink_completion_id_t *id)
+        {
+            const char *scenario = getenv("ZLINK_DOTNET_INVALID_WAIT_TOKEN");
+            if (flags != ZLINK_SEND_FLAGS_DONTWAIT || !id || !scenario || !context)
+                abort();
+            zlink_multipart_close(parts, count);
+            unsigned call = ++calls;
+            if (drain_before_return) {
+                *id = token;
+                if (call == 1) {
+                    rejected_context = context;
+                    errno = EINVAL;
+                    return ZLINK_SUBMIT_BACKPRESSURED;
+                }
+                if (call == 2) {
+                    if (context == rejected_context)
+                        abort();
+                    next_context = context;
+                    queued_kind = late_kind;
+                    queued_context = rejected_context;
+                    drain_before_return();
+                    errno = EAGAIN;
+                    return ZLINK_SUBMIT_BACKPRESSURED;
+                }
+                if (call != 3 || context != next_context || closed != 2)
+                    abort();
+                *id = 0;
+                return ZLINK_SUBMIT_OK;
+            }
+            int valid_wait = strstr(scenario, "retry") && call == 1;
+            *id = token + call - 1;
             errno = valid_wait ? EAGAIN : EINVAL;
             return ZLINK_SUBMIT_BACKPRESSURED;
         }
 
-        zlink_submit_result_t zlink_send(void *socket, void *parts, size_t count,
-            int flags, void *context, uint64_t *id)
+        zlink_submit_result_t zlink_send(void *socket, zlink_msg_t *parts, size_t count,
+            zlink_send_flags_t flags, void *context, zlink_completion_id_t *id)
         {
-            return reject(flags, id);
+            return submit(parts, count, flags, context, id);
         }
 
-        zlink_submit_result_t zlink_request(void *socket, const void *target,
-            void *parts, size_t count, int flags, uint32_t timeout,
-            void *context, uint64_t *id)
+        zlink_submit_result_t zlink_request(void *socket, const zlink_routing_id_t *target,
+            zlink_msg_t *parts, size_t count, zlink_send_flags_t flags, uint32_t timeout,
+            void *context, zlink_completion_id_t *id)
         {
-            return reject(flags, id);
+            return submit(parts, count, flags, context, id);
         }
         """;
 
@@ -59,6 +137,32 @@ public sealed class InvalidWaitTokenErrnoTests
             return;
         }
 
+        await RunScenario(scenario, nameof(Invalid_wait_token_releases_registration_and_staging));
+    }
+
+    [Theory]
+    [InlineData("send-late-writable", false, CompletionKind.Writable)]
+    [InlineData("send-late-request", false, CompletionKind.Request)]
+    [InlineData("request-late-writable", true, CompletionKind.Writable)]
+    [InlineData("request-late-request", true, CompletionKind.Request)]
+    public async Task Late_record_does_not_join_next_send(
+        string scenario, bool request, CompletionKind lateKind)
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+
+        if (Environment.GetEnvironmentVariable(ScenarioVariable) is { } selected)
+        {
+            if (selected == scenario)
+                await VerifyLateRecord(request, lateKind);
+            return;
+        }
+
+        await RunScenario(scenario, nameof(Late_record_does_not_join_next_send));
+    }
+
+    private static async Task RunScenario(string scenario, string testMethod)
+    {
         var directory = Directory.CreateTempSubdirectory("zlink-invalid-wait-token-");
         try
         {
@@ -74,7 +178,8 @@ public sealed class InvalidWaitTokenErrnoTests
                 {
                     "-shared", "-fPIC", "-o", shim, source,
                     "-I", Path.Combine(AppContext.BaseDirectory, "Native"),
-                    "-Wl,--no-as-needed", core, $"-Wl,-rpath,{Path.GetDirectoryName(core)}"
+                    "-Wl,--no-as-needed", core, $"-Wl,-rpath,{Path.GetDirectoryName(core)}",
+                    "-ldl"
                 }
             });
             await Run(new ProcessStartInfo("dotnet")
@@ -82,18 +187,89 @@ public sealed class InvalidWaitTokenErrnoTests
                 ArgumentList =
                 {
                     "vstest", typeof(InvalidWaitTokenErrnoTests).Assembly.Location,
-                    $"--TestCaseFilter:FullyQualifiedName={typeof(InvalidWaitTokenErrnoTests).FullName}.{nameof(Invalid_wait_token_releases_registration_and_staging)}"
+                    $"--TestCaseFilter:FullyQualifiedName={typeof(InvalidWaitTokenErrnoTests).FullName}.{testMethod}"
                 },
                 Environment =
                 {
                     [ScenarioVariable] = scenario,
                     ["ZLINK_LIBRARY_PATH"] = shim
                 }
-            });
+            }, ScenarioDeadline);
         }
         finally
         {
             directory.Delete(recursive: true);
+        }
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void DrainDuringSubmit();
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void PrepareLateRecord(CompletionKind kind, DrainDuringSubmit drain);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void QueueNextWritable();
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int ClosedRecords();
+
+    private static async Task VerifyLateRecord(bool request, CompletionKind lateKind)
+    {
+        using var context = Zlink.CreateContext();
+        using var socket = context.CreateDealerSocket();
+        using var poller = Zlink.CreatePoller();
+        poller.Add(socket, PollEventFlags.PollCompletion, 1);
+        var owner = CompletionOwnerTestAccess.Owner(socket);
+        IntPtr shim = NativeLibrary.Load(Environment.GetEnvironmentVariable("ZLINK_LIBRARY_PATH")!);
+        try
+        {
+            T Export<T>(string name) where T : Delegate =>
+                Marshal.GetDelegateForFunctionPointer<T>(NativeLibrary.GetExport(shim, name));
+
+            var prepare = Export<PrepareLateRecord>("fixture_prepare_late_record");
+            var queueNext = Export<QueueNextWritable>("fixture_queue_next_writable");
+            var closed = Export<ClosedRecords>("fixture_closed_records");
+            Exception? drainFailure = null;
+            DrainDuringSubmit drain = () => drainFailure = Record.Exception(() =>
+                Task.Run(() =>
+                {
+                    Assert.Single(CompletionOwnerTestAccess.Entries(owner));
+                    object result = CompletionOwnerTestAccess.Invoke(owner, "Drain")!;
+                    Assert.Equal(1, CompletionOwnerTestAccess.Property(result, "TotalCount"));
+                    Assert.Equal(1, closed());
+                }).WaitAsync(DrainDeadline).GetAwaiter().GetResult());
+            prepare(lateKind, drain);
+
+            using var rejected = Message.From("rejected");
+            AssertProtocolFailure(Assert.Throws<ZlinkSubmitException>(() =>
+            {
+                if (request)
+                    _ = socket.Request().Message(rejected).Async();
+                else
+                    _ = socket.Send().Message(rejected).Async();
+            }));
+            Assert.Equal("rejected", rejected.GetString());
+            Assert.Empty(CompletionOwnerTestAccess.Entries(owner));
+            Assert.Equal(0, closed());
+
+            using var next = Message.From("next");
+            var submission = socket.Send().Message(next).Async();
+            GC.KeepAlive(drain);
+            Assert.Null(drainFailure);
+            Assert.Equal(1, closed());
+            Assert.Equal(SubmitResult.Backpressured, submission.Result);
+            Assert.False(submission.Admitted.IsCompleted);
+
+            queueNext();
+            CompletionOwnerTestAccess.Invoke(owner, "Drain");
+            await submission.Admitted.WaitAsync(ScenarioDeadline);
+            Assert.Equal(2, closed());
+            Assert.Empty(CompletionOwnerTestAccess.Entries(owner));
+        }
+        finally
+        {
+            NativeLibrary.Free(shim);
         }
     }
 
@@ -160,14 +336,25 @@ public sealed class InvalidWaitTokenErrnoTests
         Assert.Equal(CompletionOwnerTestAccess.Errno("EProto"), error.NativeErrno);
     }
 
-    private static async Task Run(ProcessStartInfo start)
+    private static async Task Run(ProcessStartInfo start, TimeSpan? deadline = null)
     {
         start.RedirectStandardOutput = true;
         start.RedirectStandardError = true;
         using var process = Process.Start(start)!;
         var output = process.StandardOutput.ReadToEndAsync();
         var errors = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        try
+        {
+            await process.WaitForExitAsync().WaitAsync(deadline ?? Timeout.InfiniteTimeSpan);
+        }
+        catch (TimeoutException exception)
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            throw new TimeoutException(
+                $"{start.FileName} exceeded the {deadline} scenario deadline.", exception);
+        }
         Assert.True(process.ExitCode == 0, (await output) + (await errors));
     }
 }
