@@ -11,7 +11,6 @@ import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
 
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.testsupport.ZLinkConformanceFixtures;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -47,7 +46,7 @@ final class ZLinkStreamAdmissionQueueConformanceTest {
 
     @TestFactory
     Stream<DynamicTest> queueFixture() throws Exception {
-        var fixture = ZLinkConformanceFixtures.file("login-admission-queue-v1.json");
+        var fixture = ConnectorTestFixtures.file("login-admission-queue-v1.json");
         var scenarios = JSON.readTree(fixture.toFile()).required("connectorScenarios");
         assertEquals(11, scenarios.size());
         return StreamSupport.stream(scenarios.spliterator(), false)

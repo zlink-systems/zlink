@@ -20,7 +20,6 @@ dependencies {
     api("io.netty:netty-transport:4.1.100.Final")
     implementation("org.lz4:lz4-java:1.8.0")
     testImplementation(project(":zlink-framework-core"))
-    testImplementation(testFixtures(project(":zlink-framework-core")))
 }
 
 val buildNodeStreamConnector by tasks.registering(Exec::class) {
