@@ -1,5 +1,13 @@
 # Go performance benchmarks
 
+The `bindings/go/perf` module uses the local Go binding through `replace`.
+From the repository root, build and test both suites with the following commands.
+
+```sh
+go -C bindings/go/perf build ./...
+go -C bindings/go/perf test ./...
+```
+
 The single and multi suites have separate runners and use the same public
 pattern names. Run the multi suite with `run_benchmarks_multi.sh` and the
 single suite with `run_benchmarks.sh`.

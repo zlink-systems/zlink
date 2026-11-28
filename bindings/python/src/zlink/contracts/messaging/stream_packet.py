@@ -42,7 +42,7 @@ class StreamPacket:
 
     def _begin_receive(self) -> None:
         if not self._receive_lock.acquire(blocking=False):
-            raise RecvError(RecvResult.BUSY, errno.EBUSY)
+            raise RecvError(RecvResult.INVALID_STATE, errno.EBUSY)
         try:
             self._reset_unlocked()
         except BaseException:
