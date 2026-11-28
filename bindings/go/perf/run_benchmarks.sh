@@ -365,16 +365,12 @@ build_go_perf_binary() {
     fi
     return
   fi
-  go build -o "${GO_SINGLE_BIN}" ./perf/single
+  local build_dir
+  build_dir="$(cd "${BUILD_DIR}" && pwd)"
+  go -C "${SCRIPT_DIR}" build -o "${build_dir}/${GO_SINGLE_BIN##*/}" ./single
 }
 
 run_go_perf() {
-  local package="$1"
-  shift
-  if [[ "${package}" != "./perf/single" ]]; then
-    echo "Error: unsupported Go perf package: ${package}" >&2
-    return 1
-  fi
   if [[ "${PIN_CPU}" != "on" ]]; then
     "${GO_SINGLE_BIN}" "$@"
     return
@@ -700,7 +696,7 @@ for run in $(seq 1 "${RUNS}"); do
         case_log="${TMP_DIR}/${pattern}_${transport}_${size}_run${run}.log"
         case_ok=0
         case_gomaxprocs="$(resolve_case_gomaxprocs "${pattern}" "${transport}" "${size}")"
-        if GOMAXPROCS="${case_gomaxprocs}" run_go_perf ./perf/single \
+        if GOMAXPROCS="${case_gomaxprocs}" run_go_perf \
           --pattern "${pattern}" \
           --transport "${transport}" \
           --msg-size "${size}" \
