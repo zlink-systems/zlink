@@ -1459,7 +1459,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             PreparedSpot spot,
                             List<QueuedTurn> dispatches,
                             String lane,
-                            byte[] record,
+                            java.util.function.Supplier<byte[]> record,
+                            long recordSizeHint,
                             java.util.function.Supplier<CompletionStage<Void>> turn,
                             CompletableFuture<Void> admission) {
                         var failure =

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include "../support/loopback_tcp_endpoint.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/stream_wire_peer.hpp"
 #include "metric_test_reader.hpp"
 #include "metric_test_store.hpp"
 
@@ -42,9 +43,7 @@ namespace fw = zlink::framework;
 namespace rt = fw::runtime;
 namespace detail = fw::detail;
 namespace asio = boost::asio;
-using asio::ip::tcp;
 using detail::stream_message_kind_t;
-namespace websocket = boost::beast::websocket;
 using json = nlohmann::json;
 using namespace std::chrono_literals;
 
@@ -89,120 +88,22 @@ detail::stream_header_t fixture_header (const json &step)
             std::stoull (step.at ("requestSeq").get<std::string> ()), step.at ("packetName")};
 }
 
-struct wire_frame_t
+using fw::tests::stream_wire::wire_frame_t;
+using fw::tests::stream_wire::wire_peer_t;
+
+void send_fixture (wire_peer_t &peer,
+                   const detail::stream_runtime_t &runtime,
+                   const json &step,
+                   std::optional<std::uint16_t> actor_slot = {},
+                   bool malformed_header = false)
 {
-    detail::stream_header_t header;
-    std::string payload;
-};
-
-class wire_peer_t
-{
-  public:
-    explicit wire_peer_t (const std::string &endpoint)
-    {
-        const auto port = fw::tests::endpoint_port (endpoint);
-        socket ().connect ({asio::ip::address_v4::loopback (), port});
-        _websocket = endpoint.starts_with ("ws:");
-        if (_websocket) {
-            _transport.handshake ("127.0.0.1:" + std::to_string (port), "/");
-            _transport.binary (true);
-        }
+    auto header = fixture_header (step);
+    if (actor_slot) {
+        header.with_actor_slot (*actor_slot);
+        header.with_correlation_id ("admission-probe");
     }
-
-    void send (const detail::stream_runtime_t &runtime,
-               const json &step,
-               std::optional<std::uint16_t> actor_slot = {},
-               bool malformed_header = false)
-    {
-        auto header = fixture_header (step);
-        if (actor_slot) {
-            header.with_actor_slot (*actor_slot);
-            header.with_correlation_id ("admission-probe");
-        }
-        auto bytes = runtime
-                       .encode_frame (
-                         header, zlink::message_t::from (step.at ("requestId").get<std::string> ()))
-                       .value ();
-        if (malformed_header)
-            bytes.at (6) = 0;
-        if (_websocket)
-            _transport.write (asio::buffer (bytes));
-        else
-            asio::write (socket (), asio::buffer (bytes));
-    }
-
-    wire_frame_t read (const detail::stream_runtime_t &runtime)
-    {
-        if (_websocket) {
-            boost::beast::flat_buffer received;
-            run_read ([&] (auto completed) { _transport.async_read (received, completed); });
-            const auto bytes = received.data ();
-            const auto *begin = static_cast<const std::uint8_t *> (bytes.data ());
-            require (bytes.size () >= 6, "truncated STREAM WebSocket frame");
-            std::vector<std::uint8_t> response (begin, begin + bytes.size ());
-            const auto header_size = parse_header_size (response);
-            require (6 + header_size <= response.size (), "invalid STREAM WebSocket header length");
-            const auto header_end = response.begin () + 6 + header_size;
-            auto header = runtime.decode_header ({response.begin () + 6, header_end}).value ();
-            return {std::move (header), {header_end, response.end ()}};
-        }
-        const auto prefix = read_exact (6);
-        const auto header_size = parse_header_size (prefix);
-        std::size_t payload_size = 0;
-        for (std::size_t index = 2; index != prefix.size (); ++index)
-            payload_size = (payload_size << 8) | prefix[index];
-        require (payload_size <= 64 * 1024, "oversized test response");
-        auto header = runtime.decode_header (read_exact (header_size)).value ();
-        auto payload = read_exact (payload_size);
-        return {std::move (header), {payload.begin (), payload.end ()}};
-    }
-
-    void close () noexcept
-    {
-        boost::system::error_code ignored;
-        socket ().close (ignored);
-    }
-
-  private:
-    static std::size_t parse_header_size (const std::vector<std::uint8_t> &prefix)
-    {
-        return (static_cast<std::size_t> (prefix[0]) << 8) | prefix[1];
-    }
-
-    template <typename Start> void run_read (Start start)
-    {
-        boost::system::error_code result;
-        bool finished = false;
-        start ([&] (boost::system::error_code error, std::size_t) {
-            result = error;
-            finished = true;
-        });
-        _io.restart ();
-        _io.run_for (3s);
-        if (!finished) {
-            close ();
-            _io.restart ();
-            _io.run ();
-            throw std::runtime_error ("timed out waiting for STREAM response");
-        }
-        if (result)
-            throw boost::system::system_error (result);
-    }
-
-    std::vector<std::uint8_t> read_exact (std::size_t size)
-    {
-        std::vector<std::uint8_t> bytes (size);
-        run_read (
-          [&] (auto completed) { asio::async_read (socket (), asio::buffer (bytes), completed); });
-        return bytes;
-    }
-
-    tcp::socket &socket () { return _transport.next_layer (); }
-
-    asio::io_context _io;
-    websocket::stream<tcp::socket> _transport{_io};
-    bool _websocket = false;
-};
+    peer.send (runtime, header, step.at ("requestId").get<std::string> (), malformed_header);
+}
 
 class wire_session_t final : public fw::packet_stream_session_t
 {
@@ -433,17 +334,17 @@ void run_wire_rejection (const json &scenario, wire_transport_t transport)
         wire_peer_t invalid (
           fw::tests::listener_endpoint (*listeners, fw::listener_kind_t::stream, second_name));
         wait_for ([&] { return session.connected == 3; }, "probe session did not connect");
-        invalid.send (runtime, steps.at (0), {}, true);
+        send_fixture (invalid, runtime, steps.at (0), {}, true);
         wait_for ([&] { return jobs->snapshot ().capacity_waiters == 1; },
                   "STREAM decoded a malformed header before reserving its ingress permit");
         permit.reset ();
         wait_for ([&] { return jobs->snapshot ().permits_in_use == 0; },
                   "malformed frame did not return its ingress permit");
     }
-    first.send (runtime, steps.at (0));
+    send_fixture (first, runtime, steps.at (0));
     wait_for ([&] { return session.calls == 1; }, "first authentication did not enter its handler");
     check_metrics (metrics, 1, 0);
-    second.send (runtime, steps.at (2), 1);
+    send_fixture (second, runtime, steps.at (2), 1);
     const auto &rejected = steps.at (2).at ("expect");
     const auto rejection = second.read (runtime);
     verify_rejection (rejection, rejected.at ("error"));
@@ -465,7 +366,7 @@ void run_wire_rejection (const json &scenario, wire_transport_t transport)
         require (capacity->snapshot ().measurement_epoch > epoch,
                  "capacity reset did not advance the measurement epoch");
         check_metrics (metrics, 1, 0);
-        second.send (runtime, steps.at (2), 1);
+        send_fixture (second, runtime, steps.at (2), 1);
         verify_rejection (second.read (runtime), rejected.at ("error"));
         check_metrics (metrics, 1, 1);
         require (session.calls == 1, "metrics reset changed the admission limit");
@@ -474,7 +375,7 @@ void run_wire_rejection (const json &scenario, wire_transport_t transport)
     require (first.read (runtime).header.kind () == stream_message_kind_t::response,
              "admitted authentication did not reply");
     wait_for (no_admissions, "first reply did not settle the authentication lease");
-    second.send (runtime, steps.at (2));
+    send_fixture (second, runtime, steps.at (2));
     require (second.read (runtime).header.kind () == stream_message_kind_t::response,
              "rejected peer did not remain connected");
     require (session.actor_lookups == 1 && actor_creates == 1 && session.store_reads == 1
@@ -485,7 +386,7 @@ void run_wire_rejection (const json &scenario, wire_transport_t transport)
 
     auto pending = steps.at (0);
     pending["requestId"] = "cancel";
-    first.send (runtime, pending);
+    send_fixture (first, runtime, pending);
     wait_for ([&] { return session.calls == 3; }, "cancellation handler did not enter");
     auto unrelated_permit = jobs->try_reserve_supply ();
     require (unrelated_permit.has_value (), "unable to reserve unrelated application capacity");
@@ -500,7 +401,7 @@ void run_wire_rejection (const json &scenario, wire_transport_t transport)
               "cancelled callback did not exit");
 
     pending["requestId"] = "shutdown";
-    second.send (runtime, pending);
+    send_fixture (second, runtime, pending);
     wait_for ([&] { return session.calls == 4; }, "shutdown handler did not enter");
     check_metrics (metrics, 1, 1);
     auto stopping = std::async (std::launch::async, [&] { host.stop (); });
@@ -713,10 +614,13 @@ class fixture_driver_t
           detail::stream_header_t (stream_message_kind_t::response, fw::stream_codec_t::raw,
                                    detail::stream_header_flags_t::has_request_seq, 42, "");
         _ingress
-          .publish (_runtime, session, session.stream, receive, zlink::message_t{}, {}, {}, {},
-                    [] (const auto &, const auto &) {
-                        throw std::runtime_error ("admission rejected a Response");
-                    })
+          .publish (
+            _runtime, session, session.stream, "first", receive, zlink::message_t{}, {},
+            [] (const auto &, detail::stream_metadata_t = {}) {}, {},
+            [] (const auto &, const auto &) {
+                throw std::runtime_error ("admission rejected a Response");
+            },
+            [] (auto work) { work ({}); })
           .value ();
         require (_ingress.in_flight () == before
                    && _jobs.snapshot ().queued_application_jobs == queued,
@@ -761,18 +665,19 @@ class fixture_driver_t
                                     stream_message_kind_t::error, header, std::move (metadata)),
                                   detail::stream_error_payload (result));
         };
-        auto completed = [&current, write_error] (const fw::result_t<void> &result) {
+        auto completed = [&current, write_error] (const fw::result_t<void> &result,
+                                                  detail::stream_metadata_t metadata = {}) {
             if (!result)
-                write_error (result, {});
+                write_error (result, std::move (metadata));
             ++current.completions;
             current.client_completion.complete (result);
         };
         auto publish = [this, &current, header, permit = std::move (*permit),
                         payload = zlink::message_t::from (request), completed, write_error] (
                          detail::stream_runtime_t::async_dispatch_cancel_t cancelled) mutable {
-            return _ingress.publish (_runtime, current, current.stream, header, payload,
+            return _ingress.publish (_runtime, current, current.stream, "first", header, payload,
                                      std::move (permit), completed, std::move (cancelled),
-                                     write_error);
+                                     write_error, [] (auto work) { work ({}); });
         };
         if (request == "a" && _terminal == "enqueueRejected") {
             const auto gate = _refuse_enqueue.get_future ().share ();

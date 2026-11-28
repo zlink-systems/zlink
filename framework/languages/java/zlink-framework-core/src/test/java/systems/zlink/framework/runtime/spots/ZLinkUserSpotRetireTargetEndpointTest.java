@@ -1736,7 +1736,8 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 PreparedSpot preparedSpot,
                 List<QueuedTurn> dispatches,
                 String laneId,
-                byte[] record,
+                Supplier<byte[]> record,
+                long recordSizeHint,
                 Supplier<CompletionStage<Void>> turn,
                 CompletableFuture<Void> admission) {
             admittedTurns++;
@@ -1755,28 +1756,23 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                 if (actorRuntime != null) {
                     var terminal =
                             actorRuntime.submitActorDispatchLazyRecord(
-                                    dispatch,
-                                    () -> record,
-                                    record.length,
-                                    turn,
-                                    () -> {},
-                                    admission);
+                                    dispatch, record, recordSizeHint, turn, () -> {}, admission);
                     queuedTerminals.add(terminal.toCompletableFuture());
                     return terminal;
                 }
                 return dispatch.target()
                         .executeActorLazyRecord(
                                 dispatch.activation(),
-                                () -> record,
-                                record.length,
+                                record,
+                                recordSizeHint,
                                 turn,
                                 () -> {},
                                 admission);
             }
             var terminal =
                     fifo.enqueueRelocatableLazyRecord(
-                            () -> record,
-                            record.length,
+                            record,
+                            recordSizeHint,
                             ZLinkConfirmedReplay.wrap(
                                     turn,
                                     next ->

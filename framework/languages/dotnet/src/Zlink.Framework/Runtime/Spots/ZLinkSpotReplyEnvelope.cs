@@ -36,7 +36,9 @@ internal static class ZLinkSpotReplyEnvelope
         var replyHeader = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Response,
             channelName,
-            messageName,
+            reply is AdmissionEnqueued or AdmissionReported or AdmissionPermitResult
+                ? messageName + ".reply"
+                : messageName,
             ZLinkEnvelopeCodec.DefaultContentType,
             correlationId,
             null,

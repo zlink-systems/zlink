@@ -7567,9 +7567,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 return;
             }
         }
+        byte[] payloadFrame;
         ZLinkServiceM6AWireCodec.ApplicationPayload payload;
         try {
-            payload = wire.decodeApplicationPayload(frames.get(payloadOffset));
+            payloadFrame = frames.get(payloadOffset);
+            payload = wire.decodeApplicationPayload(payloadFrame);
         } catch (RuntimeException invalidPayload) {
             if (header != null) replyInstanceFailure(inbound, header, 104, 12);
             else rejectProtocolRecord(inbound, "instance_spot");
@@ -7645,25 +7647,65 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             }
             if (forwardTarget != null) {
                 messages.forEach(Message::close);
-                forwardInstanceSpot(
-                        follow, forwardTarget, metadata, frames.get(payloadOffset), activationFlow);
+                forwardInstanceSpot(follow, forwardTarget, metadata, payloadFrame, activationFlow);
                 return;
             }
             if (followed) {
                 header = spotNode.readyInstanceFollow(follow);
                 if (header == null) {
-                    messages.forEach(Message::close);
-                    dropInstanceFollow(
+                    admitStagedInstanceFollow(
+                            inbound,
                             follow,
-                            ZLinkFrameworkErrorOrigin.framework(
-                                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                                    "Instance Spot Follow has no matching Ready fence"),
+                            metadata,
+                            payloadFrame,
+                            messages,
+                            contentType,
                             activationFlow);
                     return;
                 }
             }
         }
         admitInstanceSpot(inbound, header, metadata, messages, contentType, activationFlow);
+    }
+
+    private void admitStagedInstanceFollow(
+            ZLinkJavaRawServicePort.Inbound inbound,
+            ZLinkServiceM6BWireCodec.InstanceSpotFollow follow,
+            byte[] metadata,
+            byte[] payload,
+            List<Message> messages,
+            String contentType,
+            ZLinkFlowContext.State activationFlow) {
+        boolean staged;
+        try {
+            staged =
+                    spotNode.enqueueStagedInstanceFollow(
+                            follow,
+                            metadata,
+                            payload,
+                            failure -> dropInstanceFollow(follow, failure, activationFlow));
+        } catch (RuntimeException failure) {
+            messages.forEach(Message::close);
+            dropInstanceFollow(follow, failure, activationFlow);
+            return;
+        }
+        if (staged) {
+            messages.forEach(Message::close);
+            return;
+        }
+        // Publication can finish after the initial Ready lookup.
+        var published = spotNode.readyInstanceFollow(follow);
+        if (published != null) {
+            admitInstanceSpot(inbound, published, metadata, messages, contentType, activationFlow);
+            return;
+        }
+        messages.forEach(Message::close);
+        dropInstanceFollow(
+                follow,
+                ZLinkFrameworkErrorOrigin.framework(
+                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                        "Instance Spot Follow has no matching Ready fence"),
+                activationFlow);
     }
 
     private boolean matchesLocalInstanceSpotTarget(RoutingId nodeRid, long nodeGeneration) {

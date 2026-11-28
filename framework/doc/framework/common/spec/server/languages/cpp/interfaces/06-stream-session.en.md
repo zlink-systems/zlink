@@ -129,6 +129,11 @@ struct stream_authentication_options_t {
     std::optional<std::string> packet_name;
     std::optional<std::int64_t> max_concurrent;
     std::chrono::milliseconds retry_delay{500};
+    bool queue_enabled = false;
+    std::optional<std::string> queue_key;
+    std::optional<std::string> queue_previous_key;
+    std::optional<std::int64_t> global_limit;
+    std::optional<std::string> queue_mesh_name;
 };
 }
 
@@ -174,6 +179,11 @@ public:
     stream_node_options_builder_t &set_authentication_packet_name(std::string name);
     stream_node_options_builder_t &set_max_concurrent_authentications(std::int64_t value);
     stream_node_options_builder_t &set_authentication_retry_delay(std::chrono::milliseconds delay);
+    stream_node_options_builder_t &set_admission_queue_enabled(bool value);
+    stream_node_options_builder_t &set_admission_queue_key(std::string value);
+    stream_node_options_builder_t &set_admission_queue_previous_key(std::string value);
+    stream_node_options_builder_t &set_admission_global_limit(std::int64_t value);
+    stream_node_options_builder_t &set_admission_queue_mesh_name(std::string value);
     stream_node_options_builder_t &register_session(std::string session_name);
 
     template <typename TSession>

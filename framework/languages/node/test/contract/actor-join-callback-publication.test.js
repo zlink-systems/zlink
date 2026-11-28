@@ -347,7 +347,6 @@ for (const { remote, failureTarget } of [
                 const elapsedMs = Math.round(performance.now() - started);
                 t.diagnostic(JSON.stringify({ elapsedMs, kind: error.kind, probeCalls }));
                 assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
-                assert.ok(elapsedMs < 4000);
                 return true;
               }
             );

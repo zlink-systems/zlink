@@ -31,7 +31,8 @@ final class TestPreparedSpot implements PreparedSpot {
 
     @Override
     public CompletionStage<Void> enqueue(
-            byte[] record,
+            Supplier<byte[]> record,
+            long recordSizeHint,
             Supplier<CompletionStage<Void>> turn,
             CompletableFuture<Void> admission) {
         throw new UnsupportedOperationException();

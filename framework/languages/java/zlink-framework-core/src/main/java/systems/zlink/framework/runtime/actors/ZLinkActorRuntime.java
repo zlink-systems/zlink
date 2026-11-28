@@ -4030,7 +4030,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     public CompletionStage<Void> submitActorDispatch(
             String actorId, long payloadBytes, Supplier<CompletionStage<Void>> operation) {
-        return submitActorDispatch(null, actorId, null, payloadBytes, operation, () -> {});
+        return submitActorDispatch(null, actorId, null, payloadBytes, operation, () -> {}, null);
     }
 
     public CompletionStage<Void> submitActorDispatch(
@@ -4046,7 +4046,23 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
         return submitActorDispatch(
-                null, actorId, acceptedJournalRecord, null, operation, relocationRelease);
+                actorId, acceptedJournalRecord, operation, relocationRelease, null);
+    }
+
+    public CompletionStage<Void> submitActorDispatch(
+            String actorId,
+            byte[] acceptedJournalRecord,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
+        return submitActorDispatch(
+                null,
+                actorId,
+                acceptedJournalRecord,
+                null,
+                operation,
+                relocationRelease,
+                admission);
     }
 
     public CompletionStage<Void> submitActorDispatchLazyRecord(
@@ -4157,31 +4173,26 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     private CompletionStage<Void> submitActorDispatch(
-            String actorId,
-            byte[] acceptedJournalRecord,
-            Long payloadBytes,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
-        return submitActorDispatch(
-                null, actorId, acceptedJournalRecord, payloadBytes, operation, relocationRelease);
-    }
-
-    private CompletionStage<Void> submitActorDispatch(
             ZLinkActorDispatchTarget target,
             String actorId,
             byte[] acceptedJournalRecord,
             Long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
+            Runnable relocationRelease,
+            CompletableFuture<Void> admission) {
         return submitActorDispatch(
                 target,
                 actorId,
                 operation,
-                null,
+                admission,
                 turn -> {
                     if (acceptedJournalRecord != null) {
                         return dispatches.enqueue(
-                                turn, acceptedJournalRecord, operation, relocationRelease);
+                                turn,
+                                acceptedJournalRecord,
+                                operation,
+                                relocationRelease,
+                                admission);
                     }
                     return payloadBytes == null
                             ? dispatches.enqueue(turn, operation)

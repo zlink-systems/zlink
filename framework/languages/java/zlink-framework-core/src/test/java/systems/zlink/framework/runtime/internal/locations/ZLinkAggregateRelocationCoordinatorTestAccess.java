@@ -27,9 +27,16 @@ public final class ZLinkAggregateRelocationCoordinatorTestAccess {
 
     public static void interceptCommit(
             ZLinkAggregateRelocationCoordinator coordinator, CommitInterceptor interceptor) {
-        InvocationHandler handler = Proxy.getInvocationHandler(coordinator.authorityStore);
-        ((InterceptingHandler) handler).interceptor =
-                Objects.requireNonNull(interceptor, "interceptor");
+        handler(coordinator).commit = Objects.requireNonNull(interceptor, "interceptor");
+    }
+
+    public static void interceptRead(
+            ZLinkAggregateRelocationCoordinator coordinator, ReadInterceptor interceptor) {
+        handler(coordinator).read = Objects.requireNonNull(interceptor, "interceptor");
+    }
+
+    private static InterceptingHandler handler(ZLinkAggregateRelocationCoordinator coordinator) {
+        return (InterceptingHandler) Proxy.getInvocationHandler(coordinator.authorityStore);
     }
 
     @FunctionalInterface
@@ -37,14 +44,22 @@ public final class ZLinkAggregateRelocationCoordinatorTestAccess {
         CompletionStage<ZLinkAggregateCommitResult> commit(
                 ZLinkLocationRepository repository,
                 ZLinkAggregateFence fence,
-                List<systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRow>
-                        acceptedReplies,
+                List<ZLinkRelocationReplyRow> acceptedReplies,
+                ZLinkStoreCancellation cancellation);
+    }
+
+    @FunctionalInterface
+    public interface ReadInterceptor {
+        CompletionStage<ZLinkAuthorityReadResult> read(
+                ZLinkLocationRepository repository,
+                String key,
                 ZLinkStoreCancellation cancellation);
     }
 
     private static final class InterceptingHandler implements InvocationHandler {
         private final ZLinkLocationRepository delegate;
-        private volatile CommitInterceptor interceptor;
+        private volatile CommitInterceptor commit;
+        private volatile ReadInterceptor read;
 
         private InterceptingHandler(ZLinkLocationRepository delegate) {
             this.delegate = Objects.requireNonNull(delegate, "delegate");
@@ -53,13 +68,18 @@ public final class ZLinkAggregateRelocationCoordinatorTestAccess {
         @Override
         @SuppressWarnings("unchecked")
         public Object invoke(Object proxy, Method method, Object[] arguments) throws Throwable {
-            var current = interceptor;
+            var current = commit;
             if (current != null && method.getName().equals("commitAggregate")) {
                 return current.commit(
                         delegate,
                         (ZLinkAggregateFence) arguments[0],
                         (List<ZLinkRelocationReplyRow>) arguments[1],
                         (ZLinkStoreCancellation) arguments[2]);
+            }
+            var readInterceptor = read;
+            if (readInterceptor != null && method.getName().equals("read")) {
+                return readInterceptor.read(
+                        delegate, (String) arguments[0], (ZLinkStoreCancellation) arguments[1]);
             }
             try {
                 return method.invoke(delegate, arguments);
