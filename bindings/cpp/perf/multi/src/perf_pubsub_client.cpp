@@ -26,7 +26,6 @@ static const char *k_pattern_env = "PUBSUB";
 static const char *k_pattern_result = "PUBSUB";
 static const char *k_topic = "bench";
 static const uint32_t k_run_id = 1U;
-static constexpr size_t k_receive_batch = 64;
 static constexpr auto k_receive_poll = std::chrono::milliseconds (10);
 static constexpr auto k_drain_quiet = std::chrono::milliseconds (50);
 static constexpr auto k_drain_duration = std::chrono::seconds (10);
@@ -55,51 +54,32 @@ pubsub_recv_result_t recv_one_pubsub_message (zlink::sub_socket_t &sock,
                                               size_t expected_msg_size,
                                               perf_metric::header_t *header_out)
 {
-    std::optional<zlink::routing_id_t> source_rid;
-    std::string topic;
-    zlink::message_t part;
-    bool has_more = false;
-
-    const int rc = sock.subscribe_part (source_rid, topic, part, has_more,
-                                        static_cast<int> (zlink::recv_flags_t::dontwait));
+    zlink::topic_message_t message;
+    const int rc = sock.subscribe (message, zlink::recv_flags_t::dontwait);
     if (rc != 0) {
         const int err = errno;
-        if (err == EAGAIN || err == EINTR)
+        if (rc == static_cast<int> (zlink::recv_result_t::no_data) || err == EAGAIN || err == EINTR)
             return pubsub_recv_empty;
         return pubsub_recv_error;
     }
 
-    if (source_rid || topic.size () != std::strlen (k_topic)) {
+    if (message.routing_id () || message.topic ().size () != std::strlen (k_topic))
         return pubsub_recv_payload;
-    }
 
+    const bool single_part = message.is_single_part ();
+    const auto &part = single_part ? message.first_part () : message.parts ().front ();
     const size_t recv_size = part.size ();
     const void *recv_data = part.data ();
-    if (perf::multi::is_stop_token (recv_data, recv_size)) {
-        if (has_more)
-            return pubsub_recv_error;
-        return pubsub_recv_stop;
-    }
+    if (perf::multi::is_stop_token (recv_data, recv_size))
+        return single_part ? pubsub_recv_stop : pubsub_recv_error;
     if (recv_size != std::max<size_t> (expected_msg_size, perf_metric::header_size ()))
         return pubsub_recv_payload;
 
-    if (perf::multi::measurement_part_count () == 1) {
-        if (has_more)
-            return pubsub_recv_error;
-    } else {
-        if (!has_more)
-            return pubsub_recv_error;
-
-        std::optional<zlink::routing_id_t> tail_source_rid;
-        std::string tail_topic;
-        zlink::message_t tail;
-        bool tail_has_more = false;
-        const int tail_rc = sock.subscribe_part (
-          tail_source_rid, tail_topic, tail, tail_has_more,
-          static_cast<int> (zlink::recv_flags_t::dontwait));
-        if (tail_rc != 0 || tail_has_more || tail.size () != 0)
-            return pubsub_recv_error;
-    }
+    const bool valid_parts = perf::multi::measurement_part_count () == 1
+                               ? single_part
+                               : perf::multi::measurement_parts_valid (message.parts ());
+    if (!valid_parts)
+        return pubsub_recv_error;
 
     perf_metric::header_t header;
     const bool decoded = perf_metric::decode_payload_header (recv_data, recv_size, &header);
@@ -158,8 +138,9 @@ class pubsub_client_bench_t
         }
 
         std::vector<uint64_t> active_received (_sockets.size (), 0);
+        std::vector<bool> active_stop_seen (_sockets.size (), false);
         _failure_stage = "active_receive";
-        if (!run_active (active_received))
+        if (!run_active (active_received, active_stop_seen))
             return false;
 
         if (_result.active_count == 0) {
@@ -172,7 +153,7 @@ class pubsub_client_bench_t
               _msg_size, static_cast<int> (perf_metric::phase_active)))
             return false;
         _failure_stage = "active_drain";
-        if (!drain_until_idle ())
+        if (!drain_active (active_stop_seen))
             return false;
         const uint64_t minimum =
           *std::min_element (active_received.begin (), active_received.end ());
@@ -188,10 +169,13 @@ class pubsub_client_bench_t
         _failure_stage = "paced_receive";
         if (!run_paced (target_rate, &caught_up, &paced_received))
             return false;
-        if (caught_up)
+        if (caught_up) {
             print_result ();
-        else
+            std::cout << "PUBSUB_LATENCY_DIAG," << _msg_size << ",latency_p50_ms," << std::fixed
+                      << std::setprecision (6) << _result.latency.p50_ns / 1000000.0 << std::endl;
+        } else {
             print_invalid_latency ();
+        }
         std::cout << "PHASE_COMPLETE," << _msg_size << ',' << paced_received << std::endl;
         std::cout << "CLIENT_DONE," << _msg_size << std::endl;
         return true;
@@ -251,12 +235,10 @@ class pubsub_client_bench_t
         return !_sockets.empty ();
     }
 
-    bool run_active (std::vector<uint64_t> &received_)
+    bool run_active (std::vector<uint64_t> &received_, std::vector<bool> &stop_seen)
     {
         const auto deadline =
           std::chrono::steady_clock::now () + std::chrono::seconds (_phase_cfg.active_seconds);
-        std::vector<bool> stop_seen (_sockets.size (), false);
-
         while (std::chrono::steady_clock::now () < deadline) {
             const auto poll_wait =
               std::min (perf::multi::remaining_bounded_timeout (deadline), k_receive_poll);
@@ -266,7 +248,7 @@ class pubsub_client_bench_t
                 const size_t slot = _poll_events[i].slot;
                 if (slot >= _sockets.size () || stop_seen[slot])
                     continue;
-                for (size_t n = 0; n < k_receive_batch; ++n) {
+                for (size_t n = 0; n < perf_multi_measurement::max_burst_per_sender; ++n) {
                     if (std::chrono::steady_clock::now () >= deadline)
                         return true;
                     perf_metric::header_t header = {};
@@ -294,23 +276,23 @@ class pubsub_client_bench_t
         return true;
     }
 
-    bool drain_until_idle ()
+    bool drain_active (std::vector<bool> &stop_seen)
     {
         const auto deadline = std::chrono::steady_clock::now () + k_drain_duration;
-        auto idle_since = std::chrono::steady_clock::now ();
+        auto last_payload = std::chrono::steady_clock::now ();
         while (std::chrono::steady_clock::now () < deadline) {
+            if (std::all_of (stop_seen.begin (), stop_seen.end (),
+                             [] (bool stopped) { return stopped; })
+                || std::chrono::steady_clock::now () - last_payload >= k_drain_quiet)
+                return true;
+
             const size_t ready =
               _poller.wait (_poll_events.data (), _poll_events.size (), k_receive_poll);
-            if (ready == 0) {
-                if (std::chrono::steady_clock::now () - idle_since >= k_drain_quiet)
-                    return true;
-                continue;
-            }
             for (size_t i = 0; i < ready; ++i) {
                 const size_t slot = _poll_events[i].slot;
-                if (slot >= _sockets.size ())
+                if (slot >= _sockets.size () || stop_seen[slot])
                     continue;
-                for (size_t n = 0; n < k_receive_batch; ++n) {
+                for (size_t n = 0; n < perf_multi_measurement::max_burst_per_sender; ++n) {
                     perf_metric::header_t header = {};
                     const pubsub_recv_result_t rc =
                       recv_one_pubsub_message (*_sockets[slot], _msg_size, &header);
@@ -318,10 +300,15 @@ class pubsub_client_bench_t
                         return false;
                     if (rc == pubsub_recv_empty)
                         break;
-                    idle_since = std::chrono::steady_clock::now ();
+                    last_payload = std::chrono::steady_clock::now ();
+                    if (rc == pubsub_recv_stop) {
+                        stop_seen[slot] = true;
+                        break;
+                    }
                 }
             }
         }
+        errno = ETIMEDOUT;
         return false;
     }
 
@@ -346,13 +333,13 @@ class pubsub_client_bench_t
           outer_deadline
           + std::chrono::duration_cast<std::chrono::nanoseconds> (k_drain_duration).count ();
         while (static_cast<uint64_t> (perf_metric::now_ns ()) < drain_deadline) {
-            const uint64_t now = static_cast<uint64_t> (perf_metric::now_ns ());
+            const uint64_t poll_start = static_cast<uint64_t> (perf_metric::now_ns ());
             const uint64_t sample_end =
               catch_up_at != 0 ? catch_up_at + duration_ns : outer_deadline;
-            if (now >= sample_end
+            if (poll_start >= sample_end
                 && (std::all_of (stop_seen.begin (), stop_seen.end (),
                                  [] (bool stopped) { return stopped; })
-                    || now - last_payload_ns >= static_cast<uint64_t> (
+                    || poll_start - last_payload_ns >= static_cast<uint64_t> (
                          std::chrono::duration_cast<std::chrono::nanoseconds> (k_drain_quiet)
                            .count ())))
                 break;
@@ -362,7 +349,7 @@ class pubsub_client_bench_t
                 const size_t slot = _poll_events[i].slot;
                 if (slot >= _sockets.size ())
                     continue;
-                for (size_t n = 0; n < k_receive_batch; ++n) {
+                for (size_t n = 0; n < perf_multi_measurement::max_burst_per_sender; ++n) {
                     perf_metric::header_t header = {};
                     const pubsub_recv_result_t rc =
                       recv_one_pubsub_message (*_sockets[slot], _msg_size, &header);
@@ -376,8 +363,7 @@ class pubsub_client_bench_t
                         break;
                     }
 
-                    if (header.phase != perf_metric::phase_warmup
-                        && header.phase != perf_metric::phase_latency)
+                    if (!perf_multi_measurement::is_paced_receive_phase (header.phase))
                         continue;
                     ++paced_received[slot];
                     if (epoch == 0 && header.sent_ts_ns > 0)
@@ -393,25 +379,28 @@ class pubsub_client_bench_t
                     }
                 }
             }
+            const uint64_t now = static_cast<uint64_t> (perf_metric::now_ns ());
             if (epoch != 0 && catch_up_at == 0 && now <= epoch + duration_ns) {
-                const uint64_t minimum =
-                  *std::min_element (paced_received.begin (), paced_received.end ());
                 const uint64_t scheduled =
                   perf_multi_measurement::scheduled_count (target_rate, epoch, now);
-                const uint64_t in_flight = scheduled > minimum ? scheduled - minimum : 0;
+                const bool caught_up = tracker.observe (now, paced_received, scheduled);
                 if (now >= next_progress_ns) {
+                    const uint64_t in_flight = tracker.in_flight ();
                     _inflight_floor = std::min (_inflight_floor, in_flight);
                     std::cout << "PUBSUB_CATCHUP_PROGRESS," << _msg_size << ','
-                              << (now - epoch) / 1e9 << ',' << in_flight << ',' << minimum << ','
-                              << scheduled << ',' << target_rate << std::endl;
+                              << (now - epoch) / 1e9 << ',' << in_flight << ','
+                              << tracker.min_received () << ',' << scheduled << ',' << target_rate
+                              << std::endl;
                     next_progress_ns = now + 1000000000ULL;
                 }
 
-                if (tracker.observe (now, minimum, scheduled)) {
+                if (caught_up) {
                     catch_up_at = now;
                     std::cout << "PHASE_CATCHUP," << _msg_size << std::endl;
                     std::cout << "PUBSUB_CATCHUP_DIAG," << _msg_size << ',' << (now - epoch) / 1e9
-                              << ',' << tracker.in_flight_at_catch_up () << std::endl;
+                              << ',' << tracker.in_flight_at_catch_up ()
+                              << ",window_start_in_flight," << tracker.window_start_in_flight ()
+                              << std::endl;
                 }
             }
         }

@@ -379,7 +379,6 @@ template <typename SocketT> class client_bench_t
     {
         bool submitted = false;
         for (size_t offset = 0; offset < count_; ++offset) {
-            auto &slot = *_slots[(cursor_ + offset) % _slots.size ()];
             const auto now = perf_metric::now_ns ();
             auto phase = perf_metric::phase_active;
             if (schedule_) {
@@ -390,6 +389,9 @@ template <typename SocketT> class client_bench_t
                           ? perf_metric::phase_latency
                           : perf_metric::phase_warmup;
             }
+            // As in C REQREP, submit one request per sender visit.
+            auto &slot = *_slots[cursor_];
+            cursor_ = (cursor_ + 1) % _slots.size ();
             const auto previous_seq = slot.next_seq;
             if (!launch_request (slot, phase, schedule_)) {
                 _completion->fatal.store (true, std::memory_order_release);
@@ -397,7 +399,6 @@ template <typename SocketT> class client_bench_t
             }
             submitted |= slot.next_seq != previous_seq;
         }
-        cursor_ = (cursor_ + (count_ == _slots.size () ? 1 : count_)) % _slots.size ();
         return {true, submitted};
     }
 

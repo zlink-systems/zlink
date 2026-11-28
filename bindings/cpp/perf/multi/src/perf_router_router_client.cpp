@@ -247,6 +247,7 @@ class router_router_client_bench_t
         const auto deadline_ns =
           std::chrono::duration_cast<std::chrono::nanoseconds> (deadline.time_since_epoch ())
             .count ();
+        perf_multi_measurement::message_burst_t burst;
         for (;;) {
             const auto now = perf_metric::now_ns ();
             if (now >= deadline_ns)
@@ -297,8 +298,10 @@ class router_router_client_bench_t
                     co_return false;
                 blocked = true;
             }
-            if (!schedule || blocked)
+            if (blocked || burst.complete ()) {
+                burst.reset ();
                 co_await ready_queue.schedule ();
+            }
         }
         co_return true;
     }
@@ -390,7 +393,7 @@ class router_router_client_bench_t
                                                   schedule));
 
             const auto dispatch_ready = [this, phase, deadline, lat_out, &latency, &count, &replies,
-                                         schedule] (const zlink::poll_event_t *events_,
+                                         schedule, &coordinator] (const zlink::poll_event_t *events_,
                                                     size_t ready_count) {
                 for (size_t i = 0; i < ready_count; ++i) {
                     const size_t slot_index = events_[i].slot;
@@ -401,9 +404,11 @@ class router_router_client_bench_t
                     // receive remains driven exclusively by POLLIN readiness.
                     if (perf::poll_event_has (events_[i].revents,
                                               zlink::poll_event_flag_t::pollin)) {
-                        for (;;) {
+                        const auto submit_due = [&] { coordinator.submit_due (*schedule); };
+                        for (int recv_rc = -1;; replies.service_paced_reply (schedule, recv_rc,
+                                                                           submit_due)) {
                             perf_metric::header_t header{};
-                            const int recv_rc = recv_reply (state, &header);
+                            recv_rc = recv_reply (state, &header);
                             if (recv_rc < 0) {
                                 const int err = errno;
                                 if (err == EAGAIN)
@@ -453,7 +458,7 @@ class router_router_client_bench_t
                 return true;
             };
             if (!coordinator.run_until_senders_drained (
-                  deadline, drain_deadline, senders, dispatch_ready))
+                  deadline, drain_deadline, senders, dispatch_ready, schedule, true))
                 co_return false;
 
             for (size_t i = 0; i < senders.size (); ++i) {

@@ -249,6 +249,7 @@ class dealer_dealer_client_bench_t
         const auto deadline_ns =
           std::chrono::duration_cast<std::chrono::nanoseconds> (deadline.time_since_epoch ())
             .count ();
+        perf_multi_measurement::message_burst_t burst;
         for (;;) {
             const auto now = perf_metric::now_ns ();
             if (now >= deadline_ns)
@@ -287,8 +288,10 @@ class dealer_dealer_client_bench_t
                     schedule->accepted (admitted_ns, due_ns);
                 else if (admitted_ns < deadline_ns)
                     ++count;
-                if (schedule && blocked)
+                if (blocked || burst.complete ()) {
+                    burst.reset ();
                     co_await ready_queue.schedule ();
+                }
             }
             catch (const zlink::submit_error_t &err) {
                 if (err.internal_errno () == EINTR)

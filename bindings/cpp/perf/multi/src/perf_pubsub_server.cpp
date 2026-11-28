@@ -96,8 +96,7 @@ bool run_phase (::perf::socket_t &publisher,
             if (now_ns >= end_ns)
                 break;
             if (schedule && !schedule->due (now_ns)) {
-                std::this_thread::sleep_for (perf_multi_measurement::schedule_t::wait_ms (
-                  now_ns, std::min (end_ns, schedule->next_ns ())));
+                std::this_thread::sleep_for (schedule->wait_until_due_ms (now_ns, end_ns));
                 continue;
             }
             zlink::message_t payload_part (send_size);

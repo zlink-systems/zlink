@@ -1053,7 +1053,10 @@ def emit_result_metrics_from_line(
     line, transport, expected_sizes, result_line_callback
 ):
     stripped = (line or "").strip()
-    if stripped.startswith(("BENCH_DIAG,", "PACED_DIAG,", "MATCHED_DIAG,", "REFERENCE,")):
+    if stripped.startswith((
+        "BENCH_DIAG,", "PACED_DIAG,", "MATCHED_DIAG,", "REFERENCE,",
+        "PUBSUB_CATCHUP_DIAG,", "PUBSUB_CATCHUP_PROGRESS,", "PUBSUB_LATENCY_DIAG,",
+    )):
         print(stripped, flush=True)
     if result_line_callback is None:
         return

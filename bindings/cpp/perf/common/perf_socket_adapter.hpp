@@ -232,6 +232,15 @@ class application_poller_coordinator_t
 
     application_ready_queue_t &ready_queue () noexcept { return _ready; }
 
+    void submit_due (const perf_multi_measurement::schedule_t &pace_)
+    {
+        for (size_t i = 0; i < _source_count && _ready.local_size () != 0; ++i) {
+            if (!pace_.due (perf_metric::now_ns ()))
+                break;
+            _ready.resume_next ();
+        }
+    }
+
     template <typename TTask, typename TDispatch>
     bool run_until_senders_drained (const std::chrono::steady_clock::time_point &active_deadline_,
                                     const std::chrono::steady_clock::time_point &drain_deadline_,
@@ -259,8 +268,8 @@ class application_poller_coordinator_t
             size_t resumed = 0;
             if (!pace_ || !sending)
                 resumed = _ready.run_ready_round (_source_count);
-            else if (pace_->due (ns (now)))
-                resumed = _ready.resume_next ();
+            else
+                submit_due (*pace_);
 
             const auto current = clock_t::now ();
             if (current >= active_deadline_ && all_senders_done ())
@@ -270,12 +279,12 @@ class application_poller_coordinator_t
 
             if (sending && current >= active_deadline_ && _ready.local_size () != 0)
                 continue;
-            auto wake = ns (current < active_deadline_ ? active_deadline_ : drain_deadline_);
-            const bool local_ready = _ready.local_size () != 0;
-            if (pace_ && current < active_deadline_ && local_ready)
-                wake = std::min<uint64_t> (wake, pace_->next_ns ());
-            const auto wait = !pace_ && resumed != 0 ? std::chrono::milliseconds::zero ()
-                                                     : schedule_t::wait_ms (ns (current), wake);
+            const auto wake = ns (current < active_deadline_ ? active_deadline_ : drain_deadline_);
+            auto wait = schedule_t::wait_ms (ns (current), wake);
+            if (pace_ && current < active_deadline_ && _ready.local_size () != 0)
+                wait = pace_->wait_until_due_ms (ns (current), wake);
+            else if (!pace_ && resumed != 0)
+                wait = std::chrono::milliseconds::zero ();
             if (pace_ && !receives_replies_ && _ready.local_size () == senders_.size ()) {
                 if (wait.count () != 0)
                     std::this_thread::sleep_for (wait);
