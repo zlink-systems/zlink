@@ -933,12 +933,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         logStartup(Level.INFO, () -> "ZLINK_FRAMEWORK_READY");
     }
 
-    private void logStartup(Level level, Supplier<String> message) {
-        if (locationRuntime == null && spots() == null) {
-            LOGGER.log(level, message);
-        } else {
-            ZLinkTelemetryOwner.log(telemetryHost, LOGGER, level, message, null);
-        }
+    // Startup contract lines stay synchronous: samples and operators wait for them, and #6001
+    // covers runtime diagnostic records, not the one-time startup and configuration lines.
+    private static void logStartup(Level level, Supplier<String> message) {
+        LOGGER.log(level, message);
     }
 
     private CompletionStage<Void> startOwnerBoundComponents(
