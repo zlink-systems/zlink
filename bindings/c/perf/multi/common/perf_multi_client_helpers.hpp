@@ -823,15 +823,14 @@ inline bool stamp_metric_payload (std::vector<char> &payload,
                                   uint32_t run_id,
                                   perf_multi_metric::phase_t phase,
                                   size_t msg_size,
-                                  uint64_t seq,
-                                  uint64_t sent_ns)
+                                  uint64_t seq)
 {
     if (payload_size < perf_multi_metric::header_size () || payload_size > payload.size ()) {
         return false;
     }
 
     return perf_multi_metric::stamp_payload (payload.data (), payload_size, run_id, phase, msg_size,
-                                             seq, sent_ns);
+                                             seq, perf_multi_metric::now_ns ());
 }
 
 inline size_t metric_capture_bytes ()
@@ -1014,10 +1013,97 @@ inline bool run_echo_window_round_robin (
     if (!create_send_wait_tracker (sockets, ZLINK_POLLIN, &tracker))
         return false;
 
-    const auto drain_socket = [&] (send_wait_slot_t *slot, bool count_metrics) -> bool {
+    const auto submit_due = [&] () -> bool {
+        bool submitted = false;
+        if (allow_send) {
+            for (size_t visited = 0; visited < sockets.size ();) {
+                const uint64_t now_ns = perf_multi_metric::now_ns ();
+                if (now_ns >= acceptance_deadline_ns || (schedule && !schedule->due (now_ns)))
+                    break;
+
+                const size_t idx = senders.index ();
+                send_wait_slot_t &slot = tracker.slots[idx];
+                if (slot.retained) {
+                    // A deferred retry remains ready after WRITABLE is consumed.
+                    // Revisit it in the same socket traversal as fresh sends.
+                    if (schedule && slot.retry_ready
+                        && !retry_retained_send (&tracker, &slot, &accepted, acceptance_deadline_ns,
+                                                 schedule)) {
+                        fatal_error = true;
+                        break;
+                    }
+                    senders.advance ();
+                    ++visited;
+                    continue;
+                }
+
+                std::vector<char> &send_payload =
+                  per_socket_payload ? socket_payloads[idx] : payload;
+                if (!stamp_metric_payload (send_payload, payload_size, run_id, phase,
+                                           expected_msg_size, sequence)) {
+                    fatal_error = true;
+                    break;
+                }
+
+                const send_status_t send_rc = submit_echo_send (
+                  &slot, target_rid_ptr, send_payload, payload_size, client_router_send);
+                if (send_rc == send_ok) {
+                    const uint64_t accepted_ns = perf_multi_metric::now_ns ();
+                    if (accepted_ns < acceptance_deadline_ns)
+                        ++accepted;
+                    if (schedule)
+                        schedule->accepted (accepted_ns);
+                    ++sequence;
+                    submitted = true;
+                    if (senders.accepted ())
+                        ++visited;
+                    continue;
+                }
+                if (send_rc == send_blocked) {
+                    // Reserve this sequence for the retained logical record.
+                    // WRITABLE resubmits these exact bytes without restamping.
+                    ++sequence;
+                    if (!update_tracker_slot_events (&tracker, &slot)) {
+                        fatal_error = true;
+                        break;
+                    }
+                    errno = EAGAIN;
+                    if (bench_debug_enabled ()
+                        && g_debug_one_way_logs.fetch_add (1, std::memory_order_acq_rel) < 12) {
+                        std::cerr << "[perf-multi-echo] send blocked phase="
+                                  << static_cast<unsigned int> (phase) << " idx=" << idx
+                                  << " errno=" << zlink_errno () << std::endl;
+                    }
+                    senders.advance ();
+                    ++visited;
+                    continue;
+                }
+
+                if (bench_debug_enabled ()) {
+                    std::cerr << "[perf-multi-echo] send error phase="
+                              << static_cast<unsigned int> (phase) << " idx=" << idx
+                              << " errno=" << zlink_errno () << std::endl;
+                }
+                fatal_error = true;
+                break;
+            }
+        }
+
+        return submitted;
+    };
+
+    const auto drain_socket = [&] (send_wait_slot_t *slot, bool count_metrics,
+                                   size_t &received_since_submit) -> bool {
         if (!slot || !slot->socket)
             return false;
-        while (true) {
+        const bool paced = schedule && count_metrics;
+        for (;; ++received_since_submit) {
+            if (paced && received_since_submit == perf_multi_measurement::max_burst_per_sender) {
+                submit_due ();
+                if (fatal_error)
+                    return false;
+                received_since_submit = 0;
+            }
             perf_multi_metric::header_t header;
             std::memset (&header, 0, sizeof (header));
             bool decoded = false;
@@ -1078,93 +1164,20 @@ inline bool run_echo_window_round_robin (
         if (!service_tracker_writable_events (&tracker, event_count, &accepted,
                                               acceptance_deadline_ns, schedule, count_metrics))
             return false;
+        size_t received_since_submit = 0;
         for (int i = 0; i < event_count; ++i) {
             zlink_poller_event_t &event = tracker.events[static_cast<size_t> (i)];
             if ((event.events & ZLINK_POLLIN) == 0)
                 continue;
             send_wait_slot_t *slot = tracker_event_slot (event);
-            if (!slot || !drain_socket (slot, count_metrics))
+            if (!slot || !drain_socket (slot, count_metrics, received_since_submit))
                 return false;
         }
         return true;
     };
 
     while (std::chrono::steady_clock::now () < deadline && !fatal_error) {
-        bool submitted = false;
-        if (allow_send) {
-            for (size_t visited = 0; visited < sockets.size ();) {
-                const uint64_t now_ns = perf_multi_metric::now_ns ();
-                if (now_ns >= acceptance_deadline_ns || (schedule && !schedule->due (now_ns)))
-                    break;
-
-                const size_t idx = senders.index ();
-                send_wait_slot_t &slot = tracker.slots[idx];
-                if (slot.retained) {
-                    // A deferred retry remains ready after WRITABLE is consumed.
-                    // Revisit it in the same socket traversal as fresh sends.
-                    if (schedule && slot.retry_ready
-                        && !retry_retained_send (&tracker, &slot, &accepted, acceptance_deadline_ns,
-                                                 schedule)) {
-                        fatal_error = true;
-                        break;
-                    }
-                    senders.advance ();
-                    ++visited;
-                    continue;
-                }
-
-                std::vector<char> &send_payload =
-                  per_socket_payload ? socket_payloads[idx] : payload;
-                if (!stamp_metric_payload (send_payload, payload_size, run_id, phase,
-                                           expected_msg_size, sequence, now_ns)) {
-                    fatal_error = true;
-                    break;
-                }
-
-                const send_status_t send_rc = submit_echo_send (
-                  &slot, target_rid_ptr, send_payload, payload_size, client_router_send);
-                if (send_rc == send_ok) {
-                    const uint64_t accepted_ns = perf_multi_metric::now_ns ();
-                    if (accepted_ns < acceptance_deadline_ns)
-                        ++accepted;
-                    if (schedule)
-                        schedule->accepted (accepted_ns);
-                    ++sequence;
-                    submitted = true;
-                    if (senders.accepted ())
-                        ++visited;
-                    continue;
-                }
-                if (send_rc == send_blocked) {
-                    // Reserve this sequence for the retained logical record.
-                    // WRITABLE resubmits these exact bytes without restamping.
-                    ++sequence;
-                    if (!update_tracker_slot_events (&tracker, &slot)) {
-                        fatal_error = true;
-                        break;
-                    }
-                    errno = EAGAIN;
-                    if (bench_debug_enabled ()
-                        && g_debug_one_way_logs.fetch_add (1, std::memory_order_acq_rel) < 12) {
-                        std::cerr << "[perf-multi-echo] send blocked phase="
-                                  << static_cast<unsigned int> (phase) << " idx=" << idx
-                                  << " errno=" << zlink_errno () << std::endl;
-                    }
-                    senders.advance ();
-                    ++visited;
-                    continue;
-                }
-
-                if (bench_debug_enabled ()) {
-                    std::cerr << "[perf-multi-echo] send error phase="
-                              << static_cast<unsigned int> (phase) << " idx=" << idx
-                              << " errno=" << zlink_errno () << std::endl;
-                }
-                fatal_error = true;
-                break;
-            }
-        }
-
+        const bool submitted = submit_due ();
         if (fatal_error)
             break;
 

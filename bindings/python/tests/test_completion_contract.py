@@ -619,7 +619,7 @@ def test_public_managed_routed_send_retries_after_exact_writable_completion():
 
                 assert len(writable_records) == 1
                 writable = writable_records[0]
-                assert writable["kind"] == int(zlink.CompletionKind.WRITABLE)
+                assert writable["kind"] == ZLINK_COMPLETION_WRITABLE
                 assert writable["completion_id"] == blocked["completion_id"]
                 assert writable["context"] == blocked["context"]
                 assert writable["target"] == blocked["target"]
