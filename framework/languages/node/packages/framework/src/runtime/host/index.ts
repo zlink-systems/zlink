@@ -66,7 +66,6 @@ import { ZLinkActivationAdmission } from '../activation-admission';
 import {
   type DefaultZLinkActorManager,
   type ZLinkActorManagerOptions,
-  decodeRemoteActorSourceLeaveTerminal,
   DefaultZLinkActorClient,
   publishInitialActorAuthority,
   ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
@@ -3079,7 +3078,6 @@ export class ZLinkFrameworkRuntimeHost
       dispatchErrors,
       runtimeEventPublisher: this.runtimeEventPublisher,
       entryActorRuntime: this.entryActorRuntime,
-      actorTransferRuntime: this.actorTransferRuntime,
       boundSessionRelay: this.boundSessionRelay,
       actorHandoff: this.actorHandoff,
       detachedTaskRunner: this.detachedTaskRunner(),
@@ -3159,12 +3157,6 @@ export class ZLinkFrameworkRuntimeHost
     signal?: AbortSignal,
     admit?: ZLinkMeshDispatchAdmission
   ): void | Promise<void> {
-    if (record.kind === ReceiveKind.NodeRequest && record.parts.length === 1) {
-      const terminal = decodeRemoteActorSourceLeaveTerminal(record.parts[0]!.data());
-      if (terminal !== undefined) {
-        return this.completeFormalSourceLeave(record, terminal);
-      }
-    }
     const channelRuntime = this.channelRuntime;
     if (channelRuntime === undefined) {
       throw new ZLinkConfigurationException(
@@ -3172,28 +3164,6 @@ export class ZLinkFrameworkRuntimeHost
       );
     }
     return channelRuntime.dispatchMeshRoute(meshName, record, signal, admit);
-  }
-
-  private async completeFormalSourceLeave(
-    record: ReceiveRecord,
-    terminal: NonNullable<ReturnType<typeof decodeRemoteActorSourceLeaveTerminal>>
-  ): Promise<void> {
-    const completed = await this.spotManager?.completeFormalSourceLeaveTerminal(
-      terminal.actorId,
-      terminal.transferId,
-      terminal.succeeded
-    );
-    if (completed !== true) {
-      throw new ZLinkConfigurationException(
-        `Actor '${terminal.actorId}' has no matching formal transfer terminal gate.`
-      );
-    }
-    if (record.reply(Buffer.alloc(0)) !== SubmitResult.Ok) {
-      throw new ZLinkConfigurationException(
-        `Actor '${terminal.actorId}' formal transfer terminal acknowledgement failed.`
-      );
-    }
-    return;
   }
 
   dispatchMeshRecord(
