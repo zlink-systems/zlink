@@ -64,6 +64,7 @@ send_submission_t submit_send_awaitable (
                                                   &wait_token, false);
     }
     catch (...) {
+        runtime->completion->unregister_entry (submit_context);
         detail::restore_async_send_sources (*state_);
         detail::release_state (std::move (state_));
         throw;

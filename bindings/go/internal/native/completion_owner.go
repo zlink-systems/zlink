@@ -331,10 +331,11 @@ func (e *completionEntry) waitSettled() { <-e.settledDone }
 type completionOwner struct {
 	socket unsafe.Pointer
 
-	mu            sync.Mutex
-	entries       map[uintptr]*completionEntry
-	earlyWritable map[uintptr]*earlyWritableRecord
-	inflightSends int
+	mu      sync.Mutex
+	entries map[uintptr]*completionEntry
+	// Each initial SEND awaiting its native result has a key. The value is nil
+	// until drain receives a WRITABLE for that context.
+	inflightSends map[uintptr]*earlyWritableRecord
 
 	publicOwner *Poller
 	shutdown    bool
@@ -371,8 +372,7 @@ func (o *completionOwner) publishInitialSendWait(entry *completionEntry, id uint
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if err := o.registerLocked(entry); err != nil {
-		o.discardEarlyWritableLocked(entry.handleKey)
-		o.finishInflightSendLocked()
+		o.finishInitialSendLocked(entry.handleKey, nil)
 		return err
 	}
 	entry.publishSendWait(id)
@@ -382,36 +382,22 @@ func (o *completionOwner) publishInitialSendWait(entry *completionEntry, id uint
 	} else {
 		entry.writableWaiting = true
 	}
-	if record := o.earlyWritable[entry.handleKey]; record != nil {
-		record.entry = entry
-		close(record.ready)
-	}
-	delete(o.earlyWritable, entry.handleKey)
-	o.finishInflightSendLocked()
+	o.finishInitialSendLocked(entry.handleKey, entry)
 	return activationErr
 }
 
-func (o *completionOwner) discardEarlyWritable(key uintptr) {
+func (o *completionOwner) discardInitialSend(key uintptr) {
 	o.mu.Lock()
-	o.discardEarlyWritableLocked(key)
-	o.finishInflightSendLocked()
+	o.finishInitialSendLocked(key, nil)
 	o.mu.Unlock()
 }
 
-func (o *completionOwner) discardEarlyWritableLocked(key uintptr) {
-	if record := o.earlyWritable[key]; record != nil {
+func (o *completionOwner) finishInitialSendLocked(key uintptr, entry *completionEntry) {
+	if record := o.inflightSends[key]; record != nil {
+		record.entry = entry
 		close(record.ready)
-		delete(o.earlyWritable, key)
 	}
-}
-
-func (o *completionOwner) finishInflightSendLocked() {
-	o.inflightSends--
-	if o.inflightSends == 0 {
-		for key := range o.earlyWritable {
-			o.discardEarlyWritableLocked(key)
-		}
-	}
+	delete(o.inflightSends, key)
 }
 
 func (o *completionOwner) unregister(entry *completionEntry) {
@@ -567,14 +553,14 @@ func (o *completionOwner) drain(waitForPublish bool) (completionDrainResult, err
 		completion.user_context = nil
 		o.mu.Lock()
 		entry := o.entries[key]
-		if entry == nil && o.inflightSends > 0 && completion.kind == C.ZLINK_COMPLETION_WRITABLE && !o.shutdown {
-			o.discardEarlyWritableLocked(key)
-			if o.earlyWritable == nil {
-				o.earlyWritable = make(map[uintptr]*earlyWritableRecord)
+		early, inFlight := o.inflightSends[key]
+		if inFlight && completion.kind == C.ZLINK_COMPLETION_WRITABLE {
+			if early != nil {
+				close(early.ready)
 			}
 			record := writableRecord(&completion, key)
 			record.ready = make(chan struct{})
-			o.earlyWritable[key] = &record
+			o.inflightSends[key] = &record
 			earlyRecords = append(earlyRecords, &record)
 		}
 		o.mu.Unlock()
@@ -805,7 +791,8 @@ func (e *completionEntry) attemptRequest() bool {
 		return false
 	}
 
-	if waiting, _ := classifyWritableWait(completionID, err); waiting {
+	waiting, err := classifyWritableWait(completionID, err)
+	if waiting {
 		e.publishSendWait(completionID)
 		if activateErr := e.setWritableWaiting(true); activateErr != nil {
 			e.request.payload.close()
@@ -898,10 +885,10 @@ func (o *completionOwner) shutdownOwner() {
 		entries = append(entries, entry)
 	}
 	o.entries = make(map[uintptr]*completionEntry)
-	for key := range o.earlyWritable {
-		o.discardEarlyWritableLocked(key)
+	for key := range o.inflightSends {
+		o.finishInitialSendLocked(key, nil)
 	}
-	o.earlyWritable = nil
+	o.inflightSends = nil
 	o.mu.Unlock()
 
 	for _, entry := range entries {
