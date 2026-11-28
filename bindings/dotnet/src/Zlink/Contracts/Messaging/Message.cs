@@ -12,9 +12,11 @@ namespace Systems.Zlink;
 /// <remarks>
 ///     A message is disposable because it may own native storage. Span-returning
 ///     APIs expose storage owned by this instance and are valid only while the
-///     message remains undisposed. Do not use the message, including repeated
-///     disposal or object-identity metadata lookup, after ownership is consumed
-///     or disposal returns; the runtime may reuse the returned wrapper identity.
+///     message owns the payload. Once submission consumes the payload, size
+///     and read-only payload access return empty results, and submitting the
+///     message again fails with <see cref="ZlinkSubmitException.ErrorCode.InvalidHandle"/>.
+///     Receive paths may reuse a wrapper after its owner disposes it. Disposal
+///     ends the lifetime of every reference to that wrapper.
 /// </remarks>
 public sealed partial class Message : IDisposable, IAsyncDisposable
 {

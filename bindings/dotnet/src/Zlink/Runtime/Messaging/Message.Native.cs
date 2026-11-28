@@ -44,9 +44,9 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
 
     private int GetSizeCore()
     {
-        EnsureValid();
         if (_knownSize >= 0)
             return _knownSize;
+        EnsureValid();
         return GetNativeSize(ref NativeMsg);
     }
 
@@ -84,10 +84,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
 
     private unsafe ReadOnlySpan<byte> AsReadOnlySpanCore()
     {
-        EnsureValid();
-        var size = _knownSize >= 0
-            ? _knownSize
-            : GetNativeSize(ref NativeMsg);
+        var size = GetSizeCore();
         if (size == 0)
             return ReadOnlySpan<byte>.Empty;
         var data = NativeMethods.zlink_msg_data(ref NativeMsg);
@@ -104,7 +101,8 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     private unsafe bool TryCopyToCore(Span<byte> destination,
         out int bytesWritten)
     {
-        EnsureValid();
+        if (_knownSize < 0)
+            EnsureValid();
         var size = _knownSize >= 0
             ? (nuint)_knownSize
             : NativeMethods.zlink_msg_size(ref NativeMsg);
@@ -164,8 +162,19 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     public Message Copy()
     {
         EnsureValid();
+        return CopyCore();
+    }
+
+    internal Message CopyForSubmit()
+    {
+        EnsureSubmittable();
+        return CopyCore();
+    }
+
+    private Message CopyCore()
+    {
         var copy = new Message(false);
-        CopyTo(ref copy.NativeMsg);
+        CopyNativeTo(ref copy.NativeMsg);
         copy._knownSize = _knownSize;
         copy.IsValid = true;
         return copy;
@@ -202,9 +211,9 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal unsafe void MoveTo(ref ZlinkMsg dest)
+    internal void MoveTo(ref ZlinkMsg dest)
     {
-        EnsureValid();
+        EnsureSubmittable();
         var rc = NativeMethods.zlink_msg_init(ref dest);
         if (rc != 0)
             throw ZlinkException.CreateConfigException((ConfigResult)rc);
@@ -214,7 +223,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
             if (rc != 0)
                 throw ZlinkException.CreateConfigException((ConfigResult)rc);
 
-            Invalidate();
+            MarkConsumed();
         }
         catch
         {
@@ -248,9 +257,14 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         }
     }
 
-    internal unsafe void CopyTo(ref ZlinkMsg dest)
+    internal void CopyToForSubmit(ref ZlinkMsg dest)
     {
-        EnsureValid();
+        EnsureSubmittable();
+        CopyNativeTo(ref dest);
+    }
+
+    private void CopyNativeTo(ref ZlinkMsg dest)
+    {
         var rc = NativeMethods.zlink_msg_init(ref dest);
         if (rc != 0)
             throw ZlinkException.CreateConfigException((ConfigResult)rc);
@@ -271,14 +285,21 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     internal void DetachAfterSend()
     {
         EnsureValid();
-        Invalidate();
+        MarkConsumed();
     }
 
     internal void ConsumeAfterSuccessfulSubmit()
     {
         EnsureValid();
         NativeMethods.zlink_msg_close(ref NativeMsg);
+        MarkConsumed();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void MarkConsumed()
+    {
         Invalidate(clearHandle: true);
+        _knownSize = 0;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -317,6 +338,13 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     {
         if (!IsValid)
             throw new ObjectDisposedException(nameof(Message));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnsureSubmittable()
+    {
+        if (!IsValid)
+            throw new ZlinkSubmitException(SubmitResult.InvalidHandle, ErrorCode.EFault);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
