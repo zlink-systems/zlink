@@ -1840,6 +1840,8 @@ export class DefaultZLinkSpotManager {
 
   onAcceptedJoinCompletionFailure(actor: ZLinkActor, error: unknown): void {
     const { meshName, spotId, actorId } = actor.context;
+    // Report the callback failure before resolving the gate so a missing gate cannot hide it.
+    reportActorJoinCallbackFailure(this.options, meshName, actorId, 'OnJoinCompleted', error);
     const executor =
       spotId === undefined
         ? this.options.entryActorSerialExecutor?.(meshName)
@@ -1854,7 +1856,6 @@ export class DefaultZLinkSpotManager {
       );
     }
     executor.sealActorAfterFailedJoinCompletion(actorId);
-    reportActorJoinCallbackFailure(this.options, meshName, actorId, 'OnJoinCompleted', error);
   }
 
   async dispatchRoutedSpotSend(
