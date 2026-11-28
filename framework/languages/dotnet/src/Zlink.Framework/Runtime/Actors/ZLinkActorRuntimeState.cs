@@ -1905,6 +1905,27 @@ internal sealed class ZLinkActorRuntimeState(
             .ConfigureAwait(false);
     }
 
+    internal ValueTask AdmitDispatchAsync(
+        Func<CancellationToken, ValueTask> operation,
+        Action<Exception?> release,
+        CancellationToken cancellationToken
+    )
+    {
+        EnsureDispatchNotBlocked();
+        EnsureJoinCompletionAvailable();
+        return _dispatchMailbox.AdmitDispatchAsync(
+            async ct =>
+            {
+                EnsureDispatchAvailable();
+                EnsureJoinCompletionAvailable();
+                using var dispatch = EnterDispatch();
+                await operation(ct).ConfigureAwait(false);
+            },
+            release,
+            cancellationToken
+        );
+    }
+
     public async ValueTask ExecuteDispatchAsync(
         Func<CancellationToken, ValueTask> operation,
         CancellationToken cancellationToken
@@ -1958,11 +1979,12 @@ internal sealed class ZLinkActorRuntimeState(
 
     public async ValueTask ExecuteLifecycleAsync(
         Func<CancellationToken, ValueTask> operation,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkSerialWorkLane lane = ZLinkSerialWorkLane.Lifecycle
     )
     {
         using var turn = await _dispatchMailbox
-            .EnterLifecycleAsync(cancellationToken)
+            .EnterAsync(cancellationToken, countAsPendingRequest: false, lane)
             .ConfigureAwait(false);
         EnsureDispatchAvailable();
         await operation(cancellationToken).ConfigureAwait(false);

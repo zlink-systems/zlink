@@ -8,6 +8,7 @@ using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Spots;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
@@ -3897,27 +3898,31 @@ internal sealed partial class ZLinkFrameworkRuntime
         string actorId,
         ZlinkStreamHeader header,
         Message payload,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken,
+        Action? releaseIngress
     )
     {
         return _actorSessionManager.SubmitActorByIdAsync(
             actorId,
             header,
             payload,
-            cancellationToken
+            cancellationToken,
+            releaseIngress
         );
     }
 
     internal ValueTask NotifyActorDisconnectedByIdAsync(
         string actorId,
         CancellationToken cancellationToken = default,
-        bool callerOwnsDispatchTurn = false
+        bool callerOwnsDispatchTurn = false,
+        ZLinkSerialWorkLane lane = ZLinkSerialWorkLane.Lifecycle
     )
     {
         return _actorSessionManager.NotifyDisconnectedByIdAsync(
             actorId,
             cancellationToken,
-            callerOwnsDispatchTurn
+            callerOwnsDispatchTurn,
+            lane
         );
     }
 

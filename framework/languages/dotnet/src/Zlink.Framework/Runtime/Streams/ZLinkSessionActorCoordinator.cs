@@ -624,6 +624,24 @@ internal sealed class ZLinkSessionActorCoordinator(
             (
                 await runtime.GetOrCreateActorStateAsync(actorRef.ActorId).ConfigureAwait(false)
             ).RecordBoundSessionAccepted(actorRef.BindingToken);
+            if (header.Kind == ZlinkStreamMessageKind.Send)
+            {
+                await runtime
+                    .SubmitActorByIdAsync(
+                        actorRef.ActorId,
+                        header,
+                        payload,
+                        cancellationToken,
+                        () =>
+                            runtime.CompleteAcceptedSessionActorFrame(
+                                actorRef.ActorId,
+                                actorRef.BindingToken
+                            )
+                    )
+                    .ConfigureAwait(false);
+                acceptedFrame = false;
+                return;
+            }
             await DispatchLocalAsync(actorRef, header, payload, replyRawAsync, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -818,7 +836,13 @@ internal sealed class ZLinkSessionActorCoordinator(
         }
 
         await runtime
-            .SubmitActorByIdAsync(actorRef.ActorId, header, actorPayload, cancellationToken)
+            .SubmitActorByIdAsync(
+                actorRef.ActorId,
+                header,
+                actorPayload,
+                cancellationToken,
+                releaseIngress: null
+            )
             .ConfigureAwait(false);
     }
 

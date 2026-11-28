@@ -13,7 +13,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
     private readonly ZLinkStateLane _lane = new();
     internal readonly ZLinkSerialExecutionQueue _queue;
     private bool _admissionClosed;
-    private int _acceptedWaiters;
+    private int _acceptedTurns;
     private int _pendingRequests;
 
     internal Func<ZLinkObjectExecutionStatus>? ExecutionAllowed { get; set; }
@@ -92,7 +92,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
     public ValueTask<Turn> EnterLifecycleAsync(CancellationToken cancellationToken) =>
         EnterAsync(cancellationToken, false, ZLinkSerialWorkLane.Lifecycle);
 
-    private ValueTask<Turn> EnterAsync(
+    internal ValueTask<Turn> EnterAsync(
         CancellationToken cancellationToken,
         bool countAsPendingRequest,
         ZLinkSerialWorkLane lane
@@ -102,15 +102,57 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
         var waiter = AwaitStateLane(
             _lane.RunAsync(() =>
             {
-                if (_admissionClosed)
-                    throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        "Actor dispatch admission is closed for a terminal lifecycle transition."
-                    );
+                EnsureAdmissionOpen();
                 return PostWaiterOnLane(lane, cancellationToken, countAsPendingRequest);
             })
         );
         return AwaitTurnAsync(waiter);
+    }
+
+    internal ValueTask AdmitDispatchAsync(
+        Func<CancellationToken, ValueTask> operation,
+        Action<Exception?> release,
+        CancellationToken cancellationToken
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return _lane.RunAsync(() =>
+        {
+            EnsureAdmissionOpen();
+            PostOnLane(
+                ZLinkSerialWorkLane.Application,
+                operation,
+                item =>
+                {
+                    _acceptedTurns++;
+                    item.AddTerminalRelease(failure =>
+                    {
+                        try
+                        {
+                            release(failure);
+                        }
+                        finally
+                        {
+                            AwaitStateLane(
+                                _lane.RunAsync(() =>
+                                {
+                                    _acceptedTurns--;
+                                })
+                            );
+                        }
+                    });
+                }
+            );
+        });
+    }
+
+    private void EnsureAdmissionOpen()
+    {
+        if (_admissionClosed)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                "Actor dispatch admission is closed for a terminal lifecycle transition."
+            );
     }
 
     public BarrierReservation ReserveBarrier()
@@ -190,7 +232,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
             {
                 if (!_admissionClosed)
                     return true;
-                if (_acceptedWaiters != 0 || _queue.HasPendingDurableApplication)
+                if (_acceptedTurns != 0 || _queue.HasPendingDurableApplication)
                     return false;
                 _admissionClosed = false;
                 return true;
@@ -203,7 +245,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
         AwaitStateLane(
             _lane.RunAsync(() =>
             {
-                if (_acceptedWaiters != 0 || _queue.HasPendingDurableApplication)
+                if (_acceptedTurns != 0 || _queue.HasPendingDurableApplication)
                     throw new InvalidOperationException(
                         "Actor dispatch admission cannot reopen while a previous lifecycle turn remains."
                     );
@@ -228,7 +270,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
             if (terminal)
                 published.ExecutionAllowed = null;
             waiter.MarkAccepted();
-            _acceptedWaiters++;
+            _acceptedTurns++;
             published.AddTerminalRelease(() =>
             {
                 if (published.Completion.IsFaulted)
@@ -239,33 +281,49 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
             });
             waiter.BindItem(published);
         }
+        ZLinkSerialWorkItem item;
+        try
+        {
+            item = PostOnLane(lane, waiter.RunAsync, Initialize);
+        }
+        catch
+        {
+            if (countAsPendingRequest)
+                _pendingRequests--;
+            waiter.DisposeCancellationRegistration();
+            throw;
+        }
+        if (item.Preparation is not null)
+        {
+            _ = item.Completion.ContinueWith(
+                static (task, state) =>
+                    ((Waiter)state!).FailPreparation(task.Exception!.InnerException!),
+                waiter,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted
+                    | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default
+            );
+        }
+        return waiter;
+    }
+
+    private ZLinkSerialWorkItem PostOnLane(
+        ZLinkSerialWorkLane lane,
+        Func<CancellationToken, ValueTask> operation,
+        Action<ZLinkSerialWorkItem> initialize
+    )
+    {
         ZLinkSerialPostAdmission admission;
         ZLinkSerialWorkItem item;
         using (ExecutionContext.SuppressFlow())
             admission =
                 lane == ZLinkSerialWorkLane.Lifecycle
-                    ? _queue.TryPostNextWithAdmission(waiter.RunAsync, out item, Initialize)
-                    : _queue.TryPostApplicationWithAdmission(waiter.RunAsync, out item, Initialize);
+                    ? _queue.TryPostNextWithAdmission(operation, out item, initialize)
+                    : _queue.TryPostApplicationWithAdmission(operation, out item, initialize);
         if (admission == ZLinkSerialPostAdmission.Accepted)
-        {
-            if (item.Preparation is not null)
-            {
-                _ = item.Completion.ContinueWith(
-                    static (task, state) =>
-                        ((Waiter)state!).FailPreparation(task.Exception!.InnerException!),
-                    waiter,
-                    CancellationToken.None,
-                    TaskContinuationOptions.OnlyOnFaulted
-                        | TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default
-                );
-            }
-            return waiter;
-        }
+            return item;
 
-        if (countAsPendingRequest)
-            _pendingRequests--;
-        waiter.DisposeCancellationRegistration();
         throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.ShuttingDown,
             "Actor dispatch queue is closed."
@@ -289,7 +347,7 @@ internal sealed class ZLinkActorSerialExecutor : IAsyncDisposable
                     return;
                 if (previous == Waiter.AcceptedWaiting && waiter.CountsAsPendingRequest)
                     _pendingRequests--;
-                _acceptedWaiters--;
+                _acceptedTurns--;
             })
         );
     }

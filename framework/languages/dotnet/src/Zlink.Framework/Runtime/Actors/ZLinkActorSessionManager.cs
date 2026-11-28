@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Actors;
@@ -393,11 +394,12 @@ internal sealed partial class ZLinkActorSessionManager(
         string actorId,
         ZlinkStreamHeader header,
         Message payload,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken,
+        Action? releaseIngress
     )
     {
         await DispatchRouter
-            .SubmitByIdAsync(actorId, header, payload, cancellationToken)
+            .SubmitByIdAsync(actorId, header, payload, cancellationToken, releaseIngress)
             .ConfigureAwait(false);
     }
 
@@ -480,11 +482,12 @@ internal sealed partial class ZLinkActorSessionManager(
     public async ValueTask NotifyDisconnectedByIdAsync(
         string actorId,
         CancellationToken cancellationToken = default,
-        bool callerOwnsDispatchTurn = false
+        bool callerOwnsDispatchTurn = false,
+        ZLinkSerialWorkLane lane = ZLinkSerialWorkLane.Lifecycle
     )
     {
         await DispatchRouter
-            .NotifyDisconnectedByIdAsync(actorId, cancellationToken, callerOwnsDispatchTurn)
+            .NotifyDisconnectedByIdAsync(actorId, cancellationToken, callerOwnsDispatchTurn, lane)
             .ConfigureAwait(false);
     }
 

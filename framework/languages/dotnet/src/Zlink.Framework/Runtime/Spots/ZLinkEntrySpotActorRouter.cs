@@ -44,6 +44,22 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
                         ex.DecodeException
                     );
             }
+            catch (Exception ex)
+                when (ex is not OperationCanceledException
+                    || !cancellationToken.IsCancellationRequested
+                )
+            {
+                //  Handler turn §15: an accepted SEND's handler failure is recorded, not
+                //  returned to the caller, which completed at mailbox admission.
+                if (_dispatchErrors.Enabled)
+                    CreateActorFlow(
+                            actor,
+                            header,
+                            ZLinkDispatchMessageKind.ActorSend,
+                            sourceSessionRid
+                        )
+                        .HandlerException(_dispatchErrors, ZLinkDispatchErrorAction.Drop, ex);
+            }
 
             return true;
         }

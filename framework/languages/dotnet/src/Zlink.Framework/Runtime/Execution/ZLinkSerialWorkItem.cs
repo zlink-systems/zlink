@@ -130,7 +130,12 @@ internal sealed class ZLinkSerialWorkItem
         release.RegisterPendingItemUnderLock();
     }
 
-    internal void AddTerminalRelease(Action release)
+    internal void AddTerminalRelease(Action release) => AddTerminalRelease((Delegate)release);
+
+    internal void AddTerminalRelease(Action<Exception?> release) =>
+        AddTerminalRelease((Delegate)release);
+
+    private void AddTerminalRelease(Delegate release)
     {
         ArgumentNullException.ThrowIfNull(release);
         var current =
@@ -140,16 +145,19 @@ internal sealed class ZLinkSerialWorkItem
             Volatile.Read(ref _terminalReleased) != 0
             || Interlocked.CompareExchange(
                 ref _terminalRelease,
-                (Action<ZLinkSerialWorkItem>)(
-                    item =>
+                (Action<ZLinkSerialWorkItem, Exception?>)(
+                    (item, failure) =>
                     {
                         try
                         {
-                            release();
+                            if (release is Action<Exception?> releaseWithFailure)
+                                releaseWithFailure(failure);
+                            else
+                                ((Action)release)();
                         }
                         finally
                         {
-                            InvokeTerminalRelease(current, item);
+                            InvokeTerminalRelease(current, item, failure);
                         }
                     }
                 ),
@@ -179,7 +187,7 @@ internal sealed class ZLinkSerialWorkItem
         catch (Exception exception)
         {
             onUnhandledException(exception);
-            ReleaseTerminal();
+            ReleaseTerminal(exception);
             _completion!.TrySetException(exception);
             _ = _completion!.Task.Exception;
         }
@@ -200,6 +208,7 @@ internal sealed class ZLinkSerialWorkItem
         if (executionStatus != ZLinkObjectExecutionStatus.Allowed)
         {
             _relocationRelease?.Invoke();
+            Exception? failure = null;
             // Ownership loss ends with NotFound whether or not stop cleanup has cancelled the queue yet
             // (Location runtime spec §5.1).
             if (
@@ -212,15 +221,14 @@ internal sealed class ZLinkSerialWorkItem
                 _completion!.TrySetCanceled(cancellationToken);
             else
             {
-                _completion!.TrySetException(
-                    new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        "The object no longer owns execution."
-                    )
+                failure = new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.NotFound,
+                    "The object no longer owns execution."
                 );
+                _completion!.TrySetException(failure);
                 _ = _completion.Task.Exception;
             }
-            ReleaseTerminal();
+            ReleaseTerminal(failure);
             return ZLinkSerialWorkItemResult.Completed;
         }
         onUnhandledException = ErrorReporter ?? onUnhandledException;
@@ -289,7 +297,7 @@ internal sealed class ZLinkSerialWorkItem
             // The failure report precedes the terminal on every path, so the caller that
             // observes the terminal also observes the report.
             onUnhandledException(ex);
-            ReleaseTerminal();
+            ReleaseTerminal(ex);
             _completion!.TrySetException(ex);
             _ = _completion!.Task.Exception;
             return ZLinkSerialWorkItemResult.Completed;
@@ -379,13 +387,15 @@ internal sealed class ZLinkSerialWorkItem
         {
             if (ex is not OperationCanceledException)
                 onUnhandledException(ex);
-            await ReleaseSuspendedTerminalAsync().ConfigureAwait(false);
+            await ReleaseSuspendedTerminalAsync(ex).ConfigureAwait(false);
             _completion!.TrySetException(ex);
             _ = _completion!.Task.Exception;
         }
     }
 
-    private void ReleaseTerminal()
+    private void ReleaseTerminal() => ReleaseTerminal(null);
+
+    private void ReleaseTerminal(Exception? failure)
     {
         if (Interlocked.Exchange(ref _terminalReleased, 1) != 0)
             return;
@@ -401,23 +411,37 @@ internal sealed class ZLinkSerialWorkItem
                     ?? throw new InvalidOperationException(
                         "ZLink serial work has no terminal release callback."
                     ),
-                this
+                this,
+                failure
             );
         }
     }
 
-    private static void InvokeTerminalRelease(object release, ZLinkSerialWorkItem item)
+    private static void InvokeTerminalRelease(
+        object release,
+        ZLinkSerialWorkItem item,
+        Exception? failure
+    )
     {
         if (release is ZLinkSerialExecutionQueue owner)
             owner.CompletePendingItem(item);
         else
-            ((Action<ZLinkSerialWorkItem>)release)(item);
+            ((Action<ZLinkSerialWorkItem, Exception?>)release)(item, failure);
     }
 
     private ValueTask ReleaseSuspendedTerminalAsync() =>
         TerminalExecutionOwner is { } owner
             ? owner.DispatchTerminalAsync(ReleaseTerminal)
             : ReleaseTerminalInline();
+
+    private ValueTask ReleaseSuspendedTerminalAsync(Exception failure)
+    {
+        if (TerminalExecutionOwner is { } owner)
+            return owner.DispatchTerminalAsync(() => ReleaseTerminal(failure));
+
+        ReleaseTerminal(failure);
+        return ValueTask.CompletedTask;
+    }
 
     private ValueTask ReleaseTerminalInline()
     {
