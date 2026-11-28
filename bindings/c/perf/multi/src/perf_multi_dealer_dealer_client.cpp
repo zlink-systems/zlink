@@ -219,8 +219,7 @@ inline send_status_t send_one_message (dd_send_slot_t *slot,
                                        uint32_t run_id,
                                        perf_multi_metric::phase_t phase,
                                        size_t msg_size,
-                                       uint64_t seq,
-                                       uint64_t sent_ns)
+                                       uint64_t seq)
 {
     if (!slot || !slot->socket || payload_size == 0 || slot->retained) {
         errno = EBUSY;
@@ -228,9 +227,8 @@ inline send_status_t send_one_message (dd_send_slot_t *slot,
     }
 
     slot->retained_payload.resize (payload_size);
-    if (!perf_multi_metric::stamp_payload (
-          slot->retained_payload.data (), payload_size, run_id, phase, msg_size,
-          seq, sent_ns)) {
+    if (!perf_multi_metric::stamp_payload (slot->retained_payload.data (), payload_size, run_id,
+                                           phase, msg_size, seq, perf_multi_metric::now_ns ())) {
         slot->retained_payload.clear ();
         return send_status_fatal;
     }
@@ -475,7 +473,7 @@ inline bool run_send_window (dd_send_state_t *state,
                              ? perf_multi_metric::phase_latency
                              : perf_multi_metric::phase_warmup);
             const send_status_t send_rc =
-              send_one_message (&slot, payload_size, run_id, phase, msg_size, *seq, now_ns);
+              send_one_message (&slot, payload_size, run_id, phase, msg_size, *seq);
             if (send_rc == send_status_ok) {
                 ++(*seq);
                 submitted = true;

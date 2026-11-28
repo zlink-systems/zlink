@@ -823,15 +823,14 @@ inline bool stamp_metric_payload (std::vector<char> &payload,
                                   uint32_t run_id,
                                   perf_multi_metric::phase_t phase,
                                   size_t msg_size,
-                                  uint64_t seq,
-                                  uint64_t sent_ns)
+                                  uint64_t seq)
 {
     if (payload_size < perf_multi_metric::header_size () || payload_size > payload.size ()) {
         return false;
     }
 
     return perf_multi_metric::stamp_payload (payload.data (), payload_size, run_id, phase, msg_size,
-                                             seq, sent_ns);
+                                             seq, perf_multi_metric::now_ns ());
 }
 
 inline size_t metric_capture_bytes ()
@@ -1116,7 +1115,7 @@ inline bool run_echo_window_round_robin (
                 std::vector<char> &send_payload =
                   per_socket_payload ? socket_payloads[idx] : payload;
                 if (!stamp_metric_payload (send_payload, payload_size, run_id, phase,
-                                           expected_msg_size, sequence, now_ns)) {
+                                           expected_msg_size, sequence)) {
                     fatal_error = true;
                     break;
                 }
