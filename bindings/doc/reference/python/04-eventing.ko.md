@@ -132,9 +132,10 @@ ready = poller.wait(events, timeout_ms=1000)
 `timeout_ms`까지 block하며, `events`를 그 자리에서 채우고 준비된
 개수를 반환한다. sync·async context-manager 프로토콜을 둘 다
 지원한다.
-Socket을 `PollEventFlag.POLLCOMPLETION`으로 등록했다면 owner가 `wait()`를
-계속 호출해 binding이 native completion을 drain·settle하게 해야 한다.
-두 역할이 필요하면 별도 execution context에서 blocking terminal을 수행한다.
+비동기 요청이나 수용 대기가 필요한 전송을 제출하기 전에 소켓을
+`PollEventFlag.POLLCOMPLETION`으로 등록한다. 호출자는 수용이나 응답을 기다리는
+동안 `wait()`를 호출한다. 바인딩은 해당 호출에서 native completion을 처리한다.
+completion poller와 함께 blocking terminal을 사용하려면 별도 실행 문맥에서 호출한다.
 
 **선택 기준.** 서비스 수명 전체에서 poller 하나를 사용한다. `wait`
 호출마다 새로 만드는 대신 `PollEvents` buffer 하나를 재사용한다.
@@ -221,7 +222,7 @@ wait에서 multiplex하려면 `Poller.add_timer`로 등록한다. Timer 전달�
 | Enum | 사용처 | 값 |
 |---|---|---|
 | `MonitorEventMask`(`IntFlag`) | `MonitorEvent.event` | `CONNECTED`, `CONNECT_DELAYED`, `CONNECT_RETRIED`, `LISTENING`, `BIND_FAILED`, `ACCEPTED`, `ACCEPT_FAILED`, `CLOSED`, `CLOSE_FAILED`, `DISCONNECTED`, `MONITOR_STOPPED`, `HANDSHAKE_FAILED_NO_DETAIL`, `CONNECTION_READY`, `HANDSHAKE_FAILED_PROTOCOL`, `HANDSHAKE_FAILED_AUTH`, `PEER_WEIGHT_CHANGED`, `ALL` |
-| `PollEventFlag`(`IntFlag`) | `Poller.add_socket`/`modify_socket`/`add_fd`/`modify_fd`, `PollEvents.has_event(...)` | `POLLIN`, `POLLOUT`, `POLLERR`, `POLLPRI`, `POLLITEMS_DFLT`(16, **readiness flag가 아니다** — legacy 기본 용량 상수, 다른 값들과 종류가 다름), `POLLCOMPLETION`(binding runtime worker용으로 예약됨; 자신의 doc comment에 따르면 application 코드는 대개 `POLLIN`/`POLLOUT`을 사용한다) |
+| `PollEventFlag`(`IntFlag`) | `Poller.add_socket`/`modify_socket`/`add_fd`/`modify_fd`, `PollEvents.has_event(...)` | `POLLIN`, `POLLOUT`, `POLLERR`, `POLLPRI`, `POLLITEMS_DFLT`(이전 API의 기본 용량 상수 16), `POLLCOMPLETION`(호출자가 실행하는 `Poller.wait()`에서 completion을 처리하도록 소켓을 등록하는 플래그) |
 | `PollSourceKind`(`IntEnum`) | `PollEvent.source_kind` | `SOCKET`, `FD`, `TIMER` |
 
 **선택 기준.** `MonitorEventMask`/`PollEventFlag`는 Python

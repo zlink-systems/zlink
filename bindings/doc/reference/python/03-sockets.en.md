@@ -24,17 +24,22 @@ with socket:
     ...
 ```
 
-**Options.** **No `unbind`, no TLS methods (`set_tls_server`/`set_tls_client`/etc.) at all** —
-unlike every other language covered so far, this binding's socket base contract has neither.
-
 | Member | Meaning |
 | --- | --- |
 | `bind(endpoint)` | starts listening on an address |
+| `unbind(endpoint)` | stops listening on the bound local endpoint |
+| `set_tls_server(cert, key, require_client_cert=False)` | sets the server certificate, key, and client certificate requirement before binding |
+| `set_tls_client(ca_cert, hostname, trust_system=False)` | sets the trusted CA, expected server name, and system CA policy before connecting. `ca_cert` and `hostname` accept `None`. |
 | `close()` | closes the native socket |
 | `options` | property, the typed options facade for this socket type |
 | `__enter__` / `__exit__` | sync context-manager only — **no `__aenter__`/`__aexit__` here**, unlike the async-and-sync-both pattern every other resource type in this binding follows |
 
-**Completion result.** `bind`/`close` are synchronous with no return value.
+| Operation | Completion result |
+| --- | --- |
+| `bind(endpoint)` | Returns `None` on success. Raises `BindError` on failure. |
+| `unbind(endpoint)` | Returns `None` on success. Raises `ConnectError` on failure. |
+| `set_tls_server(...)` | Returns `None` on success. Raises `ConfigError` on failure. |
+| `set_tls_client(...)` | Returns `None` on success. Raises `ConfigError` on failure. |
 
 **When to use.** Every concrete socket type below extends this Protocol and adds its own
 `connect`/`disconnect`/send/recv surface.
@@ -137,8 +142,10 @@ not load-balance.
 Load-balances sends across its connected peers and can issue routed requests.
 
 ```python
-dealer = create_dealer_socket(ctx)
-reply = await dealer.request().message(b"payload").submit()
+# The dealer is connected. The caller drives the completion poller while the reply is pending.
+completion_poller.add_socket(dealer, PollEventFlag.POLLCOMPLETION, slot=1)
+submission = dealer.request().message(b"payload").timeout(5.0).submit()
+reply = await submission.reply
 ```
 
 **Options.** **No `set_routing_id`/`get_routing_id` at all** — see the README's note.
@@ -165,8 +172,10 @@ surface instead.
 Routes messages to peers addressed by routing id, and can reply to a specific peer's request.
 
 ```python
-router = create_router_socket(ctx)
-await router.send(peer_rid).message(b"hello").submit()
+# The caller drives the completion poller while admission is pending.
+completion_poller.add_socket(router, PollEventFlag.POLLCOMPLETION, slot=1)
+submission = router.send(peer_rid).message(b"hello").submit()
+await submission.admitted
 ```
 
 **Options.** ROUTER uses the same managed send/request terminals as DEALER. Core keeps the selected
@@ -259,7 +268,7 @@ language's STREAM asymmetry.
 | `stream_options` | the per-type options facade |
 | `send(routing_id)` | starts the shared `SendOp`, addressed to that peer |
 | `recv_into(received, *, flags=0)` | pulls the next RAW-mode record |
-| `recv_packet_into(packet, *, flags=0)` | pulls the next PACKET-mode header/body pair into reusable caller-owned storage |
+| `recv_packet_into(packet, *, flags=0)` | pulls the next PACKET-mode header/body pair into reusable caller-owned storage. A concurrent receive into the same `StreamPacket` raises `RecvError` with `RecvResult.INVALID_STATE` and `internal_errno == errno.EBUSY`. |
 | `disconnect_rid(peer_rid)` | disconnects the peer identified by that routing id |
 
 **Completion result.** `recv_into` and `recv_packet_into` follow the convention above. The caller
@@ -278,9 +287,13 @@ to accumulate parts and reach a terminal submit. All builder stages extend the s
 `_FluentMessageOp` base Protocol.
 
 ```python
-await dealer.send().message(part1).message(part2).submit()
+# Register the dealer once and drive the poller while either stage is pending.
+completion_poller.add_socket(dealer, PollEventFlag.POLLCOMPLETION, slot=1)
+submission = dealer.send().message(part1).message(part2).submit()
+await submission.admitted
 
-reply = await dealer.request().message(payload).timeout(5.0).submit()
+submission = dealer.request().message(payload).timeout(5.0).submit()
+reply = await submission.reply
 
 received.reply().message(b"ok").submit()
 ```
@@ -291,19 +304,26 @@ received.reply().message(b"ok").submit()
 | --- | --- | --- |
 | `_FluentMessageOp` (shared base) | `message(payload)` | add one part, starts/continues the chain |
 | | `messages(*payloads)` | add several parts in one call — **declared directly on the shared base Protocol here**, unlike other languages where the multi-part convenience is a separate extension method |
-| `SendOp extends _FluentMessageOp` | `submit()` / `submit_sync()` | awaitable or blocking terminal |
-| `RequestOp extends _FluentMessageOp` | `timeout(timeout)` / `submit()` / `submit_sync()` | adds a reply-wait timeout; returns caller-owned reply messages |
+| `RequestOp` | `timeout(timeout)` | sets the reply timeout in seconds, measured from admission |
 | `PublishOp extends _FluentMessageOp` | `flags(flags)` / `submit()` | synchronous lossy/NODROP publication; the only operation family retaining send flags |
 | `ReplyOp extends _FluentMessageOp` | `submit()` | terminal |
 
-**Completion result.** Send `submit()` is awaitable and `submit_sync()` blocks for Core's terminal
-result. Request has matching awaitable/blocking terminals returning reply messages; reply and
-publish `submit()` are synchronous. Managed send/request/reply terminals do not accept
-`SendFlags.DONT_WAIT`.
+| Terminal | Completion result |
+| --- | --- |
+| `SendOp.submit()` | Returns a `SendSubmission` immediately. Read the initial result in `submission.result` and await `submission.admitted` for admission. |
+| `SendOp.submit_sync()` | Blocks until admission or failure. |
+| `RequestOp.submit()` | Returns a `RequestSubmission` immediately. It exposes the same result and admission properties as a send submission. Await `submission.reply` for caller-owned reply parts. |
+| `RequestOp.submit_sync()` | Blocks until it returns caller-owned reply parts or raises an error. |
+| `PublishOp.submit()` | Completes publication synchronously. |
+| `ReplyOp.submit()` | Submits the reply synchronously. |
+
+Register the socket for `PollEventFlag.POLLCOMPLETION` before submitting an asynchronous request
+or a send that may wait for admission. Call [`Poller.wait()`](04-eventing.en.md#poller) while
+admission or a reply is pending. The [async request sample](../../../../bindings/python/samples/request_reply_async_sample.py)
+shows registration, poller execution alongside the responder, and reply cleanup.
 
 **When to use.** Use `messages(*payloads)` to add several parts in one call instead of chaining
-`.message(...)` per part. Prefer the awaitable terminal in `asyncio` code and use the synchronous
-terminal only when the calling thread may block.
+`.message(...)` per part. Use `submit_sync()` when the calling thread can block.
 
 ---
 

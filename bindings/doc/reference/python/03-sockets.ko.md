@@ -26,18 +26,22 @@ with socket:
     ...
 ```
 
-**Options.** **`unbind`도, TLS 메서드(`set_tls_server`/`set_tls_client`
-등)도 전혀 없다** — 지금까지 다룬 다른 모든 언어와 달리, 이 binding의
-socket 기반 contract엔 둘 다 없다.
-
 | Member | 의미 |
 | --- | --- |
 | `bind(endpoint)` | 주소에서 listen을 시작 |
+| `unbind(endpoint)` | bind한 로컬 endpoint의 수신 대기를 종료한다. |
+| `set_tls_server(cert, key, require_client_cert=False)` | bind 전에 서버 인증서와 키, 클라이언트 인증서 요구 여부를 설정한다. |
+| `set_tls_client(ca_cert, hostname, trust_system=False)` | connect 전에 신뢰할 CA와 서버 이름, 시스템 CA 사용 여부를 설정한다. `ca_cert`와 `hostname`에는 `None`을 전달할 수 있다. |
 | `close()` | native socket을 닫는다 |
 | `options` | property, 이 socket type의 typed option facade |
 | `__enter__` / `__exit__` | sync context-manager만 — **여기엔 `__aenter__`/`__aexit__`가 없다**, 이 binding의 다른 모든 resource 타입이 따르는 sync·async 둘 다 패턴과 다름 |
 
-**Completion result.** `bind`/`close`는 반환값 없이 동기다.
+| 연산 | 완료 결과 |
+| --- | --- |
+| `bind(endpoint)` | 성공하면 `None`을 반환한다. 실패하면 `BindError`가 발생한다. |
+| `unbind(endpoint)` | 성공하면 `None`을 반환한다. 실패하면 `ConnectError`가 발생한다. |
+| `set_tls_server(...)` | 성공하면 `None`을 반환한다. 실패하면 `ConfigError`가 발생한다. |
+| `set_tls_client(...)` | 성공하면 `None`을 반환한다. 실패하면 `ConfigError`가 발생한다. |
 
 **선택 기준.** 아래 모든 구체 socket type이 이 Protocol을 확장하고
 자신만의 `connect`/`disconnect`/send/recv 표면을 추가한다.
@@ -143,8 +147,10 @@ if pair.recv_into(received):
 있다.
 
 ```python
-dealer = create_dealer_socket(ctx)
-reply = await dealer.request().message(b"payload").submit()
+# dealer는 연결된 상태다. 호출자는 응답이 도착할 때까지 completion poller를 구동한다.
+completion_poller.add_socket(dealer, PollEventFlag.POLLCOMPLETION, slot=1)
+submission = dealer.request().message(b"payload").timeout(5.0).submit()
+reply = await submission.reply
 ```
 
 **Options.** **`set_routing_id`/`get_routing_id`가 전혀 없다** — README
@@ -173,8 +179,10 @@ routing id로 지정된 peer에게 메시지를 보내고, 특정 peer의 reques
 reply할 수 있다.
 
 ```python
-router = create_router_socket(ctx)
-await router.send(peer_rid).message(b"hello").submit()
+# 호출자는 전송이 수용될 때까지 completion poller를 구동한다.
+completion_poller.add_socket(router, PollEventFlag.POLLCOMPLETION, slot=1)
+submission = router.send(peer_rid).message(b"hello").submit()
+await submission.admitted
 ```
 
 **Options.** ROUTER는 DEALER와 같은 managed send/request terminal을 사용한다.
@@ -271,7 +279,7 @@ if stream.recv_packet_into(packet):
 | `stream_options` | 타입별 option facade |
 | `send(routing_id)` | 공유 `SendOp`을 그 peer로 향해 시작 |
 | `recv_into(received, *, flags=0)` | 다음 RAW-mode record를 pull |
-| `recv_packet_into(packet, *, flags=0)` | 다음 PACKET-mode header/body를 재사용 caller-owned storage로 pull |
+| `recv_packet_into(packet, *, flags=0)` | 다음 PACKET 모드의 header와 body를 호출자가 재사용하는 저장소에 채운다. 같은 `StreamPacket`에 동시 수신을 시도하면 `RecvError`가 발생한다. 결과는 `RecvResult.INVALID_STATE`이며 `internal_errno == errno.EBUSY`다. |
 | `disconnect_rid(peer_rid)` | 해당 routing id로 식별되는 peer를 disconnect |
 
 **Completion result.** `recv_into`와 `recv_packet_into`는 위 관례를 따른다.
@@ -290,9 +298,13 @@ part를 누적하고 terminal submit에 도달하기 위해 반환하는 fluent 
 모든 builder 단계는 공유 `_FluentMessageOp` 기반 Protocol을 확장한다.
 
 ```python
-await dealer.send().message(part1).message(part2).submit()
+# dealer는 한 번 등록한다. 수용이나 응답을 기다리는 동안 poller를 구동한다.
+completion_poller.add_socket(dealer, PollEventFlag.POLLCOMPLETION, slot=1)
+submission = dealer.send().message(part1).message(part2).submit()
+await submission.admitted
 
-reply = await dealer.request().message(payload).timeout(5.0).submit()
+submission = dealer.request().message(payload).timeout(5.0).submit()
+reply = await submission.reply
 
 received.reply().message(b"ok").submit()
 ```
@@ -303,20 +315,28 @@ received.reply().message(b"ok").submit()
 | --- | --- | --- |
 | `_FluentMessageOp`(공유 기반) | `message(payload)` | part 하나를 추가, chain을 시작/계속 |
 | | `messages(*payloads)` | 한 호출로 여러 part 추가 — **여기선 공유 기반 Protocol에 직접 선언돼 있다**, multi-part 편의가 별도 extension method인 다른 언어와 다름 |
-| `SendOp extends _FluentMessageOp` | `submit()` / `submit_sync()` | awaitable 또는 blocking terminal |
-| `RequestOp extends _FluentMessageOp` | `timeout(timeout)` / `submit()` / `submit_sync()` | reply-wait timeout을 더하며 caller-owned reply message 반환 |
+| `RequestOp` | `timeout(timeout)` | 요청 수용 시점부터 응답을 기다리는 시간을 초 단위로 설정한다. |
 | `PublishOp extends _FluentMessageOp` | `flags(flags)` / `submit()` | 동기 lossy/NODROP publication; send flag를 유지하는 유일한 operation family |
 | `ReplyOp extends _FluentMessageOp` | `submit()` | terminal |
 
-**Completion result.** Send `submit()`은 awaitable이고 `submit_sync()`는
-Core terminal 결과까지 block한다. Request도 reply message를 반환하는
-awaitable/blocking terminal을 제공하고 reply·publish `submit()`은 동기다.
-Managed send/request/reply terminal은 `SendFlags.DONT_WAIT`를 받지 않는다.
+| Terminal | 완료 결과 |
+| --- | --- |
+| `SendOp.submit()` | `SendSubmission`을 즉시 반환한다. 최초 제출 결과는 `submission.result`에서 읽고, 전송 수용은 `submission.admitted`를 await해 기다린다. |
+| `SendOp.submit_sync()` | 전송이 수용되거나 실패할 때까지 호출 스레드를 차단한다. |
+| `RequestOp.submit()` | `RequestSubmission`을 즉시 반환한다. 전송과 같은 제출 결과와 수용 속성을 제공한다. `submission.reply`를 await하면 호출자가 소유하는 응답 part를 받는다. |
+| `RequestOp.submit_sync()` | 호출자가 소유하는 응답 part를 반환하거나 오류가 발생할 때까지 호출 스레드를 차단한다. |
+| `PublishOp.submit()` | 발행을 동기적으로 완료한다. |
+| `ReplyOp.submit()` | 응답을 동기적으로 제출한다. |
+
+비동기 요청이나 수용 대기가 필요한 전송을 제출하기 전에 소켓을
+`PollEventFlag.POLLCOMPLETION`으로 등록한다. 수용이나 응답을 기다리는 동안
+[`Poller.wait()`](04-eventing.ko.md#poller)를 호출한다.
+[비동기 요청 샘플](../../../../bindings/python/samples/request_reply_async_sample.py)에서
+등록, 요청 처리와 함께 poller를 구동하는 방법, 응답 part 해제를 확인할 수 있다.
 
 **선택 기준.** part마다 `.message(...)`를 chain하는 대신 한 호출로
-여러 part를 추가하려면 `messages(*payloads)`를 사용한다. `asyncio` 코드에서는
-awaitable terminal을 우선하고 호출 thread가 block해도 될 때만 동기
-terminal을 사용한다.
+여러 part를 추가하려면 `messages(*payloads)`를 사용한다. 호출 스레드에서
+대기해도 되는 경우에는 `submit_sync()`를 사용한다.
 
 ---
 
