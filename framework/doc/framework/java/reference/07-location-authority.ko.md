@@ -80,6 +80,17 @@ Store limit은 그대로 적용한다.
 
 ---
 
+## `stop()` (`ZLinkLocationRuntime`)
+
+인자 없는 `stop()`은 `ZLinkFrameworkRuntime.DEFAULT_TERMINATION_DEADLINE`을 적용하며 기본값은
+30초다. `ownerLeaseRenewTimeout`은 lease 갱신 시도 하나의 제한이며, `stop()` 기본 기한은 이 값과
+별개다. `start(nodeRid)`가 취소될 때 이미 시작한 owner lease claim의 결과 확인과 늦게 commit된
+lease의 정리는 같은 Stop deadline에 따른다. Framework는 기한까지 claim 결과를 기다리고, 취소 뒤
+그 안에 commit된 lease를 조회해 해제한다. 기한이 지나면 추가 Store 호출 없이 TTL 만료에 맡긴다.
+`stop(Instant deadline)`은 전달한 기한을 사용한다.
+
+---
+
 ## `isPeerReady` (ZLinkLocationReadiness)
 
 특정 MeshName·role(선택적으로 특정 node)의 peer가 준비됐는지 확인한다.

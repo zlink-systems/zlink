@@ -83,6 +83,18 @@ for runnable turns. Core memory accounting, frame-size, and Store limits still a
 
 ---
 
+## `stop()` (`ZLinkLocationRuntime`)
+
+The no-argument `stop()` uses `ZLinkFrameworkRuntime.DEFAULT_TERMINATION_DEADLINE`, which
+defaults to 30 seconds. `ownerLeaseRenewTimeout` limits one lease renewal attempt; it does not set
+the default `stop()` deadline. If `start(nodeRid)` is cancelled after the owner lease claim has
+started, the framework waits for that claim under the same Stop deadline. If it commits after
+cancellation but before the deadline, the framework reads and releases the lease. After the
+deadline, the framework makes no further Store calls for this cleanup and leaves the lease to
+expire by TTL. `stop(Instant deadline)` uses the supplied deadline.
+
+---
+
 ## `isPeerReady` (ZLinkLocationReadiness)
 
 Checks whether a peer of a specific MeshName/role (optionally a specific node) is ready.

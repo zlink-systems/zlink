@@ -5,6 +5,7 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.internal.execution.ZLinkExecutionAvailability;
 import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
@@ -54,8 +55,12 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public final class ZLinkLocationRuntime implements AutoCloseable {
+    private static final Logger LOGGER = Logger.getLogger(ZLinkLocationRuntime.class.getName());
+
     static final LongSupplier SYSTEM_MONOTONIC_NANOS = System::nanoTime;
     private final ZLinkRegisteredLocationStores stores;
     private final String ownerId;
@@ -867,12 +872,16 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     public CompletionStage<Void> start(RoutingId nodeRid) {
-        Instant cleanupDeadline = Instant.now().plus(ownerLeaseRenewTimeout);
-        return start(nodeRid, () -> cleanupDeadline);
+        return startWithStopDeadline(nodeRid, null);
     }
 
     public CompletionStage<Void> start(RoutingId nodeRid, Supplier<Instant> cleanupDeadline) {
-        Objects.requireNonNull(cleanupDeadline, "cleanupDeadline");
+        return startWithStopDeadline(
+                nodeRid, Objects.requireNonNull(cleanupDeadline, "cleanupDeadline"));
+    }
+
+    private CompletionStage<Void> startWithStopDeadline(
+            RoutingId nodeRid, Supplier<Instant> hostStopDeadline) {
         Objects.requireNonNull(nodeRid, "nodeRid");
         StartState state =
                 inStateLane(
@@ -887,7 +896,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                     new StartupLifecycle(
                                             new CompletableFuture<>(),
                                             new CompletableFuture<>(),
-                                            cleanupDeadline);
+                                            hostStopDeadline,
+                                            new CompletableFuture<>());
                             return new StartState(startupLifecycle, true);
                         });
         if (state.claim()) {
@@ -920,7 +930,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     public CompletionStage<Void> stop() {
-        return stop(Instant.now().plus(ownerLeaseRenewTimeout));
+        return stop(Instant.now().plus(ZLinkFrameworkRuntime.DEFAULT_TERMINATION_DEADLINE));
     }
 
     public CompletionStage<Void> stop(Instant deadline) {
@@ -937,7 +947,10 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                             CompletableFuture<Void> completion =
                                     lifecycle == null ? null : lifecycle.cleanup();
                             ZLinkLocationOwnerToken token =
-                                    shouldStop && startupCompletion().isDone()
+                                    shouldStop
+                                                    && startupCompletion().isDone()
+                                                    && !startupCompletion()
+                                                            .isCompletedExceptionally()
                                             ? admittedOwnerTokenCore().orElse(null)
                                             : null;
                             if (shouldStop) {
@@ -946,12 +959,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                         new StartupLifecycle(
                                                 lifecycle.completion(),
                                                 completion,
-                                                lifecycle.completion().isDone()
-                                                                && !lifecycle
-                                                                        .completion()
-                                                                        .isCompletedExceptionally()
-                                                        ? () -> deadline
-                                                        : lifecycle.cleanupDeadline());
+                                                lifecycle.hostStopDeadline(),
+                                                lifecycle.stopDeadline());
                             }
                             return new StopState(
                                     shouldStop,
@@ -964,6 +973,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         cancel(state.heartbeat());
         cancel(state.recovery() == null ? null : state.recovery().completion());
         if (state.lifecycle() == null) return CompletableFuture.completedFuture(null);
+        if (state.shouldStop()) state.lifecycle().stopDeadline().complete(deadline);
         cancel(state.lifecycle().completion());
         if (!state.shouldStop()) return state.completion();
         long deadlineNanos = deadlineNanos(deadline);
@@ -1044,16 +1054,6 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private CompletableFuture<Void> startupCompletion() {
         return startupLifecycle == null ? null : startupLifecycle.completion();
-    }
-
-    private long cleanupDeadlineNanos(StartupLifecycle lifecycle) {
-        Supplier<Instant> cleanupDeadline =
-                inStateLane(
-                        () ->
-                                ownsStartupCore(lifecycle.completion())
-                                        ? startupLifecycle.cleanupDeadline()
-                                        : lifecycle.cleanupDeadline());
-        return deadlineNanos(cleanupDeadline.get());
     }
 
     private long deadlineNanos(Instant deadline) {
@@ -1979,7 +1979,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                         deadlineNanos,
                         stores.ownerLeaseStore().claimOwnerLease(ownerId, ownerLeaseTtl),
                         episode,
-                        previousToken)
+                        previousToken,
+                        () -> false)
                 .handle(
                         (claimed, failure) ->
                                 installOwnerLease(
@@ -1988,22 +1989,27 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     private CompletionStage<ZLinkOwnerLeaseClaimed> resolveOwnerLeaseClaim(
-            long deadlineNanos, CompletionStage<ZLinkOwnerLeaseClaimResult> claimOperation) {
-        return resolveOwnerLeaseClaim(deadlineNanos, claimOperation, null, null);
-    }
-
-    private CompletionStage<ZLinkOwnerLeaseClaimed> resolveOwnerLeaseClaim(
             long deadlineNanos,
             CompletionStage<ZLinkOwnerLeaseClaimResult> claimOperation,
             StoreOutage episode,
-            ZLinkLocationOwnerToken previousToken) {
+            ZLinkLocationOwnerToken previousToken,
+            BooleanSupplier cancelled) {
+        Supplier<CompletionStage<ZLinkOwnerLeaseReadResult>> confirm =
+                () ->
+                        withinDeadline(
+                                () ->
+                                        cancelled.getAsBoolean()
+                                                ? CompletableFuture.failedFuture(
+                                                        new CancellationException())
+                                                : stores.ownerLeaseStore().readOwnerLease(ownerId),
+                                deadlineNanos);
         return withinDeadline(claimOperation, deadlineNanos)
                 .<CompletionStage<ZLinkOwnerLeaseClaimResult>>handle(
                         (result, failure) -> {
                             if (failure == null) {
                                 return CompletableFuture.completedFuture(result);
                             }
-                            return confirmClaimAfterFailure(failure, deadlineNanos);
+                            return confirmClaimAfterFailure(failure, confirm);
                         })
                 .thenCompose(result -> result)
                 .thenCompose(
@@ -2013,7 +2019,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                 systems.zlink.framework.runtime.internal.locations
                                                         .ZLinkOwnerLeaseClaimConflict
                                         ? confirmClaimAfterConflict(
-                                                result, deadlineNanos, episode, previousToken)
+                                                result, confirm, episode, previousToken)
                                         : CompletableFuture.completedFuture(result))
                 .thenCompose(
                         result -> {
@@ -2057,14 +2063,10 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private CompletionStage<ZLinkOwnerLeaseClaimResult> confirmClaimAfterConflict(
             ZLinkOwnerLeaseClaimResult conflict,
-            long deadlineNanos,
+            Supplier<CompletionStage<ZLinkOwnerLeaseReadResult>> confirm,
             StoreOutage episode,
             ZLinkLocationOwnerToken previousToken) {
-        return observeLeaseOperation(
-                        () ->
-                                withinDeadline(
-                                        () -> stores.ownerLeaseStore().readOwnerLease(ownerId),
-                                        deadlineNanos))
+        return observeLeaseOperation(confirm)
                 .thenCompose(
                         exact ->
                                 stateLane.runAsync(
@@ -2091,12 +2093,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     private CompletionStage<ZLinkOwnerLeaseClaimResult> confirmClaimAfterFailure(
-            Throwable failure, long deadlineNanos) {
-        return observeLeaseOperation(
-                        () ->
-                                withinDeadline(
-                                        () -> stores.ownerLeaseStore().readOwnerLease(ownerId),
-                                        deadlineNanos))
+            Throwable failure, Supplier<CompletionStage<ZLinkOwnerLeaseReadResult>> confirm) {
+        return observeLeaseOperation(confirm)
                 .thenCompose(
                         result ->
                                 result instanceof ZLinkOwnerLeaseFound found
@@ -2184,15 +2182,12 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         if (completion.isDone()) return completion;
         long remainingNanos = deadlineNanos - monotonicNow.getAsLong();
         if (remainingNanos <= 0L) {
-            completion.completeExceptionally(
-                    new TimeoutException("owner lease operation timed out"));
+            completion.completeExceptionally(new OwnerLeaseDeadlineExceeded());
             return completion;
         }
         ScheduledFuture<?> timeout =
                 heartbeatExecutor.schedule(
-                        () ->
-                                completion.completeExceptionally(
-                                        new TimeoutException("owner lease operation timed out")),
+                        () -> completion.completeExceptionally(new OwnerLeaseDeadlineExceeded()),
                         remainingNanos,
                         TimeUnit.NANOSECONDS);
         completion.whenComplete((result, failure) -> timeout.cancel(false));
@@ -2202,8 +2197,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private <T> CompletionStage<T> withinDeadline(
             Supplier<CompletionStage<T>> operation, long deadlineNanos) {
         if (deadlineNanos - monotonicNow.getAsLong() <= 0L) {
-            return CompletableFuture.failedFuture(
-                    new TimeoutException("owner lease operation timed out"));
+            return CompletableFuture.failedFuture(new OwnerLeaseDeadlineExceeded());
         }
         return withinDeadline(operation.get(), deadlineNanos);
     }
@@ -2359,7 +2353,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                                                             && ownsStartupCore(
                                                                                                                     lifecycle)
                                                                                                     ? startupLifecycle
-                                                                                                            .cleanupDeadline()
+                                                                                                            .hostStopDeadline()
                                                                                                     : null);
                                                                     if (cleanup != null)
                                                                         cleanup.get();
@@ -2400,32 +2394,48 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         completion
                 .handle(
                         (ignored, failure) -> {
-                            if (failure != null
-                                    && unwrap(failure) instanceof CancellationException) {
-                                cancelStartupClaim(completion);
-                                return cleanupDeadlineNanos(lifecycle);
+                            if (failure == null
+                                    || !(unwrap(failure) instanceof CancellationException)) {
+                                return terminalClaim.thenApply(token -> (Void) null);
                             }
-                            return null;
+                            if (!lifecycle.stopDeadline().isDone()) {
+                                Supplier<Instant> hostStopDeadline = lifecycle.hostStopDeadline();
+                                if (hostStopDeadline == null) {
+                                    stop();
+                                } else {
+                                    Instant deadline = hostStopDeadline.get();
+                                    if (deadline != null)
+                                        lifecycle.stopDeadline().complete(deadline);
+                                }
+                            }
+                            return lifecycle
+                                    .stopDeadline()
+                                    .thenCompose(
+                                            deadline -> {
+                                                cancelStartupClaim(completion);
+                                                long cleanupDeadlineNanos = deadlineNanos(deadline);
+                                                return withinDeadline(
+                                                                terminalClaim, cleanupDeadlineNanos)
+                                                        .thenCompose(
+                                                                token ->
+                                                                        startupCancellationCleanup(
+                                                                                cleanupDeadlineNanos,
+                                                                                token,
+                                                                                completion));
+                                            });
                         })
-                .thenCompose(
-                        cleanupDeadline ->
-                                (cleanupDeadline == null
-                                                ? terminalClaim
-                                                : withinDeadline(terminalClaim, cleanupDeadline))
-                                        .thenCompose(
-                                                claimedToken ->
-                                                        cleanupDeadline != null
-                                                                ? startupCancellationCleanup(
-                                                                        cleanupDeadline,
-                                                                        claimedToken,
-                                                                        completion)
-                                                                : CompletableFuture.completedFuture(
-                                                                        null)))
+                .thenCompose(stage -> stage)
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure == null) {
                                 lifecycle.cleanup().complete(null);
                             } else {
+                                if (unwrap(failure) instanceof OwnerLeaseDeadlineExceeded) {
+                                    LOGGER.log(
+                                            Level.WARNING,
+                                            "location.startup_claim_cleanup_abandoned",
+                                            new Object[] {ownerId});
+                                }
                                 stateLane
                                         .runAsync(
                                                 () -> {
@@ -2441,7 +2451,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                         unwrap(failure)));
                             }
                         });
-        resolveOwnerLeaseClaim(deadlineNanos, claimOperation)
+        resolveOwnerLeaseClaim(deadlineNanos, claimOperation, null, null, completion::isCancelled)
                 .handle(
                         (claimed, failure) ->
                                 stateLane
@@ -2680,7 +2690,14 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private record StartupLifecycle(
             CompletableFuture<Void> completion,
             CompletableFuture<Void> cleanup,
-            Supplier<Instant> cleanupDeadline) {}
+            Supplier<Instant> hostStopDeadline,
+            CompletableFuture<Instant> stopDeadline) {}
+
+    private static final class OwnerLeaseDeadlineExceeded extends TimeoutException {
+        OwnerLeaseDeadlineExceeded() {
+            super("owner lease operation timed out");
+        }
+    }
 
     private static final class OwnerLeaseClaimRejectedException extends IllegalStateException {
         OwnerLeaseClaimRejectedException(String message) {
