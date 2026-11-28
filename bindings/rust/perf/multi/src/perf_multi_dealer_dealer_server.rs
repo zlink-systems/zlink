@@ -62,10 +62,10 @@ fn main() {
     let mut remaining_senders = settings.clients;
     while remaining_senders > 0 {
         let now = Instant::now();
-        assert!(
-            now < drain_deadline,
-            "dealer-dealer receive drain timed out"
-        );
+        if now >= drain_deadline {
+            eprintln!("multi_server_error: dealer-dealer receive drain timed out");
+            std::process::exit(1);
+        }
         match server.recv(&mut received, RecvFlags::DONT_WAIT) {
             Ok(true) => {
                 if common::is_stop_message(received.parts()) {

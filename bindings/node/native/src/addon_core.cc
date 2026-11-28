@@ -2907,6 +2907,9 @@ napi_value socket_try_subscription_event (napi_env env, napi_callback_info info)
     }
 }
 
+// Same default as the other bindings use for option and subscription queries.
+constexpr size_t k_default_option_buffer_size = 256;
+
 napi_value subscription_at (napi_env env, napi_callback_info info)
 {
     napi_value argv[2];
@@ -2922,7 +2925,7 @@ napi_value subscription_at (napi_env env, napi_callback_info info)
     uint32_t index = 0;
     napi_get_value_uint32 (env, argv[1], &index);
 
-    std::vector<char> filter (256, '\0');
+    std::vector<char> filter (k_default_option_buffer_size, '\0');
     size_t filter_len = filter.size ();
     int is_pattern = 0;
     const size_t native_index = static_cast<size_t> (index);

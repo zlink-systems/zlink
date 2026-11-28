@@ -23,6 +23,9 @@ use zlink::{
 
 const DEFAULT_TIMEOUT_MS: usize = 200;
 
+// Max consecutive sends or receives per sender before moving to the next one
+// (PERF_MULTI_TEST_POLICY.md 5.1, C perf_multi_measurement::max_burst_per_sender).
+pub const MAX_BURST_PER_SENDER: usize = 64;
 pub const STOP_TOKEN: &[u8] = b"__zlink_perf_stop__";
 pub const HEADER_SIZE: usize = 29;
 pub const PHASE_WARMUP: u8 = 0;
