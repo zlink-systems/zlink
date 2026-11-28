@@ -123,9 +123,10 @@ ready = poller.wait(events, timeout_ms=1000)
 **Completion result.** Registration/removal members are synchronous. `wait` blocks up to
 `timeout_ms`, filling `events` in place and returning the ready count. Supports both sync and async
 context-manager protocols.
-When a socket was registered for `PollEventFlag.POLLCOMPLETION`, its owner must keep calling
-`wait()` so the binding can drain and settle native completions. Run a blocking terminal in a
-separate execution context when both roles are needed.
+Register a socket for `PollEventFlag.POLLCOMPLETION` before submitting an asynchronous request
+or a send that may wait for admission. The caller drives `wait()` while admission or a reply is
+pending. The binding processes native completions during those calls. Run a blocking terminal
+in a separate execution context when using it alongside the completion poller.
 
 **When to use.** Use one poller across a service's lifetime. Reuse one `PollEvents` buffer across
 `wait` calls rather than creating one per wait.
@@ -209,7 +210,7 @@ multiplex it alongside sockets on one wait. Timer delivery has no registration c
 | Enum | Used by | Values |
 |---|---|---|
 | `MonitorEventMask` (`IntFlag`) | `MonitorEvent.event` | `CONNECTED`, `CONNECT_DELAYED`, `CONNECT_RETRIED`, `LISTENING`, `BIND_FAILED`, `ACCEPTED`, `ACCEPT_FAILED`, `CLOSED`, `CLOSE_FAILED`, `DISCONNECTED`, `MONITOR_STOPPED`, `HANDSHAKE_FAILED_NO_DETAIL`, `CONNECTION_READY`, `HANDSHAKE_FAILED_PROTOCOL`, `HANDSHAKE_FAILED_AUTH`, `PEER_WEIGHT_CHANGED`, `ALL` |
-| `PollEventFlag` (`IntFlag`) | `Poller.add_socket`/`modify_socket`/`add_fd`/`modify_fd`, `PollEvents.has_event(...)` | `POLLIN`, `POLLOUT`, `POLLERR`, `POLLPRI`, `POLLITEMS_DFLT`(16, **not a readiness flag** — a legacy default-capacity constant, distinct in kind from the others), `POLLCOMPLETION` (reserved for binding runtime workers; application code generally uses `POLLIN`/`POLLOUT` per its own doc comment) |
+| `PollEventFlag` (`IntFlag`) | `Poller.add_socket`/`modify_socket`/`add_fd`/`modify_fd`, `PollEvents.has_event(...)` | `POLLIN`, `POLLOUT`, `POLLERR`, `POLLPRI`, `POLLITEMS_DFLT` (legacy default capacity of 16), `POLLCOMPLETION` (socket registration for processing completions in the caller's `Poller.wait()` calls) |
 | `PollSourceKind` (`IntEnum`) | `PollEvent.source_kind` | `SOCKET`, `FD`, `TIMER` |
 
 **When to use.** Because `MonitorEventMask`/`PollEventFlag` are Python `IntFlag`, combine values
