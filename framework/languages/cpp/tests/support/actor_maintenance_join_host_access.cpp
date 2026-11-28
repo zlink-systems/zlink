@@ -219,7 +219,8 @@ task_t<bool> public_host_runtime_test_access_t::restore_accepted_spot (
     staging->targets.push_back (target);
     staging->wire_objects.push_back ({});
     staging->restore_identity.reference = "accepted-source-boundary";
-    return host.restore_relocation_assembly (pending, staging);
+    return host.restore_relocation_assembly (pending, staging,
+                                             host.actor_relocation_target_spot (target));
 }
 
 task_t<bool> public_host_runtime_test_access_t::activate_stale_actor_attempt (

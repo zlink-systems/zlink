@@ -88,7 +88,10 @@ bool public_host_runtime_test_access_t::restore_saved (
                                           saved.owner.object_generation,
                                           saved.owner.authority_owner_generation});
     }
-    return host.restore_relocation_assembly (pending, staging).result ().value ();
+    const auto spot = staging->targets.empty ()
+                        ? std::nullopt
+                        : host.actor_relocation_target_spot (staging->targets.front ());
+    return host.restore_relocation_assembly (pending, staging, spot).result ().value ();
 }
 
 bool public_host_runtime_test_access_t::complete_saved (
