@@ -1578,7 +1578,9 @@ authority `payload`가 될 application 정의 opaque bytes이고, membership 변
 `targetOwner`)와 Restore 요청(command 40)이 소유하고, commit은 그 값으로 target 쪽 변경을 만든다.
 
 **Membership 변경 bytes는 opaque이며 다른 runtime은 내용을 해석하지 않고 SHA-256만 비교한다.** Membership 변경이
-없는 participant의 본문은 UTF-8 `[]`(2 bytes)다. 빈 본문은 쓰지 않는다.
+없는 participant의 본문은 UTF-8 `[]`(2 bytes)다. 빈 본문은 쓰지 않는다. 논리 Spot ID와 generation이 그대로인
+`SpotWide` host 이동에서 이미 그 Spot에 속한 Actor의 membership은 바뀌지 않으므로 그 본문은 `[]`다 —
+기존 membership을 다시 직렬화하지 않는다.
 
 **본문 공통 규칙.** Aggregate 기록, 목록 root와 page의 본문은 UTF-8 JSON object이며
 [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)(JSON Canonicalization Scheme, JCS)로

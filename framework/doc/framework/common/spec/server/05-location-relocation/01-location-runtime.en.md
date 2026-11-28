@@ -1780,7 +1780,8 @@ request (command 40), and commit builds the target-side change from those values
 
 **Membership change bytes are opaque; other runtimes don't interpret the content and compare only the
 SHA-256.** A participant with no membership change has the UTF-8 body `[]` (2 bytes). An empty body is
-never written.
+never written. In a `SpotWide` host move that keeps the logical Spot ID and generation, the membership of an
+Actor already in that Spot doesn't change, so its body is `[]`; the existing membership isn't serialized again.
 
 **Common body rules.** The bodies of the aggregate record and the inventory root and pages are UTF-8
 JSON objects, stored exactly as the bytes produced by
