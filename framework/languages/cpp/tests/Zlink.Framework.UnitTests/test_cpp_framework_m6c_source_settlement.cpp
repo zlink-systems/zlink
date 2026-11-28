@@ -42,6 +42,7 @@ void test_source_relocation_settles_by_authority (test_context_t &test,
         bool late_accepted = false;
         bool late_relayed = false;
         bool dispatch_reopened = false;
+        bool source_finalized = false;
         std::vector<object_ref_t> unavailable;
         std::optional<relocation_authority_fence_t> observed;
         int preserve_calls = 0;
@@ -185,23 +186,30 @@ void test_source_relocation_settles_by_authority (test_context_t &test,
         (void) objects.enqueue (actor, turn_domain_t::application, {1, {0x42}});
         const auto [claim_error, claimed] = objects.try_claim (actor, turn_domain_t::application);
         outcome.dispatch_reopened = claim_error == stateful_error_t::none && claimed.has_value ();
+        outcome.source_finalized =
+          objects.finalized_relocation_source (actor.kind, actor.key, actor.object_generation);
         return outcome;
     };
 
     if (expired_teardown) {
-        const auto unknown = run (10s, [] (settlement_authority_t &) {}, false, false, true);
+        const auto unknown = run (10s, [] (settlement_authority_t &) {}, false, true, true);
         test.require (!unknown.operation_error
                         && unknown.result.settlement.outcome == relocation_authority_t::unsettled
-                        && unknown.result.terminal == relocation_terminal_t::recovery_required
-                        && !unknown.dispatch_reopened && unknown.unavailable.size () == 1,
-                      "UNKNOWN at the existing host teardown deadline must remain unavailable "
-                      "and apply the source terminal exactly once");
+                        && unknown.result.terminal == relocation_terminal_t::blocked
+                        && unknown.result.reason
+                             == relocation_reason_t::authority_unsettled_at_stop,
+                      "unsettled authority at stop deadline must block relocation");
+        test.require (
+          unknown.late_accepted && !unknown.source_finalized && !unknown.dispatch_reopened
+            && unknown.unavailable.empty (),
+          "unsettled authority must leave the backlog sealed for the next owner lookup");
+        test.require (!unknown.observed && unknown.preserve_calls == 0,
+                      "an elapsed stop deadline must prevent further Store operations");
         return;
     }
     if (cancel_management_delay || cancel_cutover_submit) {
-        // Cancelling the host delay owner in the cutover callback makes its
-        // first management wait fail synchronously. The scripted second read
-        // must still decide the source terminal, without a timer or sleep.
+        // Store authority decides the terminal when shutdown cancels a
+        // management wait or cutover submission.
         for (const auto terminal :
              {relocation_authority_t::target_committed, relocation_authority_t::source_preserved,
               relocation_authority_t::source_lease_expired}) {
@@ -209,6 +217,7 @@ void test_source_relocation_settles_by_authority (test_context_t &test,
               10s,
               [terminal] (settlement_authority_t &authority) {
                   authority.observed_authority = terminal;
+                  authority.preserved_authority = terminal;
                   authority.settle_after_observes = 2;
               },
               false, false, true);

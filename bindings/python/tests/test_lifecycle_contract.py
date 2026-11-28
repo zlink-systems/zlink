@@ -79,7 +79,7 @@ def test_socket_resource_exit_returns_native_busy_without_waiting():
     with pytest.raises(zlink.CloseError) as raised:
         socket.__exit__(None, None, None)
     assert raised.value.result == zlink.CloseResult.BUSY
-    assert raised.value.native_errno == errno.EBUSY
+    assert raised.value.internal_errno == errno.EBUSY
     assert handle.calls == 1
 
 

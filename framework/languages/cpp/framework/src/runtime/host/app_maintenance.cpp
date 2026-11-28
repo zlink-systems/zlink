@@ -6,6 +6,7 @@
 #include "runtime/execution/task_result.hpp"
 #include "runtime/host/hosted_service_lifecycle.hpp"
 #include "runtime/host/relocation_target_eligibility.hpp"
+#include "runtime/locations/authority_aggregate_relocation.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/location_runtime.hpp"
@@ -169,7 +170,7 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
                 continue;
             const auto runtime =
               detail::spot_node_runtime_t::from (state.zlink, node->mesh_name ());
-            if (runtime && !(co_await runtime->relocation_units (false)).empty ()) {
+            if (runtime && !(co_await runtime->read_relocation_units ()).empty ()) {
                 requires_target = true;
                 break;
             }
@@ -236,6 +237,30 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
             source_application_version = source->application_version;
             const auto target_application_version =
               relocation_target_application_version (options, source->application_version);
+
+            if (co_await node->native_node ().has_finishing_relocation_target ())
+                co_return relocation_preflight_t{relocation_reason_t::operation_in_progress,
+                                                 target_application_version,
+                                                 source->application_version};
+            if (auto spots = detail::spot_node_runtime_t::from (state.zlink, node_mesh)) {
+                const auto units = co_await spots->read_relocation_units ();
+                std::vector<authority_key_t> keys;
+                for (const auto &actor : units.standalone_actors)
+                    keys.push_back (runtime::actor_authority_key (actor.actor_id ().value ()));
+                for (const auto &unit : units.spots) {
+                    keys.push_back (runtime::spot_authority_key (unit.spot_id));
+                    for (const auto &actor : unit.actors)
+                        keys.push_back (runtime::actor_authority_key (actor.actor_id ().value ()));
+                }
+                for (const auto &key : keys) {
+                    const auto read = co_await store.read_authority (key);
+                    const auto *authority = std::get_if<authority_snapshot_t> (&read);
+                    if (authority && runtime::finishing_relocation (*authority))
+                        co_return relocation_preflight_t{relocation_reason_t::operation_in_progress,
+                                                         target_application_version,
+                                                         source->application_version};
+                }
+            }
 
             bool replacement = false;
             for (const auto &candidate : descriptors) {
@@ -579,16 +604,19 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
       relocation_outcome_t::blocked, relocation_reason_t::relocation_failed};
     std::vector<std::string> readiness_meshes;
     std::map<std::string, std::vector<spot_id_t>> relocated_ready_spots;
-    /* 30 §13: units settled on both sides, or a source owner lease that
-     * expired before its Preserve fence, end the host in Error. */
     std::size_t committed_units = 0;
-    bool source_authority_expired = false;
 
     auto shutdown_requested = [&] {
         std::lock_guard lock (operation.mutex);
         return operation.shutdown_requested;
     };
-    auto complete = [&] (relocation_result_t result) {
+    const auto source_authority_lost =
+      [] (std::optional<runtime::stateful::relocation_reason_t> reason) {
+          return reason == runtime::stateful::relocation_reason_t::owner_lease_expired
+                 || reason == runtime::stateful::relocation_reason_t::authority_missing;
+      };
+    auto complete = [&] (relocation_result_t result,
+                         std::optional<runtime::stateful::relocation_reason_t> unit_failure = {}) {
         for (const auto &mesh_name : readiness_meshes) {
             auto runtime = detail::spot_node_runtime_t::from (state.zlink, mesh_name);
             if (runtime) {
@@ -613,7 +641,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
             if (result.outcome == relocation_outcome_t::relocated) {
                 state.runtime_state.store (framework_runtime_state_t::relocated,
                                            std::memory_order_release);
-            } else if (committed_units != 0 || source_authority_expired) {
+            } else if (committed_units != 0 || source_authority_lost (unit_failure)) {
                 state.runtime_state.store (framework_runtime_state_t::error,
                                            std::memory_order_release);
             } else {
@@ -674,8 +702,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
             auto spot_runtime = detail::spot_node_runtime_t::from (state.zlink, node_mesh);
             if (!spot_runtime)
                 continue;
-            auto units = co_await spot_runtime->relocation_units (true);
-            if (units.empty ())
+            if ((co_await spot_runtime->read_relocation_units ()).empty ())
                 continue;
 
             if (!peers || !location_store) {
@@ -711,6 +738,10 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 source_descriptor = *found;
             }
 
+            // Resolve the source lifecycle fence before acquiring current units.
+            auto units = co_await spot_runtime->relocation_units ();
+            if (units.empty ())
+                continue;
             plans.push_back ({node, node_mesh, local_rid, std::move (*spot_runtime),
                               std::move (source_descriptor), std::move (units)});
         }
@@ -777,10 +808,8 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 const auto moved = co_await node->relocate_application_actor (
                   actor, *target, *authority, deadline_at);
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
-                    source_authority_expired =
-                      moved.reason == runtime::stateful::relocation_reason_t::owner_lease_expired;
                     terminal.reason = relocation_reason_t::relocation_failed;
-                    complete (terminal);
+                    complete (terminal, moved.reason);
                     co_return;
                 }
                 const std::vector<runtime::stateful::object_ref_t> source_unit{source.value ()};
@@ -920,13 +949,12 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                   sources, std::move (stable_types), *target, authorities, deadline_at);
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
                     if (unit.kind == placement_object_kind_t::instance_spot
+                        && !source_authority_lost (moved.reason)
                         && close_committed (
                           co_await location_store->get ().read_authority (spot_key)))
                         continue;
-                    source_authority_expired =
-                      moved.reason == runtime::stateful::relocation_reason_t::owner_lease_expired;
                     terminal.reason = relocation_reason_t::relocation_failed;
-                    complete (terminal);
+                    complete (terminal, moved.reason);
                     co_return;
                 }
                 co_await spot_runtime.retire_relocation_source (sources);

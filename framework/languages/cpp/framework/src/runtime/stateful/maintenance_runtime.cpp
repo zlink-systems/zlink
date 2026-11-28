@@ -275,9 +275,7 @@ class maintenance_runtime_t::relocation_metric_operation_t
                 case relocation_authority_t::source_preserved:
                     outcome = "aborted";
                     break;
-                // Only the host-stop deadline return at maintenance_runtime.cpp:687 reaches
-                // this case; ordinary unsettled observations stay in settle_relocation.
-                // Host stop installs that deadline at host/app.cpp:3959,4261.
+                // A stop deadline ends settlement without a confirmed owner.
                 case relocation_authority_t::unsettled:
                     outcome = "shutdown";
                     break;
@@ -591,6 +589,12 @@ task_t<stateful_error_t> maintenance_runtime_t::abort_relocation_before_cutover 
             co_return stateful_error_t::generation_stale;
         }
     }
+    co_return co_await resume_preserved_source (state);
+}
+
+task_t<stateful_error_t> maintenance_runtime_t::resume_preserved_source (
+  const std::shared_ptr<relocation_terminal_state_t> &state)
+{
     const auto aborted =
       co_await _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
     if (aborted == stateful_error_t::none) {
@@ -845,18 +849,19 @@ maintenance_runtime_t::settle_relocation (std::shared_ptr<relocation_terminal_st
     /* Source authority settlement (28 §4.4, 01 §6.1/§10), the only place that
      * ends a unit after relay-ready: the cutover submit terminal is neither
      * success nor failure. Before the Restore deadline the source reads the
-     * primary authority row; from it on, it runs the Preserve fence. An
-     * indeterminate result repeats under the Store-failure policy. */
+     * primary authority row. Restore expiry or the start of host drain
+     * permits the Preserve fence until the stop deadline. */
     const auto fence = source_fence (*state);
     for (;;) {
+        const auto stop_at = _delay_owner ? _delay_owner->stop_deadline () : std::nullopt;
+        const auto now = std::chrono::steady_clock::now ();
+        if (stop_at && now >= *stop_at)
+            co_return source_relocation_settlement_t{};
         const auto preserve =
-          before_cutover || std::chrono::steady_clock::now () >= state->context.restore_deadline;
+          before_cutover || stop_at.has_value () || now >= state->context.restore_deadline;
         const auto settled = _authority->settle_source_relocation (fence, participants, preserve);
         if (settled.outcome != relocation_authority_t::unsettled)
             co_return settled;
-        const auto stop_at = _delay_owner ? _delay_owner->stop_deadline () : std::nullopt;
-        if (stop_at && std::chrono::steady_clock::now () >= *stop_at)
-            co_return source_relocation_settlement_t{};
         // Relocation flow §4.4: only a different selected route can
         // require another complete boundary batch. Wait for its admission.
         const auto route = state->context.target_route ? state->context.target_route ()
@@ -873,8 +878,8 @@ maintenance_runtime_t::settle_relocation (std::shared_ptr<relocation_terminal_st
         catch (const framework_exception_t &error) {
             if (error.kind () != framework_error_kind_t::shutting_down)
                 throw;
-            // A cancelled management delay does not decide authority. Read it
-            // again before the existing host teardown deadline can end the unit.
+            // Host drain wakes the management wait. The authority decision
+            // remains with the Store until the stop deadline.
         }
     }
 }
@@ -912,10 +917,16 @@ maintenance_runtime_t::apply_relocation_settlement (
             /* The captured queue and timers, then the retained boundary and
              * post-boundary records, return to the source queue in original
              * acceptance order and dispatch reopens. */
-            (void) co_await abort_relocation_before_cutover (state);
+            (void) co_await resume_preserved_source (state);
             co_return std::pair{relocation_terminal_t::blocked,
                                 relocation_reason_t::restore_failed};
-        default:
+        case relocation_authority_t::unsettled:
+            state->metric->complete (settled.outcome);
+            // Keep the source sealed. The next owner lookup decides authority.
+            co_return std::pair{relocation_terminal_t::blocked,
+                                relocation_reason_t::authority_unsettled_at_stop};
+        case relocation_authority_t::source_lease_expired:
+        case relocation_authority_t::data_lost:
             state->metric->complete (settled.outcome);
             /* Expired-owner terminal: dispatch and Store changes stop for
              * good; each pending request gets Unavailable once. */
@@ -932,7 +943,8 @@ maintenance_runtime_t::apply_relocation_settlement (
             co_return settled.outcome == relocation_authority_t::data_lost
               ? std::pair{relocation_terminal_t::data_lost, relocation_reason_t::authority_conflict}
               : std::pair{relocation_terminal_t::recovery_required,
-                          relocation_reason_t::owner_lease_expired};
+                          settled.authority_missing ? relocation_reason_t::authority_missing
+                                                    : relocation_reason_t::owner_lease_expired};
     }
 }
 
