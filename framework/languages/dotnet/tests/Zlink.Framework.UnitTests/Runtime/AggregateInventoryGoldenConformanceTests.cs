@@ -144,6 +144,24 @@ public sealed class AggregateInventoryGoldenConformanceTests
             Assert.Equal(expected[item.Key.Value], item.Value.Bytes.ToArray());
     }
 
+    [Fact]
+    public async Task AbortedMultiParticipantSealLeavesNoInventoryRecords()
+    {
+        using var fixture = LoadFixture();
+        var vector = Find(fixture.RootElement, "cases", "small-3");
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(store);
+        var fence = Fence(vector);
+        await repository.SealAggregateInventoryAsync(fence, Participants(vector), default);
+
+        await repository.RemoveSealedInventoryAsync(fence, default);
+
+        var scan = Assert.IsType<ZLinkStoreScanResult.Page>(
+            await store.ScanAsync(new ZLinkStoreScanRequest("zlink:v11:", null, 256))
+        );
+        Assert.Empty(scan.Value.Items);
+    }
+
     public static IEnumerable<object[]> GoldenCases()
     {
         using var fixture = LoadFixture();

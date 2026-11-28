@@ -332,12 +332,10 @@ public sealed partial class RelocationBehaviorConformanceTests
                 settlement.Release.TrySetResult();
                 await cutover!.WaitAsync(TimeSpan.FromSeconds(5));
                 await settlement.Settled.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                // Location runtime §10: a definitive conflict is also settlement.
-                // The observed Draining descriptor precedes this delayed Spot CAS, so
-                // the provider rejects its target placement. Response-loss tests
-                // instead apply the CAS before seal and confirm it with a read.
                 if (spot && order == 1)
-                    Assert.Equal(ZLinkAggregateCommitResult.Stale, settlement.CommitResult);
+                    // The verified cutover keeps the attempt eligible for settlement.
+                    // Location runtime §9.1 fences the authority even after Draining.
+                    Assert.Equal(ZLinkAggregateCommitResult.Committed, settlement.CommitResult);
                 else
                     Assert.True(
                         settlement.CommitResult

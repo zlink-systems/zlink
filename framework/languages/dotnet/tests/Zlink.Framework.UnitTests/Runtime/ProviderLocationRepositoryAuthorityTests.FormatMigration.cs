@@ -69,8 +69,8 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             {
                 await using var runtime = new ZLinkLocationRuntime(new(), recovering);
                 var inventoryKey = Assert.Single(
-                    (await ScanKeysAsync(inner, AggregatePrefix(abandonedFence))).Where(key =>
-                        key.Contains(":inventory:", StringComparison.Ordinal)
+                    (await ScanInventoryKeysAsync(inner, abandonedFence)).Where(key =>
+                        key.Contains(":page:", StringComparison.Ordinal)
                     )
                 );
                 var reachedInventory = new TaskCompletionSource(
@@ -144,8 +144,17 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 await inner.ReadAsync(new(AggregatePrefix(abandonedFence)))
             );
             var aggregate = JsonNode.Parse(root.Value.Bytes.Span)!;
-            Assert.Equal(3, aggregate["status"]!.GetValue<int>());
-            Assert.True(aggregate["participantsCleaned"]!.GetValue<bool>());
+            Assert.Equal("aborted", aggregate["state"]!.GetValue<string>());
+            var housekeeping = Assert.IsType<ZLinkStoreReadResult.Found>(
+                await inner.ReadAsync(new(AggregatePrefix(abandonedFence) + ":housekeeping"))
+            );
+            Assert.True(
+                Property(
+                        JsonNode.Parse(housekeeping.Value.Bytes.Span)!.AsObject(),
+                        "participantsCleaned"
+                    )
+                    .GetValue<bool>()
+            );
         }
 
         Assert.DoesNotContain(
@@ -175,21 +184,31 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         );
         var rootKey = new ZLinkStoreKey(AggregatePrefix(liveFence));
         var root = Assert.IsType<ZLinkStoreReadResult.Found>(await inner.ReadAsync(rootKey));
-        var live = JsonNode.Parse(root.Value.Bytes.Span)!;
+        var live = ZLinkAggregateInventory.Decode<ZLinkAggregateInventory.Aggregate>(
+            root.Value.Bytes
+        );
         var earlierFence = new ZLinkAggregateFence(
             Guid.Parse("00000000-0000-4000-8000-000000000000"),
             abandoned.AggregateGeneration
         );
-        var earlier = live.DeepClone();
-        earlier["header"]!["aggregateId"] = earlierFence.AggregateId;
-        earlier["header"]!["targetOwner"]!["ownerId"] = "expired-owner";
-        earlier["stagedAt"] = root.Value.StoreNow - TimeSpan.FromDays(2);
-        await SeedCounterAsync(inner, new(AggregatePrefix(earlierFence)), earlier.ToJsonString());
+        var earlier = live with
+        {
+            AggregateId = earlierFence.AggregateId.ToString("D"),
+            TargetOwner = live.TargetOwner with { OwnerId = "expired-owner" },
+        };
+        await SeedCounterAsync(
+            inner,
+            new(AggregatePrefix(earlierFence)),
+            Encoding.UTF8.GetString(ZLinkAggregateInventory.Encode(earlier))
+        );
         if (terminal)
         {
-            live["status"] = 3; // Aborted and cleaned, with a live target owner.
-            live["participantsCleaned"] = true;
-            await SeedCounterAsync(inner, rootKey, live.ToJsonString());
+            live = live with { State = "aborted" };
+            await SeedCounterAsync(
+                inner,
+                rootKey,
+                Encoding.UTF8.GetString(ZLinkAggregateInventory.Encode(live))
+            );
         }
         await MarkAsLegacyStoreAsync(inner);
         var before = await SnapshotAsync(inner);

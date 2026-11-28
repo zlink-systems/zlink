@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
@@ -180,6 +181,44 @@ public sealed class AuthorityAggregateRelocationTests
             steady.StoreVersion,
             actual.GetProperty("coordinator").GetProperty("expectedStoreVersion").GetString()
         );
+
+        await store.RemoveSealedInventoryAsync(
+            new ZLinkAggregateFence(relocationId, root.AggregateGeneration),
+            CancellationToken.None
+        );
+        var targetRepository = new ZLinkProviderLocationRepository(provider);
+        ZLinkStandaloneActorRelocationPrecommitCoordinator.VerifyCapturedInventory(
+            captured,
+            key,
+            prepare.Coordinator.ExpectedAuthorityStoreVersion
+        );
+
+        var changed = JsonNode.Parse(row.Value.Bytes.Span)!.AsObject();
+        changed["payload"] = Convert.ToBase64String(new byte[] { 255 });
+        Assert.IsType<ZLinkStoreWriteResult.Applied>(
+            await provider.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [],
+                    [
+                        new ZLinkStoreMutation.Put(
+                            rowKey,
+                            JsonSerializer.SerializeToUtf8Bytes(changed),
+                            null
+                        ),
+                    ]
+                )
+            )
+        );
+        var registration = new ZLinkFrameworkRegistration();
+        registration.Locations._repository = targetRepository;
+        var targetRuntime = new ZLinkStandaloneActorRelocationRuntime(null!, null!, registration);
+        var failure = await Assert.ThrowsAsync<ZLinkRelocationDataLostException>(() =>
+            targetRuntime
+                .StageTargetAsync(prepare, root, prepare.SourceNodeRid, CancellationToken.None)
+                .AsTask()
+        );
+        Assert.Contains("differs from its captured inventory", failure.Message);
+        Assert.Empty(targetRuntime.SnapshotPendingAttemptNames());
 
         var state = captured.Relocation!.Project(captured.Payload, root.AggregateGeneration).State;
         var legacy = captured with
