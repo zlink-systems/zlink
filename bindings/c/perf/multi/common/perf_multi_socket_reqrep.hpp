@@ -628,6 +628,8 @@ inline bool run_measurement_window (const endpoint_config_t &config,
             if (schedule && !schedule->due (perf_multi_metric::now_ns ()))
                 break;
             client_slot_t &slot = state->slots[senders.index ()];
+            // REQREP submits one request per visit and moves to the next slot, so its burst
+            // is 1 and stays under max_burst_per_sender (PERF_MULTI_TEST_POLICY.md 5.1).
             senders.advance ();
             bool blocked = false;
             if (!submit_request (config, &slot, target_rid_ptr, run_id, msg_size,
