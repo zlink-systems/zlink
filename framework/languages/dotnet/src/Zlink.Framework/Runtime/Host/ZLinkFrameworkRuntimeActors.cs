@@ -56,9 +56,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ConfigureAwait(false);
     }
 
-    internal void CompleteSessionRelocation(string meshName, Guid relocationId) =>
-        CompleteSessionRelocation(GetMeshNodeRuntime(meshName).Node, relocationId);
-
     internal static void CompleteSessionRelocation(IZLinkBackendSpotNode node, Guid relocationId)
     {
         if (node is IZLinkBackendSessionRelocationBarrier barrier)
@@ -1850,8 +1847,7 @@ internal sealed partial class ZLinkFrameworkRuntime
 
     private async ValueTask RollbackPreparedTransferredActorAsync(
         ZLinkActorRuntimeState actorState,
-        CancellationToken cancellationToken,
-        bool startTeardownReconciliation = true
+        CancellationToken cancellationToken
     )
     {
         if (actorState.ContextInvalidated)
@@ -1861,49 +1857,11 @@ internal sealed partial class ZLinkFrameworkRuntime
                 .ConfigureAwait(false);
             return;
         }
-        Exception? failure = null;
-        if (actorState.Actor is { } actor)
-        {
-            try
-            {
-                if (actorState.LiveActivation is { } activation)
-                    await activation
-                        .NotifyActorLeftAfterManagedJoinSpotAsync(actor, cancellationToken)
-                        .ConfigureAwait(false);
-                else
-                    await NotifyEntrySpotActorLeftAsync(
-                            actor,
-                            actorState.NativeActorRef?.NodeRid,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        }
-
-        try
-        {
-            await _actorSessionManager
-                .RollbackTransferredActorAsync(
-                    actorState.ActorId,
-                    cancellationToken,
-                    startTeardownReconciliation
-                )
-                .ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            failure = failure is null ? exception : new AggregateException(failure, exception);
-        }
-
-        if (failure is not null)
-            throw new InvalidOperationException(
-                $"Actor '{actorState.ActorId}' prepared handoff rollback did not finish.",
-                failure
-            );
+        if (actorState is { Actor: { } actor, LiveActivation: { } activation })
+            activation.AbortStagedRelocatedPerActorMember(actor, actorState);
+        await _actorSessionManager
+            .RollbackTransferredActorAsync(actorState.ActorId, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static ZLinkRemoteActorJoinReply CreateRejectedHandoffReply(string actorId) =>

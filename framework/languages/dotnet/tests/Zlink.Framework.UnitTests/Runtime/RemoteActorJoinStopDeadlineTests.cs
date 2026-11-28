@@ -7,6 +7,98 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class RemoteActorJoinStopDeadlineTests
 {
+    [Fact]
+    public async Task Target_shutdown_discards_precommit_join_without_changing_membership()
+    {
+        using var flowListener = Environment.GetEnvironmentVariable(
+            RelocationBehaviorHost.FlowPathEnvironmentVariable
+        )
+            is { } flowPath
+            ? new TestHostMessageFlowListener(flowPath)
+            : null;
+        var timeout = TimeSpan.FromSeconds(5);
+        var actorId = $"target-stop-actor-{Guid.NewGuid():N}";
+        var spotId = $"target-stop-spot-{Guid.NewGuid():N}";
+        var trace = new RelocationBehaviorTrace { ActorId = actorId, ExpectedJoinAccepted = false };
+        var transport = new CanonicalRelocationTransportProbe(trace);
+        var store = new RecordingLocationStore(new ZLinkInMemoryProviderLocationStore(), trace);
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
+        var targetStore = new ActorAuthorityCallCounter(store, key);
+        var roots = new SynchronizedRelocationStore();
+        trace.ReleaseJoinHandler.SetResult();
+        trace.ReleaseSourceLeave.SetResult();
+        trace.ReleaseTargetLifecycle.SetResult();
+        transport.ReleasePrepareCall.SetResult();
+
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            store,
+            roots,
+            registerTargetSpot: false,
+            canonicalTransportProbe: transport
+        );
+        var actor = Assert.IsType<ZLinkActorCreateResult.Created>(
+            await source
+                .Services.GetRequiredService<IZLinkActorManager>()
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+                .InMesh(RelocationBehaviorHost.MeshName)
+                .Request(new BehaviorCreate(7))
+                .Async()
+        );
+        trace.SourceNodeRid = actor.Actor.NodeRid;
+        trace.SourceObjectGeneration = actor.Actor.ObjectGeneration;
+        await store.ObserveActorAuthorityAsync(actorId);
+
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            targetStore,
+            roots,
+            registerTargetSpot: true,
+            canonicalTransportProbe: transport
+        );
+        trace.TargetNodeRid = target.LocalNodeRid;
+        var admission = target
+            .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+            .ActivationAdmission;
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate(spotId, RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Async();
+        Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
+
+        try
+        {
+            await source
+                .Services.GetRequiredService<IZLinkActorClient>()
+                .RequestToActor(actorId, new BeginBehaviorJoin(spotId, TimeSpan.FromSeconds(2)))
+                .Async<BehaviorAck>();
+            await transport.CutoverSendStarted.Task.WaitAsync(timeout);
+            Assert.True(target.Runtime.TryGetActorState(actorId, out var staged));
+            Assert.Equal(spotId, staged.LiveActivation?.SpotId);
+            Assert.Equal(1, admission.Active);
+            var writesBeforeStop = targetStore.Writes;
+
+            target.Runtime.DrainAdmission.ClaimShutdown();
+            using var stopDeadline = new CancellationTokenSource(timeout);
+            await target.Runtime.DrainAcceptedTargetAttemptsAsync(stopDeadline.Token);
+
+            Assert.False(target.Runtime.TryGetActorState(actorId, out _));
+            Assert.Null(staged.LiveActivation);
+            Assert.Equal(0, admission.Active);
+            Assert.Equal(writesBeforeStop, targetStore.Writes);
+            Assert.False(trace.HasTargetAuthorityMutation);
+            Assert.DoesNotContain("targetMembershipJoinCallback", trace.Events);
+            Assert.DoesNotContain("targetMembershipLeaveCallback", trace.Events);
+        }
+        finally
+        {
+            transport.ReleaseCutoverSend.TrySetResult();
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -130,8 +222,10 @@ public sealed class RemoteActorJoinStopDeadlineTests
         private readonly ZLinkStoreKey _authorityKey =
             ZLinkProviderLocationRepository.AuthorityMetaKey(key);
         private int _calls;
+        private int _writes;
 
         internal int Calls => Volatile.Read(ref _calls);
+        internal int Writes => Volatile.Read(ref _writes);
 
         public ValueTask<ZLinkStoreReadResult> ReadAsync(
             ZLinkStoreKey key,
@@ -154,7 +248,10 @@ public sealed class RemoteActorJoinStopDeadlineTests
                     || mutation is ZLinkStoreMutation.Delete delete && delete.Key == _authorityKey
                 )
             )
+            {
                 Interlocked.Increment(ref _calls);
+                Interlocked.Increment(ref _writes);
+            }
             return inner.WriteAsync(request, cancellationToken);
         }
 
