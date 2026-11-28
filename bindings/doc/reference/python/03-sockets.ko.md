@@ -328,6 +328,8 @@ received.reply().message(b"ok").submit()
 | `PublishOp.submit()` | 발행을 동기적으로 완료한다. |
 | `ReplyOp.submit()` | 응답을 동기적으로 제출한다. |
 
+제출한 `Message`는 Core가 수락하면 소비된다. 동기 거절이면 호출자에게 그대로 남는다. 비동기 전송·요청이 `BACKPRESSURED`로 대기 토큰을 받으면 binding이 재제출용 사본을 확보한 시점에 원본을 소비한다. 소비된 `Message`는 빈 데이터와 크기 0을 반환한다. 계속 쓰려면 제출 전에 `Message.copy()`로 사본을 만든다.
+
 비동기 요청이나 수용 대기가 필요한 전송을 제출하기 전에 소켓을
 `PollEventFlag.POLLCOMPLETION`으로 등록한다. 수용이나 응답을 기다리는 동안
 [`Poller.wait()`](04-eventing.ko.md#poller)를 호출한다.

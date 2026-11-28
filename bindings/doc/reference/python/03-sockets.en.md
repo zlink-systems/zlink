@@ -317,6 +317,8 @@ received.reply().message(b"ok").submit()
 | `PublishOp.submit()` | Completes publication synchronously. |
 | `ReplyOp.submit()` | Submits the reply synchronously. |
 
+A submitted `Message` is consumed when Core admits it. A synchronous rejection leaves it with the caller. When an asynchronous send or request returns `BACKPRESSURED` with a wait token, the binding consumes the original once it has secured its own copy for resubmission. A consumed `Message` reports empty data and size zero. To keep using the payload, make a copy with `Message.copy()` before submitting.
+
 Register the socket for `PollEventFlag.POLLCOMPLETION` before submitting an asynchronous request
 or a send that may wait for admission. Call [`Poller.wait()`](04-eventing.en.md#poller) while
 admission or a reply is pending. The [async request sample](../../../../bindings/python/samples/request_reply_async_sample.py)
