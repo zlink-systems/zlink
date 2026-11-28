@@ -1505,8 +1505,8 @@ public final class ZLinkAggregateRelocationCoordinator {
     public record TargetIngressAuthority(
             Supplier<Prepared> prepared, Supplier<Published> committed) {}
 
-    /** Returns the exact target attempt's authority, or null if the route is no longer owned. */
-    public CompletionStage<ZLinkAuthoritySnapshot> confirmTargetIngress(
+    /** Checks the exact target attempt's authority. */
+    public CompletionStage<Boolean> confirmTargetIngress(
             TargetIngressAuthority stage,
             ZLinkAggregateFence fence,
             ZLinkLocationOwnerToken targetOwner,
@@ -1530,21 +1530,19 @@ public final class ZLinkAggregateRelocationCoordinator {
                                     || !snapshot.allocation().descriptor().equals(targetNode)
                                     || snapshot.allocation().descriptorLifecycleGeneration()
                                             != targetNodeGeneration) {
-                                return null;
+                                return false;
                             }
                             return matchesStageAuthority(
-                                                    stage,
-                                                    fence,
-                                                    snapshot,
-                                                    participant,
-                                                    targetOwner,
-                                                    sourceOwner,
-                                                    sourceNode,
-                                                    sourceNodeGeneration,
-                                                    targetNode)
-                                            && ownerLeaseValid.test(targetOwner)
-                                    ? snapshot
-                                    : null;
+                                            stage,
+                                            fence,
+                                            snapshot,
+                                            participant,
+                                            targetOwner,
+                                            sourceOwner,
+                                            sourceNode,
+                                            sourceNodeGeneration,
+                                            targetNode)
+                                    && ownerLeaseValid.test(targetOwner);
                         });
     }
 

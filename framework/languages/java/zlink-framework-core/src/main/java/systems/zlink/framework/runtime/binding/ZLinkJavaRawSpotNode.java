@@ -3522,29 +3522,21 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return follow.readyMessage(authority.route());
     }
 
-    CompletionStage<Boolean> enqueueStagedInstanceFollow(
+    boolean enqueueStagedInstanceFollow(
             ZLinkServiceM6BWireCodec.InstanceSpotFollow follow,
             byte[] metadata,
             byte[] payload,
             Consumer<Throwable> failure) {
         var staging = relocationStagingIngressHandler;
-        if (staging == null) return CompletableFuture.completedFuture(false);
-        try {
-            return owner.resolveSourceAuthority(
-                            follow.sourceNodeRid(), follow.sourceNodeGeneration())
-                    .thenCompose(
-                            source ->
-                                    source.isPresent()
-                                            ? staging.handleInstanceSpotFollow(
-                                                    source.orElseThrow(),
-                                                    follow,
-                                                    metadata,
-                                                    payload,
-                                                    failure)
-                                            : CompletableFuture.completedFuture(false));
-        } catch (RuntimeException rejected) {
-            return CompletableFuture.failedFuture(rejected);
-        }
+        return staging != null
+                && staging.handleInstanceSpotFollow(
+                        () ->
+                                owner.resolveSourceAuthority(
+                                        follow.sourceNodeRid(), follow.sourceNodeGeneration()),
+                        follow,
+                        metadata,
+                        payload,
+                        failure);
     }
 
     boolean enqueueRemoteInstanceSpot(

@@ -7546,36 +7546,36 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             List<Message> messages,
             String contentType,
             ZLinkFlowContext.State activationFlow) {
-        spotNode.enqueueStagedInstanceFollow(
-                        follow,
-                        metadata,
-                        payload,
-                        failure -> dropInstanceFollow(follow, failure, activationFlow))
-                .whenComplete(
-                        (accepted, failure) -> {
-                            if (failure == null && !accepted) {
-                                // Publication can finish while staging resolves the committed
-                                // route.
-                                var published = spotNode.readyInstanceFollow(follow);
-                                if (published != null) {
-                                    admitInstanceSpot(
-                                            inbound,
-                                            published,
-                                            metadata,
-                                            messages,
-                                            contentType,
-                                            activationFlow);
-                                    return;
-                                }
-                                failure =
-                                        ZLinkFrameworkErrorOrigin.framework(
-                                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                                                "Instance Spot Follow has no matching Ready fence");
-                            }
-                            messages.forEach(Message::close);
-                            if (failure != null)
-                                dropInstanceFollow(follow, failure, activationFlow);
-                        });
+        boolean staged;
+        try {
+            staged =
+                    spotNode.enqueueStagedInstanceFollow(
+                            follow,
+                            metadata,
+                            payload,
+                            failure -> dropInstanceFollow(follow, failure, activationFlow));
+        } catch (RuntimeException failure) {
+            messages.forEach(Message::close);
+            dropInstanceFollow(follow, failure, activationFlow);
+            return;
+        }
+        if (staged) {
+            messages.forEach(Message::close);
+            return;
+        }
+        // Publication can finish after the initial Ready lookup.
+        var published = spotNode.readyInstanceFollow(follow);
+        if (published != null) {
+            admitInstanceSpot(inbound, published, metadata, messages, contentType, activationFlow);
+            return;
+        }
+        messages.forEach(Message::close);
+        dropInstanceFollow(
+                follow,
+                ZLinkFrameworkErrorOrigin.framework(
+                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                        "Instance Spot Follow has no matching Ready fence"),
+                activationFlow);
     }
 
     private boolean matchesLocalInstanceSpotTarget(RoutingId nodeRid, long nodeGeneration) {

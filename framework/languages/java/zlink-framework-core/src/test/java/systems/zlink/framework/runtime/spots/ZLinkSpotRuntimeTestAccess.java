@@ -159,13 +159,7 @@ public final class ZLinkSpotRuntimeTestAccess {
     }
 
     public static boolean hasTemporarySpotIngress(Object ingressHandler, String spotId) {
-        var endpoint = (ZLinkUserSpotRetireTargetEndpoint) ingressHandler;
-        for (var stage : endpoint.stages.values()) {
-            if (!stage.request().spotId().equals(spotId)) continue;
-            if (stage.staged().pendingDrainWork().stream()
-                    .anyMatch(item -> item.name().startsWith("temporary:spot:"))) return true;
-        }
-        return false;
+        return ((ZLinkUserSpotRetireTargetEndpoint) ingressHandler).hasTemporarySpotIngress(spotId);
     }
 
     public static Object aggregateCoordinator(Object ingressHandler) {

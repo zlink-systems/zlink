@@ -3643,25 +3643,21 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     void setRelocatedInstanceAuthority(
             ZLinkInstanceSpotActivation activation, ZLinkAuthoritySnapshot snapshot) {
-        var route = relocatedInstanceRoute(activation.context.spotId(), snapshot);
+        var allocation = snapshot.allocation();
+        var route =
+                new InstanceRouteFence(
+                        allocation.descriptor().rid(),
+                        allocation.descriptorLifecycleGeneration(),
+                        activation.context.spotId(),
+                        snapshot.objectGeneration(),
+                        snapshot.ownerId(),
+                        snapshot.authorityOwnerGeneration(),
+                        snapshot.ownerLeaseGeneration(),
+                        snapshot.storeVersion());
         activation.setAuthorityFence(route);
         routeMeshNodesByName
                 .get(activation.context.meshName())
-                .registerInstanceIntent(snapshot.allocation().stableType(), route);
-    }
-
-    static InstanceRouteFence relocatedInstanceRoute(
-            String spotId, ZLinkAuthoritySnapshot snapshot) {
-        var allocation = snapshot.allocation();
-        return new InstanceRouteFence(
-                allocation.descriptor().rid(),
-                allocation.descriptorLifecycleGeneration(),
-                spotId,
-                snapshot.objectGeneration(),
-                snapshot.ownerId(),
-                snapshot.authorityOwnerGeneration(),
-                snapshot.ownerLeaseGeneration(),
-                snapshot.storeVersion());
+                .registerInstanceIntent(allocation.stableType(), route);
     }
 
     CompletionStage<Void> publishRelocatedInstanceSpot(ZLinkInstanceSpotActivation activation) {

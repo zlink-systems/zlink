@@ -32,6 +32,7 @@ import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
@@ -66,7 +67,7 @@ abstract class InstanceSpotHostRelocationFixture {
         Room.sourceContext = new CompletableFuture<>();
         Room.closingEntered = new CompletableFuture<>();
         Room.releaseClose = CompletableFuture.completedFuture(null);
-        Room.followHandler = null;
+        Room.followHandlers = List.of();
         Room.restoreEntered = new CompletableFuture<>();
         Room.releaseRestore = CompletableFuture.completedFuture(null);
     }
@@ -174,7 +175,7 @@ abstract class InstanceSpotHostRelocationFixture {
     }
 
     public static final class Room implements ZLinkInstanceSpot {
-        static Class<? extends ZLinkSpotPacketHandler<Room, ?>> followHandler;
+        static List<Class<? extends ZLinkSpotPacketHandler<Room, ?>>> followHandlers;
         static CompletableFuture<ZLinkInstanceSpotContext> sourceContext;
         static CompletableFuture<Void> closingEntered;
         static CompletableFuture<Void> releaseClose;
@@ -197,7 +198,7 @@ abstract class InstanceSpotHostRelocationFixture {
         @Override
         public void configure() {
             context.handlers().addPacket(Echo.class);
-            if (followHandler != null) context.handlers().addPacket(followHandler);
+            followHandlers.forEach(context.handlers()::addPacket);
         }
 
         @Override
