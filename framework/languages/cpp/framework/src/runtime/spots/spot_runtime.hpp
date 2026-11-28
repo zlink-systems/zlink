@@ -2301,8 +2301,8 @@ class spot_node_runtime_t
                                                     runtime::stateful::object_ref_t target);
     task_t<void>
     abort_relocation_materialization_async (std::vector<runtime::stateful::object_ref_t> targets);
-    std::optional<runtime::actor_authority_payload_t>
-    actor_relocation_authority (const runtime::stateful::object_ref_t &target) const;
+    std::optional<runtime::stateful::actor_relocation_spot_t>
+    actor_relocation_target_spot (const runtime::stateful::object_ref_t &target) const;
     // handoff_backlog holds the in-flight packets the source preserved while the
     // actor was moving (§10.2-2). They are enqueued on the target actor's
     // dispatch queue before the committed location is published (§10.2-3), and

@@ -744,7 +744,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     using actor_join_recovery_rollback_t =
       std::function<task_t<void> (const std::string &, const stateful::object_ref_t &)>;
     using actor_relocation_authority_resolver_t =
-      std::function<std::optional<runtime::actor_authority_payload_t> (
+      std::function<std::optional<stateful::actor_relocation_spot_t> (
         const stateful::object_ref_t &)>;
     using actor_join_committed_authority_adopter_t =
       std::function<bool (const stateful::object_ref_t &, std::uint64_t, std::uint64_t)>;
@@ -1359,9 +1359,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       const protocol::relocation_id_t &relocation,
       std::uint64_t target_attempt_generation,
       const std::vector<protocol::relocation_object_t> &wire_objects) noexcept;
+    std::optional<stateful::actor_relocation_spot_t>
+    actor_relocation_target_spot (const stateful::object_ref_t &target) const;
     task_t<bool>
     restore_relocation_assembly (std::shared_ptr<const pending_relocation_assembly_t> pending,
-                                 std::shared_ptr<const relocation_assembly_staging_t> staging);
+                                 std::shared_ptr<const relocation_assembly_staging_t> staging,
+                                 const std::optional<stateful::actor_relocation_spot_t> &spot);
     void request_peer_reconcile (
       const std::vector<std::uint8_t> &target,
       std::uint64_t generation,

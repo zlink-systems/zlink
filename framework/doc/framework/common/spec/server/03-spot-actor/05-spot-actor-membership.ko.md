@@ -512,6 +512,10 @@ temporary queue가 등록되어 있어도 Location Store CAS 전에는 applicati
 abort·정리한 뒤 새 identity의 준비를 만든다 — 나중 attempt가 유효하며, 이전 identity의
 늦은 chunk와 Restore는 조립에 연결하지 않고 폐기한다.
 
+같은 object의 이전 이동이 source 정리를 아직 끝내지 않았다는 것은 승인을 거절할 이유가 아니다.
+Target은 요청을 받아들이고, Restore 전에 그 source 정리가 끝나기를 기다린다. 남은 source 이동을
+충돌로 보고하지 않는다.
+
 Relay-ready 뒤 target staging 폐기와 source 재개는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 authority 판정을 따른다. Target
 commit(Location Store CAS)이 성공한 뒤부터는 이동이 확정된 것으로 보고, 실패해도 이미 이동한
 상태를 되돌리지 않기 때문이다. 이 불변조건은 Actor Join, User Spot aggregate relocation(§6)과 §7 실패 처리

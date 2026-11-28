@@ -1065,6 +1065,14 @@ void public_host_runtime_t::start_relocation_session_route_submission (relocatio
     detail::observe_task_completion (*pending, [pending] (const result_t<void> &) {});
 }
 
+std::optional<stateful::actor_relocation_spot_t>
+public_host_runtime_t::actor_relocation_target_spot (const stateful::object_ref_t &target) const
+{
+    if (target.kind != stateful::object_kind_t::actor || !_actor_relocation_authority_resolver)
+        return std::nullopt;
+    return _actor_relocation_authority_resolver (target);
+}
+
 bool public_host_runtime_t::submit_relocation_target_authority (
   relocation_target_attempt_t &attempt) noexcept
 {
@@ -1129,28 +1137,15 @@ bool public_host_runtime_t::submit_relocation_target_authority (
               attempt.targets.front ().mesh_name,
               node_rid_t::from_string (attempt.targets.front ().node_id),
               attempt.prepare.target.target_node_generation, target_owner};
-            std::vector<std::byte> target_application_payload;
-            if (attempt.targets.front ().kind == stateful::object_kind_t::actor
-                && _actor_relocation_authority_resolver) {
-                const auto spot = _actor_relocation_authority_resolver (attempt.targets.front ());
-                if (spot) {
-                    auto payload = *spot;
-                    payload.owner_id = target_owner.owner_id;
-                    payload.owner_lease_generation =
-                      static_cast<std::uint64_t> (target_owner.lease_generation);
-                    payload.node_generation = attempt.prepare.target.target_node_generation;
-                    target_application_payload = runtime::encode_actor_authority_payload (payload);
-                }
-            }
             const auto published = _relocation_authority->publish (
               attempt.sources.front (), attempt.targets.front (), target_owner, target_placement,
               attempt.restore_identity.reference, attempt.restore_identity.checksum_crc32c,
-              attempt.restore_identity.inventory_digest, std::move (target_application_payload),
+              attempt.restore_identity.inventory_digest, {},
               attempt.prepare.coordinator.expected_authority_store_version,
               attempt.prepare.relocation,
               {attempt.prepare.coordinator.owner_id,
                static_cast<std::int64_t> (attempt.prepare.coordinator.lease_generation)},
-              &attempt.prepare);
+              &attempt.prepare, actor_relocation_target_spot (attempt.targets.front ()));
             if (published.status != stateful::authority_publish_status_t::published
                 || !published.current || published.current->source != attempt.sources.front ())
                 return adopt_store_fences ();
@@ -1593,7 +1588,8 @@ void public_host_runtime_t::unregister_relocation_wire_targets (
 
 task_t<bool> public_host_runtime_t::restore_relocation_assembly (
   std::shared_ptr<const pending_relocation_assembly_t> pending,
-  std::shared_ptr<const relocation_assembly_staging_t> staging)
+  std::shared_ptr<const relocation_assembly_staging_t> staging,
+  const std::optional<stateful::actor_relocation_spot_t> &spot)
 {
     stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
     std::optional<framework_exception_t> failure;
@@ -1611,17 +1607,13 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
             return previous;
         });
         std::optional<stateful::object_ref_t> actor_target_spot;
-        if (staging->targets.size () == 1
-            && staging->targets.front ().kind == stateful::object_kind_t::actor
-            && _actor_relocation_authority_resolver) {
-            const auto spot = _actor_relocation_authority_resolver (staging->targets.front ());
-            if (spot) {
-                actor_target_spot = stateful::object_ref_t{
-                  stateful::object_kind_t::user_spot,  spot->current_spot_id,
-                  spot->current_spot_generation,       0,
-                  staging->targets.front ().mesh_name, staging->targets.front ().node_id};
-            }
-        }
+        if (spot)
+            actor_target_spot = stateful::object_ref_t{stateful::object_kind_t::user_spot,
+                                                       spot->id,
+                                                       spot->generation,
+                                                       0,
+                                                       staging->targets.front ().mesh_name,
+                                                       staging->targets.front ().node_id};
         auto restored_state = staging->frozen;
         std::vector<std::tuple<stateful::object_ref_t, protocol::relocation_data_t, std::uint64_t>>
           saved_application;
@@ -1939,7 +1931,26 @@ task_t<void> public_host_runtime_t::finish_relocation_assembly (
     bool restored = false;
     std::optional<framework_exception_t> failure;
     try {
-        restored = co_await restore_relocation_assembly (pending, staging);
+        std::optional<stateful::actor_relocation_spot_t> spot;
+        if (staging->sources.size () == 1
+            && staging->sources.front ().kind == stateful::object_kind_t::actor) {
+            if (!_relocation_authority)
+                throw framework_exception_t (
+                  framework_error_kind_t::unavailable,
+                  "Relocation target preparation has no source authority");
+            const auto &target = staging->targets.front ();
+            const auto &fence = pending->prepare.target;
+            spot = actor_relocation_target_spot (target);
+            const object_creation_target_t placement{
+              target.mesh_name,
+              node_rid_t::from_string (target.node_id),
+              fence.target_node_generation,
+              {fence.target_owner_id,
+               static_cast<std::int64_t> (fence.target_owner_lease_generation)}};
+            co_await _relocation_authority->verify_actor_target_inventory (
+              staging->sources.front (), pending->prepare, placement, spot);
+        }
+        restored = co_await restore_relocation_assembly (pending, staging, spot);
         if (restored) {
             co_await await_relocation_session_routes (pending, staging->session_routes);
             if (co_await activate_relocation_assembly (key, pending, staging))

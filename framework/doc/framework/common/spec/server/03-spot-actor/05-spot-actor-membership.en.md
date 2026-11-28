@@ -620,6 +620,11 @@ existing preparation state, then builds the preparation for the new
 identity — the later attempt wins, and late chunks and Restores of the
 previous identity are discarded without being linked to assembly.
 
+A previous move of the same object whose source cleanup hasn't finished
+yet isn't a reason to reject the approval. The target admits the request
+and waits for that source cleanup to finish before Restore; it doesn't
+report the remaining source move as a conflict.
+
 After relay-ready, target staging cleanup and source resumption follow authority
 settlement in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). This is
 because, once target commit (the Location Store CAS) succeeds, the move is

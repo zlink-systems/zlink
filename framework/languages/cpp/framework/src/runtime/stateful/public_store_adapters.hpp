@@ -107,7 +107,8 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
              std::string expected_store_version = {},
              protocol::relocation_id_t relocation = {},
              location_owner_token_t source_owner = {},
-             const protocol::relocation_prepare_t *prepare = nullptr) override
+             const protocol::relocation_prepare_t *prepare = nullptr,
+             const std::optional<actor_relocation_spot_t> &target_spot = {}) override
     {
         if (target.kind != source.kind || target.key != source.key
             || target.object_generation != source.object_generation
@@ -161,15 +162,24 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                            && snapshot->store_version != expected_store_version)
             return {authority_publish_status_t::conflict, decode_current (read)};
         const std::string cas_version = snapshot->store_version;
-        std::vector<std::byte> application_payload = target_application_payload;
-        authority_relocation_reference_t reference{
-          source,
-          source,
-          relocation_reference,
-          checksum_crc32c,
-          inventory_digest,
-          target_owner,
-          application_payload.empty () ? snapshot->payload : std::move (application_payload)};
+        if (prepare && source.kind == object_kind_t::actor) {
+            if (!snapshot->aggregate || !snapshot->aggregate->relocation)
+                return {authority_publish_status_t::conflict, decode_current (read)};
+            auto projected = target_authority_payload (source.kind, snapshot->payload,
+                                                       target_placement, target_spot);
+            if (!projected)
+                return {authority_publish_status_t::failed, std::nullopt};
+            target_application_payload = std::move (*projected);
+        }
+        authority_relocation_reference_t reference{source,
+                                                   source,
+                                                   relocation_reference,
+                                                   checksum_crc32c,
+                                                   inventory_digest,
+                                                   target_owner,
+                                                   target_application_payload.empty ()
+                                                     ? snapshot->payload
+                                                     : std::move (target_application_payload)};
         reference.target = target;
         if (source.kind == object_kind_t::actor) {
             const auto projection = runtime::decode_actor_authority_payload (
@@ -188,8 +198,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             mutation.replace_aggregate =
               source.kind == object_kind_t::actor
                 ? authority_aggregate_codec::replace (
-                    snapshot->aggregate,
-                    target_record (*snapshot, key, mutation.payload, *prepare, "committed"))
+                    snapshot->aggregate, target_record (*snapshot, *prepare, "committed"))
                 : authority_aggregate_codec::without_capture (snapshot->aggregate);
         const auto exchanged =
           infrastructure_result ([&] {
@@ -225,7 +234,8 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                           const relocation_authority_fence_t &fence,
                           const std::string &target_node_id,
                           std::uint64_t target_node_generation,
-                          std::uint64_t application_version) override
+                          std::uint64_t application_version,
+                          const std::optional<actor_relocation_spot_t> &target_spot = {}) override
     {
         try {
             const auto &primary = relocation_primary (participants);
@@ -247,9 +257,11 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                                             fence.source_node_routing_id,
                                             fence.source_node_generation, &participant == &primary))
                     co_return std::optional<std::string>{};
-                auto payload =
-                  target_authority_payload (participant.kind, snapshot->payload, target_node_id,
-                                            fence.target_owner, target_node_generation);
+                auto payload = target_authority_payload (
+                  participant.kind, snapshot->payload,
+                  {participant.mesh_name, node_rid_t::from_string (target_node_id),
+                   target_node_generation, fence.target_owner},
+                  target_spot);
                 if (!payload)
                     co_return std::optional<std::string>{};
                 inventory.push_back ({key,
@@ -310,6 +322,42 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         }
     }
 
+    task_t<void> verify_actor_target_inventory (
+      const object_ref_t &source,
+      const protocol::relocation_prepare_t &prepare,
+      const object_creation_target_t &target_placement,
+      const std::optional<actor_relocation_spot_t> &target_spot) override
+    {
+        const auto key = authority_key (source);
+        const auto read = co_await _store->read_authority (key);
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+        const auto fence = relocation_authority_fence_t::from_prepare (source, prepare);
+        if (!snapshot || snapshot->object_generation != source.object_generation
+            || snapshot->authority_owner_generation != source.authority_owner_generation
+            || !snapshot->aggregate || !snapshot->aggregate->relocation
+            || !source_claim_matches (prepare) || !holds_target_precommit_fence (*snapshot, fence))
+            throw framework_exception_t (framework_error_kind_t::data_lost,
+                                         "Actor relocation source authority does not match");
+        if (snapshot->aggregate->encoded.contains (location_record_fields::aggregateGeneration))
+            co_return;
+        auto payload =
+          target_authority_payload (source.kind, snapshot->payload, target_placement, target_spot);
+        if (!payload)
+            throw framework_exception_t (framework_error_kind_t::data_lost,
+                                         "Actor relocation source authority payload is invalid");
+        const auto &sealed = snapshot->aggregate->encoded.at (location_record_fields::relocation)
+                               .at (location_record_fields::sourceInventorySha256);
+        const auto tree = aggregate_inventory::build_tree (
+          {{key,
+            snapshot->aggregate->relocation->expected_store_version,
+            authority_generation_transition_t::new_owner,
+            std::move (*payload),
+            {}}});
+        if (tree.root.at (location_record_fields::digestSha256) != sealed)
+            throw framework_exception_t (framework_error_kind_t::data_lost,
+                                         "Actor relocation inventory digest does not match");
+    }
+
     task_t<bool> record_target_prepared (const object_ref_t &source,
                                          const protocol::relocation_prepare_t &prepare) override
     {
@@ -328,7 +376,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             co_return true;
         if (snapshot->aggregate->relocation->phase != "captured")
             co_return false;
-        auto record = target_record (*snapshot, key, {}, prepare, "prepared");
+        auto record = target_record (*snapshot, prepare, "prepared");
         co_return std::holds_alternative<authority_stored_t> (
           co_await write_relocation (key, std::move (*snapshot), std::move (record)));
     }
@@ -706,39 +754,45 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
     static std::optional<std::vector<std::byte>>
     target_authority_payload (object_kind_t kind,
                               const std::vector<std::byte> &source_payload,
-                              const std::string &target_node_id,
-                              const location_owner_token_t &target_owner,
-                              std::uint64_t target_node_generation)
+                              const object_creation_target_t &target,
+                              const std::optional<actor_relocation_spot_t> &target_spot)
     {
-        const auto owner_lease = static_cast<std::uint64_t> (target_owner.lease_generation);
+        const auto owner_lease = static_cast<std::uint64_t> (target.owner.lease_generation);
         if (kind == object_kind_t::actor) {
             auto payload = runtime::decode_direct_actor_authority_payload (source_payload);
             if (!payload)
                 return std::nullopt;
-            payload->owner_id = target_owner.owner_id;
+            payload->state = actor_authority_state_t::ready;
+            if (target_spot) {
+                payload->current_spot_id = target_spot->id;
+                payload->current_spot_generation = target_spot->generation;
+                payload->current_spot_kind = target_spot->kind;
+            }
+            payload->owner_id = target.owner.owner_id;
             payload->owner_lease_generation = owner_lease;
-            payload->node_rid = node_rid_t::from_string (target_node_id);
-            payload->node_generation = target_node_generation;
+            payload->mesh_name = target.mesh_name;
+            payload->node_rid = target.node_rid;
+            payload->node_generation = target.node_lifecycle_generation;
             return runtime::encode_actor_authority_payload (*payload);
         }
         if (kind == object_kind_t::user_spot) {
             auto payload = runtime::decode_direct_user_spot_authority_payload (source_payload);
             if (!payload)
                 return std::nullopt;
-            payload->owner_id = target_owner.owner_id;
+            payload->owner_id = target.owner.owner_id;
             payload->owner_lease_generation = owner_lease;
-            payload->node_rid = node_rid_t::from_string (target_node_id);
-            payload->node_generation = target_node_generation;
+            payload->node_rid = target.node_rid;
+            payload->node_generation = target.node_lifecycle_generation;
             return runtime::encode_user_spot_authority_payload (*payload);
         }
         if (kind == object_kind_t::instance_spot) {
             auto payload = runtime::decode_instance_spot_authority_payload (source_payload);
             if (!payload)
                 return std::nullopt;
-            payload->owner_id = target_owner.owner_id;
+            payload->owner_id = target.owner.owner_id;
             payload->owner_lease_generation = owner_lease;
-            payload->node_rid = node_rid_t::from_string (target_node_id);
-            payload->node_generation = target_node_generation;
+            payload->node_rid = target.node_rid;
+            payload->node_generation = target.node_lifecycle_generation;
             return runtime::encode_instance_spot_authority_payload (*payload);
         }
         return std::nullopt;
@@ -794,24 +848,10 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
 
     static authority_aggregate_codec::json_t
     target_record (const authority_snapshot_t &snapshot,
-                   const authority_key_t &key,
-                   const std::vector<std::byte> &payload,
                    const protocol::relocation_prepare_t &prepare,
                    std::string_view phase)
     {
-        auto record =
-          snapshot.aggregate && snapshot.aggregate->relocation
-            ? snapshot.aggregate->encoded.at ("relocation")
-            : relocation_record (prepare.relocation, prepare.coordinator,
-                                 aggregate_inventory::build_tree (
-                                   {{key,
-                                     prepare.coordinator.expected_authority_store_version,
-                                     authority_generation_transition_t::new_owner,
-                                     payload,
-                                     {}}})
-                                   .root.at (location_record_fields::digestSha256)
-                                   .get<std::string> (),
-                                 prepare.application_version, phase);
+        auto record = snapshot.aggregate->encoded.at (location_record_fields::relocation);
         record["phase"] = phase;
         record["target"] = encoded_target (prepare);
         return record;

@@ -2896,7 +2896,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-unit;framework-regression;framework-location"
     TIMEOUT 30)
   add_executable(test_cpp_framework_in_memory_location_store
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_in_memory_location_store.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_in_memory_location_store.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_standalone_actor_inventory.cpp
+    tests/support/m6c_public_authority_fixture.cpp)
   target_compile_features(test_cpp_framework_in_memory_location_store PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_in_memory_location_store)
   target_use_zlink_gtest_main(test_cpp_framework_in_memory_location_store)
@@ -3173,6 +3175,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_relocation_settlement.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_deferred_join_reservation.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_canonical_replay.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_remote_entry_join_return.cpp
     tests/support/actor_maintenance_join_actors.cpp
     tests/support/actor_maintenance_join_host_access.cpp
     tests/support/actor_maintenance_join_host_fixture.cpp

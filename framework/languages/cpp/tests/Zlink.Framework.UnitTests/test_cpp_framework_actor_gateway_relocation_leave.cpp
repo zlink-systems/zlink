@@ -270,7 +270,9 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
           std::string = {},
           zlink::framework::runtime::protocol::relocation_id_t = {},
           location_owner_token_t = {},
-          const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
+          const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr,
+          const std::optional<zlink::framework::runtime::stateful::actor_relocation_spot_t> & = {})
+          override
         {
             return {};
         }

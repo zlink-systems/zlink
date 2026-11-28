@@ -1090,7 +1090,8 @@ maintenance_runtime_t::relocate_capture (std::shared_ptr<relocation_terminal_sta
         source_state.pending_unit_token = runtime.begin_pending_relocation_unit ();
         version = co_await runtime._authority->begin_source_capture (
           sealed, source_fence (source_state), source_state.target_node_id,
-          source_state.context.target_node_generation, source_state.context.application_version);
+          source_state.context.target_node_generation, source_state.context.application_version,
+          source_state.context.actor_target_spot);
         co_return version.has_value ();
     };
     state->seal_attempt = co_await _objects.try_seal_relocation_aggregate (

@@ -107,6 +107,40 @@ void public_host_runtime_test_access_t::lifecycle_turn (public_host_runtime_t &h
     host._lifecycle_configuration_lane.run (std::move (work)).get ();
 }
 
+void public_host_runtime_test_access_t::observe_entry_join (
+  public_host_runtime_t &host,
+  std::string actor_id,
+  std::function<void ()> dispatched,
+  std::function<void (const actor_join_operation_result_t &)> replied,
+  std::function<void ()> prepared)
+{
+    lifecycle_turn (host, [&] {
+        host._actor_join_target = [target = std::move (host._actor_join_target), actor_id,
+                                   dispatched = std::move (dispatched),
+                                   replied = std::move (replied)] (const auto &request,
+                                                                   auto payload, auto complete) {
+            if (!request.entry || request.actor.actor_id != actor_id) {
+                target (request, std::move (payload), std::move (complete));
+                return;
+            }
+            target (request, std::move (payload),
+                    [replied, complete = std::move (complete)] (auto result) {
+                        replied (result);
+                        complete (std::move (result));
+                    });
+            dispatched ();
+        };
+        host._actor_join_relocation_prepare_validator =
+          [validate = std::move (host._actor_join_relocation_prepare_validator),
+           actor_id = std::move (actor_id), prepared = std::move (prepared)] (const auto &prepare) {
+              if (prepare.object.kind == protocol::relocation_object_kind_t::actor
+                  && prepare.object.object_id == actor_id)
+                  prepared ();
+              return validate (prepare);
+          };
+    });
+}
+
 task_t<zlink::submit_result_t>
 public_host_runtime_test_access_t::join (actor_handle_t &actor,
                                          const zlink::routing_id_t &rid,
@@ -185,7 +219,8 @@ task_t<bool> public_host_runtime_test_access_t::restore_accepted_spot (
     staging->targets.push_back (target);
     staging->wire_objects.push_back ({});
     staging->restore_identity.reference = "accepted-source-boundary";
-    return host.restore_relocation_assembly (pending, staging);
+    return host.restore_relocation_assembly (pending, staging,
+                                             host.actor_relocation_target_spot (target));
 }
 
 task_t<bool> public_host_runtime_test_access_t::activate_stale_actor_attempt (

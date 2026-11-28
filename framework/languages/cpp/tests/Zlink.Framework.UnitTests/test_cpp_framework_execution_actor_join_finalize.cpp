@@ -87,7 +87,9 @@ class actor_cutover_authority_t final
              std::string expected_store_version = {},
              zlink::framework::runtime::protocol::relocation_id_t = {},
              zlink::framework::location_owner_token_t = {},
-             const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
+             const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr,
+             const std::optional<zlink::framework::runtime::stateful::actor_relocation_spot_t> & =
+               {}) override
     {
         if (on_publish)
             on_publish ();
