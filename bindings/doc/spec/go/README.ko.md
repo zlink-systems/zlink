@@ -187,8 +187,10 @@ Send와 request의 `Submit(context.Context)`는 Core `DONTWAIT`로 한 번 제�
 `XPubSocket.ReceiveSubscriptionEvent(out *SubscriptionEvent, flags RecvFlags) (bool, error)`는 caller가
 제공한 결과를 채운다.
 
-`CommonOptions()`는 PAIR·DEALER·ROUTER·PUB·SUB·XPUB·XSUB의 `CommonSocketOptions`를, `PubOptions()`는
-PUB·XPUB의 `PubSocketOptions`를 반환한다. ROUTER의
+`CommonOptions() *CommonSocketOptions`는 PAIR·DEALER·ROUTER·PUB·SUB·XPUB·XSUB·STREAM에서
+사용할 수 있다. STREAM에서 Core가 지원하지 않는 공통 옵션은 Core의 결과 코드와 errno를
+`*ConfigError`로 전달한다.
+`PubOptions()`는 PUB·XPUB의 `PubSocketOptions`를 반환한다. ROUTER의
 `SetMandatory`·`SetHandover`·`SetProbe`·`SetConnectRoutingID`, DEALER의 `SetProbe`, STREAM의
 `SetNotify`·`SetReceiveMode`, SUB·XSUB의 `TopicsCount`는 소켓 메서드다.
 

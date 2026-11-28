@@ -10,11 +10,7 @@ In the following examples, `ctx` is a `*zlink.Context` and `callCtx` is a Go `co
 
 ---
 
-## Shared socket surface (via embedding, not an interface)
-
-**Options.** Every socket type except `StreamSocket` gets this set for free through embedding.
-**Only the combined TLS setters exist**; unlike rust, there are no individual
-`SetTLSCert`/`SetTLSKey`/`SetTLSCA`/`SetTLSHostname` methods in this binding.
+## Shared socket methods
 
 | Member | Meaning |
 | --- | --- |
@@ -27,28 +23,23 @@ In the following examples, `ctx` is a `*zlink.Context` and `callCtx` is a Go `co
 | `SetTLSServer(certPath, keyPath string, requireClientCert bool) error` | combined server-side TLS setup, apply before `Bind` |
 | `SetTLSClient(caCertPath, hostname string, trustSystem bool) error` | combined client-side TLS setup, apply before `Connect` |
 
-Every socket supports `Bind`, `Unbind`, `DisconnectRID`, `Close`, `LastEndpoint`, and both TLS
+Every socket supports `Bind`, `Unbind`, `DisconnectRID`, `Close`, `LastEndpoint`, `CommonOptions`, and both TLS
 setters. The seven socket types with outbound support also expose `Connect`, `Disconnect`,
-`ConnectionAttemptsSnapshot`, and `CommonOptions`. STREAM exposes common options directly
-through `SetSendHighWaterMark`/`SendHighWaterMark`,
-`SetReceiveHighWaterMark`/`ReceiveHighWaterMark`, `SetLinger`, `SetReceiveTimeout`,
-`SetSendTimeout`, `SetTCPKeepalive`, `SetTCPNoDelay`, `SetIPv6`, and `SetReceiveFlowState`.
+and `ConnectionAttemptsSnapshot`.
 
 **Completion result.** Lifecycle methods and TLS setters return `error`. `LastEndpoint()`
 returns `(string, error)`. `CommonOptions()` returns the options facade directly.
 
 **When to use.** Use STREAM to accept inbound connections from raw TCP peers. Choose a
-socket type with outbound support if you need `Connect` or the full `CommonOptions()`
-facade. See [Connection attempt snapshots](04-eventing.en.md#connection-attempt-snapshots)
+socket type with outbound support if you need `Connect`. See [Connection attempt snapshots](04-eventing.en.md#connection-attempt-snapshots)
 for outbound connection readiness.
 
 ---
 
 ## `CommonSocketOptions` / `PubSocketOptions`
 
-The typed options facades — `CommonSocketOptions` shared by every socket type that embeds
-`connectionSocket` (reached via `.CommonOptions()`), `PubSocketOptions` specific to PUB/XPUB
-(reached via `.PubOptions()`).
+Every socket exposes `CommonSocketOptions` through `CommonOptions()`.
+PUB and XPUB also expose `PubSocketOptions` through `PubOptions()`.
 
 ```go
 opts := dealer.CommonOptions()
@@ -261,13 +252,16 @@ every other socket type. See the shared socket surface above for the methods ava
 
 ```go
 stream, err := ctx.StreamSocket()
+stream.CommonOptions().SetReceiveHighWaterMark(100_000)
 stream.SetReceiveMode(zlink.StreamReceivePacket)
 var packet zlink.StreamPacket
 ok, err := stream.RecvPacket(&packet, zlink.RecvFlagsNone)
 ```
 
-**Options.** No `StreamSocketOptions` facade type exists — `SetNotify`/`Notify` are declared
-directly on `StreamSocket`, unlike `PubSocketOptions`'s separate facade shape.
+Use `CommonOptions()` to set and read shared options such as HWM, timeouts, and linger.
+Existing direct methods such as `SetSendHighWaterMark` use the same options. For options that
+Core does not support on STREAM, `*ConfigError` carries the Core result code and errno.
+Call `SetNotify` and `SetReceiveMode` directly on the STREAM socket.
 
 | Member | Meaning |
 | --- | --- |
@@ -280,9 +274,8 @@ directly on `StreamSocket`, unlike `PubSocketOptions`'s separate facade shape.
 
 **Completion result.** Both receive forms follow the `(false, nil)`-on-`DontWait` convention.
 
-**When to use.** Select RAW or PACKET before bind, then use the matching pull API. Remember `StreamSocket` cannot
-`Connect`/`Disconnect` at all in this binding — it is bind-and-accept only from the public API's
-perspective.
+STREAM accepts inbound connections through `Bind`. Select RAW or PACKET before `Bind`,
+then use the receive method for that mode.
 
 ---
 
