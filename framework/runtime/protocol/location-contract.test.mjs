@@ -203,45 +203,6 @@ test("standalone Actor commit records the target payload and a single-entry dige
   assert(validators.root({ ...rootBody, digestSha256 }), JSON.stringify(validators.root.errors));
 });
 
-test("SpotWide source seal records the three participant bodies and their digest chain", () => {
-  const { input, provenance, expected } = storageGolden.spotWideSeal;
-  assert.match(provenance.command, /exportSpotWideSealGolden/);
-  assert.equal(input.actors.length, 2);
-  assert(!Object.hasOwn(input, "target"));
-  const authorityKey = (kind, { id }) => {
-    assert.match(id, /^[a-z0-9-]+$/);
-    return `zla1:${kind}:${Buffer.byteLength(id)}:${id}`;
-  };
-  const rows = [
-    ...input.actors.map((actor) => [authorityKey("a", actor), actor]),
-    [authorityKey("s", input.spot), input.spot],
-  ].sort(([left], [right]) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
-  assert.deepEqual(expected.participants.map(({ authorityKey }) => authorityKey), rows.map(([key]) => key));
-  const entries = expected.participants.map((participant, index) => {
-    const { authorityKey, authorityPayloadHex, membershipMutationHex,
-      authorityPayloadSha256, membershipMutationSha256 } = participant;
-    assert.match(authorityPayloadHex, /^5a4c4155(?:[0-9a-f]{2})+$/);
-    assert.equal(membershipMutationHex, "5b5d");
-    assert.equal(authorityPayloadSha256, sha256(Buffer.from(authorityPayloadHex, "hex")));
-    assert.equal(membershipMutationSha256, sha256(Buffer.from(membershipMutationHex, "hex")));
-    return {
-      index, authorityKey, expectedStoreVersion: rows[index][1].expectedStoreVersion,
-      ownerTransition: "newOwner", authorityPayloadSha256, membershipMutationSha256,
-    };
-  });
-  const { length: entryCount } = entries;
-  const page = { level: 0, index: 0, startIndex: 0, entryCount, entries, children: [] };
-  assert(validators.page(page), JSON.stringify(validators.page.errors));
-  assert.equal(expected.pageSha256, sha256(jcsBytes(page)));
-  const rootBody = {
-    totalCount: entryCount, topLevel: 0,
-    topPages: [{ level: 0, index: 0, startIndex: 0, entryCount, sha256: expected.pageSha256 }],
-  };
-  assert.equal(expected.rootDigestSha256, sha256(jcsBytes(rootBody)));
-  assert(validators.root({ ...rootBody, digestSha256: expected.rootDigestSha256 }),
-    JSON.stringify(validators.root.errors));
-});
-
 test("aggregate storage generator reproduces the accepted and rejected fixture bytes", () => {
   assert(storageGolden.rejected, "aggregate storage fixture must include rejection vectors");
   assert.deepEqual(storageGolden.rejected.map(({ name }) => name), [

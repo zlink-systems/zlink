@@ -160,34 +160,6 @@ export function generateAggregateStorageFixtures(schema) {
       digestSha256: "36a852b37fe03a6899e0ab525d1792063982c293b7c22c85af5fcef1a2ae130a",
     },
   };
-  const spotWideSeal = {
-    input: {
-      relocationId: "10000000-0000-4000-8000-000000005354",
-      source: {
-        meshName: "source-mesh", routingIdHex: "73", nodeGeneration: "3",
-        ownerId: "owner-src", ownerLeaseGeneration: "1",
-      },
-      spot: {
-        id: "seal-room", stableType: "Game.Room", objectGeneration: "7",
-        authorityOwnerGeneration: "11", expectedStoreVersion: "1",
-      },
-      // Input order is deliberately different from canonical authority key order.
-      actors: [
-        { id: "seal-b", stableType: "Game.Player", objectGeneration: "9",
-          authorityOwnerGeneration: "13", expectedStoreVersion: "2", membershipEpoch: "4" },
-        { id: "seal-a", stableType: "Game.Guard", objectGeneration: "8",
-          authorityOwnerGeneration: "12", expectedStoreVersion: "3", membershipEpoch: "2" },
-      ],
-    },
-    provenance: {
-      spec: "Location runtime §8.3, before target selection",
-      input: "One Ready SpotWide User Spot and two Ready Actors already joined to it. Source identity and existing Actor membership are encoded by the source codecs. No target descriptor, owner, or target membership is selected.",
-      codec: "Java ZLinkServiceAuthorityPayloadCodec, ZLinkActorAuthorityPayloadCodec, ZLinkAggregateRelocationCoordinator.sealSource and ZLinkAggregateInventoryStore",
-      command: '(cd framework/languages/java && ZLINK_SPOT_WIDE_SEAL_GOLDEN_OUTPUT="$JOB/spot-wide-seal-java.json" ./gradlew --no-daemon --max-workers=4 :zlink-framework-core:test --tests "*.ZLinkAggregateInventoryStoreTest.exportSpotWideSealGolden" --rerun)',
-      output: "fixture-inputs/spot-wide-seal-java.json",
-    },
-    expected: JSON.parse(fs.readFileSync(path.join(directory, "fixture-inputs/spot-wide-seal-java.json"), "utf8")),
-  };
   const leaf = small.pages[0];
   const top = multiPage.pages.at(-1);
 
@@ -220,7 +192,6 @@ export function generateAggregateStorageFixtures(schema) {
     byteEncoding: "jcsHex is exact UTF-8 storage bytes; no BOM or trailing newline",
     storageKeys,
     standaloneActorCommit,
-    spotWideSeal,
     cases: [small, multiPage, inventory("empty-0", 0), inventory("byte-limited-256", 256, true),
       inventory("no-membership-change-1", 1, false, undefined, NO_MEMBERSHIP_CHANGE_HEX)],
     rejected,

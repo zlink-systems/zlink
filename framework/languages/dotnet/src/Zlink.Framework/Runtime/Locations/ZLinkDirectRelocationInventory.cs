@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -21,10 +20,10 @@ internal static class ZLinkDirectRelocationInventory
                 new
                 {
                     authorityKey = key.Value,
-                    authorityPayloadSha256 = Hash(targetPayload),
+                    authorityPayloadSha256 = ZLinkRelocationInventoryHash.Compute(targetPayload),
                     expectedStoreVersion = originalStoreVersion,
                     index = 0,
-                    membershipMutationSha256 = Hash("[]"u8),
+                    membershipMutationSha256 = ZLinkRelocationInventoryHash.Compute("[]"u8),
                     ownerTransition = "newOwner",
                 },
             },
@@ -43,7 +42,7 @@ internal static class ZLinkDirectRelocationInventory
                     entryCount = 1,
                     index = 0,
                     level = 0,
-                    sha256 = Hash(
+                    sha256 = ZLinkRelocationInventoryHash.Compute(
                         JsonSerializer.SerializeToUtf8Bytes(page, ZLinkCanonicalJson.Options)
                     ),
                     startIndex = 0,
@@ -51,9 +50,8 @@ internal static class ZLinkDirectRelocationInventory
             },
             totalCount = 1,
         };
-        return Hash(JsonSerializer.SerializeToUtf8Bytes(root, ZLinkCanonicalJson.Options));
+        return ZLinkRelocationInventoryHash.Compute(
+            JsonSerializer.SerializeToUtf8Bytes(root, ZLinkCanonicalJson.Options)
+        );
     }
-
-    private static string Hash(ReadOnlySpan<byte> bytes) =>
-        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 }

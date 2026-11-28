@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
 using Systems.Zlink.Framework.Runtime.Protocol;
-using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -298,104 +297,6 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
             publication.Fence,
             publication.Relocation,
             publication.Envelope
-        );
-    }
-
-    internal static ReadOnlyMemory<byte> ProjectParticipantPayload(
-        ZLinkPlacementObjectKind kind,
-        ReadOnlyMemory<byte> sourcePayload,
-        ZLinkMeshNodeDescriptorKey target,
-        ulong targetNodeGeneration,
-        ZLinkLocationOwnerToken targetOwner,
-        Guid relocationId,
-        ZLinkActorRelocationAuthorityPhase actorPhase = ZLinkActorRelocationAuthorityPhase.Steady
-    )
-    {
-        var ownerGeneration = checked((ulong)targetOwner.LeaseGeneration);
-        var (targetMeshName, targetNodeRid) = target;
-        if (
-            kind == ZLinkPlacementObjectKind.UserSpot
-            && ZLinkUserSpotAuthorityPayloadCodec.TryDecode(sourcePayload.Span, out var user)
-        )
-            return ZLinkUserSpotAuthorityPayloadCodec.Encode(
-                user with
-                {
-                    State = ZLinkUserSpotAuthorityState.Ready,
-                    OwnerId = targetOwner.OwnerId,
-                    OwnerLeaseGeneration = ownerGeneration,
-                    MeshName = targetMeshName,
-                    NodeRid = targetNodeRid,
-                    NodeGeneration = targetNodeGeneration,
-                }
-            );
-        if (
-            kind == ZLinkPlacementObjectKind.InstanceSpot
-            && ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-                sourcePayload.Span,
-                out var instance
-            )
-        )
-            return ZLinkInstanceSpotAuthorityPayloadCodec.Encode(
-                instance with
-                {
-                    State = ZLinkInstanceSpotAuthorityState.Ready,
-                    OwnerId = targetOwner.OwnerId,
-                    OwnerLeaseGeneration = ownerGeneration,
-                    MeshName = targetMeshName,
-                    NodeRid = targetNodeRid,
-                    NodeGeneration = targetNodeGeneration,
-                }
-            );
-        if (
-            kind == ZLinkPlacementObjectKind.Actor
-            && ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(
-                sourcePayload.Span,
-                out var relocation
-            )
-            && relocation.RelocationId == relocationId
-            && relocation.Phase == ZLinkActorRelocationAuthorityPhase.Activated
-            && ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                relocation.ApplicationPayload.Span,
-                out var actor
-            )
-        )
-            return ZLinkActorRelocationAuthorityPayloadCodec.Encode(
-                relocation with
-                {
-                    Phase = actorPhase,
-                    ApplicationPayload = ZLinkActorAuthorityPayloadCodec.Encode(
-                        actor with
-                        {
-                            State = ZLinkActorAuthorityState.Ready,
-                            OwnerId = targetOwner.OwnerId,
-                            OwnerLeaseGeneration = ownerGeneration,
-                            MeshName = targetMeshName,
-                            NodeRid = targetNodeRid,
-                            NodeGeneration = targetNodeGeneration,
-                        }
-                    ),
-                }
-            );
-        if (
-            kind == ZLinkPlacementObjectKind.Actor
-            && ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                sourcePayload.Span,
-                out var canonicalActor
-            )
-        )
-            return ZLinkActorAuthorityPayloadCodec.Encode(
-                canonicalActor with
-                {
-                    State = ZLinkActorAuthorityState.Ready,
-                    OwnerId = targetOwner.OwnerId,
-                    OwnerLeaseGeneration = ownerGeneration,
-                    MeshName = targetMeshName,
-                    NodeRid = targetNodeRid,
-                    NodeGeneration = targetNodeGeneration,
-                }
-            );
-        throw new ZLinkRelocationDataLostException(
-            $"Relocation participant kind '{kind}' has an invalid authority payload."
         );
     }
 

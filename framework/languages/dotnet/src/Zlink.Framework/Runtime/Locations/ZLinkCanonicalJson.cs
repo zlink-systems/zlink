@@ -7,7 +7,11 @@ namespace Zlink.Framework.Runtime.Locations;
 internal static class ZLinkCanonicalJson
 {
     internal static JsonSerializerOptions Options { get; } =
-        new() { Converters = { new CanonicalStringConverter() } };
+        new()
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            Converters = { new CanonicalStringConverter() },
+        };
 
     private sealed class CanonicalStringConverter : JsonConverter<string>
     {

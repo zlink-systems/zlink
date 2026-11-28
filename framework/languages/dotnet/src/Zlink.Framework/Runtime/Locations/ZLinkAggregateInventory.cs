@@ -1,23 +1,15 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace Zlink.Framework.Runtime.Locations;
 
 internal static class ZLinkAggregateInventory
 {
-    internal const int MaxPageBytes = 1024 * 1024;
+    private const int MaxPageBytes = 1024 * 1024;
     private const int MaxMembershipMutationBytes = 1024 * 1024;
-    internal static readonly ReadOnlyMemory<byte> NoMembershipMutation = "[]"u8.ToArray();
     private const int MaxPageItems = 1024;
     private const int MaxTreeLevels = 32;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
-    private static readonly JsonSerializerOptions CanonicalJson = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        Converters = { new CanonicalStringConverter() },
-    };
 
     // Record properties are declared in RFC 8785 order. All numeric fields are Int32.
     internal sealed record Entry(
@@ -29,7 +21,7 @@ internal static class ZLinkAggregateInventory
         string OwnerTransition
     );
 
-    internal sealed record Reference(
+    private sealed record Reference(
         int EntryCount,
         int Index,
         int Level,
@@ -37,7 +29,7 @@ internal static class ZLinkAggregateInventory
         int StartIndex
     );
 
-    internal sealed record Page(
+    private sealed record Page(
         Reference[] Children,
         Entry[] Entries,
         int EntryCount,
@@ -46,7 +38,7 @@ internal static class ZLinkAggregateInventory
         int StartIndex
     );
 
-    internal sealed record Root(
+    private sealed record Root(
         string DigestSha256,
         int TopLevel,
         Reference[] TopPages,
@@ -59,7 +51,7 @@ internal static class ZLinkAggregateInventory
         ReadOnlyMemory<byte> Mutation
     );
 
-    internal sealed record Tree(Root Root, IReadOnlyList<(Page Page, byte[] Bytes)> Pages);
+    private sealed record Tree(Root Root, IReadOnlyList<(Page Page, byte[] Bytes)> Pages);
 
     internal sealed record Aggregate(
         string AggregateGeneration,
@@ -135,7 +127,7 @@ internal static class ZLinkAggregateInventory
     internal static ZLinkStoreKey RootKey(string prefix, ZLinkAggregateFence fence) =>
         new(KeyPrefix(prefix, fence) + "root");
 
-    internal static string KeyPrefix(string prefix, ZLinkAggregateFence fence) =>
+    private static string KeyPrefix(string prefix, ZLinkAggregateFence fence) =>
         FormattableString.Invariant(
             $"{prefix}aggregate-inventory:{fence.AggregateId:D}:{fence.AggregateGeneration}:"
         );
@@ -159,30 +151,7 @@ internal static class ZLinkAggregateInventory
                 + (membership ? "membershipMutation" : "authorityPayload")
         );
 
-    internal static IReadOnlyList<ZLinkRelocationParticipantEnvelope> BindRestoreOrder(
-        IReadOnlyList<Participant> inventory,
-        IReadOnlyList<ZLinkRelocationParticipantEnvelope> states
-    )
-    {
-        if (states.Count != inventory.Count)
-            throw new ZLinkRelocationDataLostException(
-                "SPOT relocation state count differs from its sealed inventory."
-            );
-        for (var index = 0; index < inventory.Count; index++)
-            if (
-                states[index].CanonicalParticipantId
-                != checked((ulong)inventory[index].Entry.Index + 1)
-            )
-                throw new ZLinkRelocationDataLostException(
-                    "SPOT relocation state order differs from its sealed inventory."
-                );
-        return states;
-    }
-
-    internal static ReadOnlyMemory<byte> MembershipBody(ReadOnlyMemory<byte> mutation) =>
-        mutation.IsEmpty ? NoMembershipMutation : mutation;
-
-    internal static Participant[] Prepare(IReadOnlyList<ZLinkAggregateParticipant> participants) =>
+    private static Participant[] Prepare(IReadOnlyList<ZLinkAggregateParticipant> participants) =>
         // Canonical authority keys are ASCII, including percent-encoded identities.
         participants
             .OrderBy(static participant => participant.Key.Value, StringComparer.Ordinal)
@@ -202,10 +171,10 @@ internal static class ZLinkAggregateInventory
                         );
                     var entry = new Entry(
                         participant.Key.Value,
-                        Hash(participant.AuthorityPayload.Span),
+                        ZLinkRelocationInventoryHash.Compute(participant.AuthorityPayload.Span),
                         participant.ExpectedStoreVersion,
                         index,
-                        Hash(mutation.Span),
+                        ZLinkRelocationInventoryHash.Compute(mutation.Span),
                         participant.OwnerTransition == ZLinkAuthorityGenerationTransition.NewOwner
                             ? "newOwner"
                             : "preserve"
@@ -220,10 +189,7 @@ internal static class ZLinkAggregateInventory
             )
             .ToArray();
 
-    internal static Tree Plan(IReadOnlyList<ZLinkAggregateParticipant> participants) =>
-        Build(Prepare(participants).Select(static participant => participant.Entry).ToArray());
-
-    internal static Tree Build(IReadOnlyList<Entry> entries)
+    private static Tree Build(IReadOnlyList<Entry> entries)
     {
         for (var index = 1; index < entries.Count; index++)
             if (
@@ -311,7 +277,7 @@ internal static class ZLinkAggregateInventory
                         page.EntryCount,
                         page.Index,
                         page.Level,
-                        Hash(bytes),
+                        ZLinkRelocationInventoryHash.Compute(bytes),
                         page.StartIndex
                     )
                 );
@@ -322,7 +288,7 @@ internal static class ZLinkAggregateInventory
     }
 
     private static string RootDigest(int topLevel, Reference[] topPages, int totalCount) =>
-        Hash(
+        ZLinkRelocationInventoryHash.Compute(
             Encode(
                 new
                 {
@@ -370,7 +336,7 @@ internal static class ZLinkAggregateInventory
         return tree.Root.DigestSha256;
     }
 
-    internal static async ValueTask WriteAsync(
+    private static async ValueTask WriteAsync(
         IZLinkLocationStore store,
         string prefix,
         ZLinkAggregateFence fence,
@@ -439,65 +405,7 @@ internal static class ZLinkAggregateInventory
         }
     }
 
-    internal static async ValueTask RemoveInventoryAsync(
-        IZLinkLocationStore store,
-        string prefix,
-        ZLinkAggregateFence fence,
-        CancellationToken cancellationToken
-    )
-    {
-        var inventoryPrefix = KeyPrefix(prefix, fence);
-        await RemoveAsync(store, inventoryPrefix + "page:", cancellationToken)
-            .ConfigureAwait(false);
-        await RemoveAsync(store, inventoryPrefix + "participant:", cancellationToken)
-            .ConfigureAwait(false);
-        var root = RootKey(prefix, fence);
-        await store
-            .WriteAsync(
-                new ZLinkStoreWriteRequest([], [new ZLinkStoreMutation.Delete(root)]),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-    }
-
-    internal static async ValueTask RemoveAsync(
-        IZLinkLocationStore store,
-        string childPrefix,
-        CancellationToken cancellationToken
-    )
-    {
-        var keys = new List<ZLinkStoreKey>();
-        ZLinkStoreScanCursor? cursor = null;
-        do
-        {
-            var scan = await store
-                .ScanAsync(new ZLinkStoreScanRequest(childPrefix, cursor, 1000), cancellationToken)
-                .ConfigureAwait(false);
-            if (scan is ZLinkStoreScanResult.Expired)
-            {
-                keys.Clear();
-                cursor = null;
-                continue;
-            }
-            var page = ((ZLinkStoreScanResult.Page)scan).Value;
-            keys.AddRange(page.Items.Select(static item => item.Key));
-            cursor = page.NextCursor;
-        } while (cursor is not null);
-
-        const int maximumDeletesPerBatch = 1024;
-        for (var offset = 0; offset < keys.Count; offset += maximumDeletesPerBatch)
-        {
-            var mutations = keys.Skip(offset)
-                .Take(maximumDeletesPerBatch)
-                .Select(static key => (ZLinkStoreMutation)new ZLinkStoreMutation.Delete(key))
-                .ToArray();
-            await store
-                .WriteAsync(new ZLinkStoreWriteRequest([], mutations), cancellationToken)
-                .ConfigureAwait(false);
-        }
-    }
-
-    internal static async ValueTask<Root> ReadRootAsync(
+    private static async ValueTask<Root> ReadRootAsync(
         IZLinkLocationStore store,
         string prefix,
         ZLinkAggregateFence fence,
@@ -571,7 +479,7 @@ internal static class ZLinkAggregateInventory
         return participants;
     }
 
-    internal static async ValueTask<IReadOnlyList<Entry>> ReadEntriesAsync(
+    private static async ValueTask<IReadOnlyList<Entry>> ReadEntriesAsync(
         IZLinkLocationStore store,
         string prefix,
         ZLinkAggregateFence fence,
@@ -612,7 +520,7 @@ internal static class ZLinkAggregateInventory
         }
     }
 
-    internal static async ValueTask<Page> ReadPageAsync(
+    private static async ValueTask<Page> ReadPageAsync(
         IZLinkLocationStore store,
         string prefix,
         ZLinkAggregateFence fence,
@@ -672,7 +580,7 @@ internal static class ZLinkAggregateInventory
         return page;
     }
 
-    internal static async ValueTask<Participant> ReadParticipantAsync(
+    private static async ValueTask<Participant> ReadParticipantAsync(
         IZLinkLocationStore store,
         string prefix,
         ZLinkAggregateFence fence,
@@ -686,11 +594,14 @@ internal static class ZLinkAggregateInventory
             .ConfigureAwait(false);
         var mutation = await ReadBytesAsync(store, mutationKey, cancellationToken)
             .ConfigureAwait(false);
-        if (payload.Length > MaxPageBytes || Hash(payload.Span) != entry.AuthorityPayloadSha256)
+        if (
+            payload.Length > MaxPageBytes
+            || ZLinkRelocationInventoryHash.Compute(payload.Span) != entry.AuthorityPayloadSha256
+        )
             throw DataLost(payloadKey);
         if (
             !ValidMembershipMutationLength(mutation.Length)
-            || Hash(mutation.Span) != entry.MembershipMutationSha256
+            || ZLinkRelocationInventoryHash.Compute(mutation.Span) != entry.MembershipMutationSha256
         )
             throw DataLost(mutationKey);
         return new Participant(entry, payload, mutation);
@@ -709,7 +620,10 @@ internal static class ZLinkAggregateInventory
         var bytes = await ReadBytesAsync(store, key, cancellationToken).ConfigureAwait(false);
         if (
             bytes.Length > MaxPageBytes
-            || (expectedHash is not null && Hash(bytes.Span) != expectedHash)
+            || (
+                expectedHash is not null
+                && ZLinkRelocationInventoryHash.Compute(bytes.Span) != expectedHash
+            )
         )
             throw DataLost(key);
         try
@@ -728,9 +642,9 @@ internal static class ZLinkAggregateInventory
         }
     }
 
-    internal static T Decode<T>(ReadOnlyMemory<byte> bytes)
+    private static T Decode<T>(ReadOnlyMemory<byte> bytes)
     {
-        var record = JsonSerializer.Deserialize<T>(bytes.Span, CanonicalJson);
+        var record = JsonSerializer.Deserialize<T>(bytes.Span, ZLinkCanonicalJson.Options);
         if (record is null || !bytes.Span.SequenceEqual(Encode(record)))
             throw new InvalidDataException("Aggregate record is not canonical JSON.");
         return record;
@@ -747,10 +661,7 @@ internal static class ZLinkAggregateInventory
             : throw DataLost(key);
 
     internal static byte[] Encode<T>(T record) =>
-        JsonSerializer.SerializeToUtf8Bytes(record, CanonicalJson);
-
-    internal static string Hash(ReadOnlySpan<byte> bytes) =>
-        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        JsonSerializer.SerializeToUtf8Bytes(record, ZLinkCanonicalJson.Options);
 
     private static bool IsHash(string? value) =>
         value is { Length: 64 }
@@ -769,59 +680,6 @@ internal static class ZLinkAggregateInventory
         && IsHash(entry.AuthorityPayloadSha256)
         && IsHash(entry.MembershipMutationSha256);
 
-    internal static ZLinkRelocationDataLostException DataLost(ZLinkStoreKey key) =>
+    private static ZLinkRelocationDataLostException DataLost(ZLinkStoreKey key) =>
         new($"Aggregate inventory record '{key.Value}' is missing or invalid.");
-
-    private sealed class CanonicalStringConverter : JsonConverter<string>
-    {
-        public override string? Read(
-            ref Utf8JsonReader reader,
-            Type type,
-            JsonSerializerOptions options
-        ) => reader.GetString();
-
-        public override void Write(
-            Utf8JsonWriter writer,
-            string value,
-            JsonSerializerOptions options
-        )
-        {
-            var json = new StringBuilder(value.Length + 2).Append('"');
-            foreach (var character in value)
-            {
-                switch (character)
-                {
-                    case '"':
-                        json.Append("\\\"");
-                        break;
-                    case '\\':
-                        json.Append("\\\\");
-                        break;
-                    case '\b':
-                        json.Append("\\b");
-                        break;
-                    case '\t':
-                        json.Append("\\t");
-                        break;
-                    case '\n':
-                        json.Append("\\n");
-                        break;
-                    case '\f':
-                        json.Append("\\f");
-                        break;
-                    case '\r':
-                        json.Append("\\r");
-                        break;
-                    case < ' ':
-                        json.Append("\\u").Append(((ushort)character).ToString("x4"));
-                        break;
-                    default:
-                        json.Append(character);
-                        break;
-                }
-            }
-            json.Append('"');
-            writer.WriteRawValue(StrictUtf8.GetBytes(json.ToString()));
-        }
-    }
 }
