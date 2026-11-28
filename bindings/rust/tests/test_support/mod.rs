@@ -92,7 +92,7 @@ pub(crate) fn connect_pair_and_confirm(
     let mut received = Received::empty();
     assert!(bound.recv(&mut received, RecvFlags::NONE).unwrap());
     assert_eq!(
-        received.single_part().unwrap().as_bytes(),
+        received.single_part_or_throw().unwrap().as_bytes(),
         b"connection-ready"
     );
 }
@@ -112,7 +112,7 @@ pub(crate) fn connect_dealer_router_and_confirm(
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
     assert_eq!(
-        received.single_part().unwrap().as_bytes(),
+        received.single_part_or_throw().unwrap().as_bytes(),
         b"connection-ready"
     );
 }

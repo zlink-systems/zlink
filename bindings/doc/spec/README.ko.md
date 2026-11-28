@@ -1199,6 +1199,7 @@ close와 in-flight 제출의 경합은
 공개 `Message`를 실패 뒤에도 보존하는 binding은 위의 staging과 별개로 원본 ownership을
 언어별 계약에 따라 유지한다. Binding은 별도 multipart ABI나 public transaction abstraction을
 추가하지 않는다.
+소비된(닫힌) 공개 `Message`를 다시 송신 operation에 넣으면 binding은 Core에 제출하지 않고 `INVALID_HANDLE`로 끝낸다. 빈 frame을 보내지 않는다. 소비된 `Message`의 읽기 접근은 빈 data와 크기 0이다.
 
 Request reply 완료·timeout과 언어 wait cancellation의 경계는
 [Timeout](#timeout)과 [비동기 실행 모델](async-execution-model.ko.md#6-caller-wait-cancellation)을 따른다.

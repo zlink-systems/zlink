@@ -94,7 +94,7 @@ fn context_typed_options() {
 #[test]
 fn socket_create_and_drop() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     drop(sock);
     // Socket close should complete without native leak
 }
@@ -102,10 +102,10 @@ fn socket_create_and_drop() {
 #[test]
 fn socket_bind_connect_lifecycle() {
     let ctx = Context::new().unwrap();
-    let server = ctx.pair_socket().unwrap();
+    let server = ctx.create_pair_socket().unwrap();
     server.bind("inproc://contract-lifecycle").unwrap();
 
-    let client = ctx.pair_socket().unwrap();
+    let client = ctx.create_pair_socket().unwrap();
     client.connect("inproc://contract-lifecycle").unwrap();
 
     drop(client);
@@ -246,14 +246,14 @@ fn strerror_returns_native_error_text() {
 #[test]
 fn all_socket_types_create_successfully() {
     let ctx = Context::new().unwrap();
-    let _ = ctx.pair_socket().unwrap();
-    let _ = ctx.pub_socket().unwrap();
-    let _ = ctx.sub_socket().unwrap();
-    let _ = ctx.dealer_socket().unwrap();
-    let _ = ctx.router_socket().unwrap();
-    let _ = ctx.xpub_socket().unwrap();
-    let _ = ctx.xsub_socket().unwrap();
-    let _ = ctx.stream_socket().unwrap();
+    let _ = ctx.create_pair_socket().unwrap();
+    let _ = ctx.create_pub_socket().unwrap();
+    let _ = ctx.create_sub_socket().unwrap();
+    let _ = ctx.create_dealer_socket().unwrap();
+    let _ = ctx.create_router_socket().unwrap();
+    let _ = ctx.create_xpub_socket().unwrap();
+    let _ = ctx.create_xsub_socket().unwrap();
+    let _ = ctx.create_stream_socket().unwrap();
 }
 
 #[test]
@@ -272,7 +272,7 @@ fn concurrent_multipart_publish_submits_whole_records_and_releases_parts() {
     const PER_WORKER: usize = 500;
 
     let ctx = Context::new().unwrap();
-    let publisher = ctx.pub_socket().unwrap();
+    let publisher = ctx.create_pub_socket().unwrap();
 
     let mut work = (0..WORKERS).map(|_| Vec::new()).collect::<Vec<_>>();
     for (worker, worker_records) in work.iter_mut().enumerate() {
@@ -333,7 +333,7 @@ fn concurrent_multipart_publish_submits_whole_records_and_releases_parts() {
 #[test]
 fn poller_modify_transfers_completion_ownership() {
     let ctx = Context::new().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     let poller = Poller::new().unwrap();
 
     poller.add_socket(&dealer, POLLCOMPLETION, 1).unwrap();
@@ -384,8 +384,8 @@ fn completion_waker_can_modify_its_public_poller() {
     }
 
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     router.bind("inproc://rust-reentrant-completion").unwrap();
     dealer
         .connect("inproc://rust-reentrant-completion")
@@ -437,8 +437,8 @@ fn poller_wait_with_no_event_capacity_reports_core_config_error() {
 #[test]
 fn ownerless_async_send_rejects_before_core_submission() {
     let ctx = Context::new().unwrap();
-    let receiver = ctx.pair_socket().unwrap();
-    let sender = ctx.pair_socket().unwrap();
+    let receiver = ctx.create_pair_socket().unwrap();
+    let sender = ctx.create_pair_socket().unwrap();
     receiver.bind("inproc://rust-ownerless-send").unwrap();
     sender.connect("inproc://rust-ownerless-send").unwrap();
 
@@ -458,8 +458,8 @@ fn ownerless_async_send_rejects_before_core_submission() {
 #[test]
 fn ownerless_async_request_fails_fast_and_reacquires_through_public_poller() {
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     router.bind("inproc://rust-ownerless-request").unwrap();
     dealer.connect("inproc://rust-ownerless-request").unwrap();
     dealer
@@ -538,7 +538,7 @@ fn completion_owner_source_has_no_background_reactor() {
 #[test]
 fn pollcompletion_reports_only_after_request_future_is_settled() {
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
     router
         .bind("inproc://rust-public-completion-owner")
         .unwrap();
@@ -577,8 +577,8 @@ fn pollcompletion_reports_only_after_request_future_is_settled() {
 fn submit_result_immediate_admission_exposes_completed_stage_and_reply() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     router.bind("inproc://rust-submit-result-ok").unwrap();
     dealer.connect("inproc://rust-submit-result-ok").unwrap();
 
@@ -629,8 +629,8 @@ fn submit_result_backpressure_admits_after_writable_then_completes_reply() {
 
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     dealer
         .common_options()
         .set_send_high_water_mark(RECORD_HWM)
@@ -639,7 +639,10 @@ fn submit_result_backpressure_admits_after_writable_then_completes_reply() {
         .common_options()
         .set_receive_high_water_mark(RECORD_HWM)
         .unwrap();
-    router.common_options().set_receive_timeout(5000).unwrap();
+    router
+        .common_options()
+        .set_receive_timeout(Some(Duration::from_millis(5000)))
+        .unwrap();
     router
         .bind("inproc://rust-submit-result-backpressured")
         .unwrap();
@@ -735,8 +738,8 @@ fn submit_result_backpressure_admits_after_writable_then_completes_reply() {
 #[test]
 fn ordinary_router_message_has_no_reply_token() {
     let ctx = Context::new().unwrap();
-    let router_socket = ctx.router_socket().unwrap();
-    let dealer_socket = ctx.dealer_socket().unwrap();
+    let router_socket = ctx.create_router_socket().unwrap();
+    let dealer_socket = ctx.create_dealer_socket().unwrap();
     router_socket
         .bind("inproc://rust-request-reply-data")
         .unwrap();
@@ -755,16 +758,19 @@ fn ordinary_router_message_has_no_reply_token() {
     let mut received = Received::empty();
     router_socket.recv(&mut received, RecvFlags::NONE).unwrap();
     let reply_token = received.reply_token();
-    assert_eq!(received.single_part().unwrap().as_bytes(), b"plain-data");
+    assert_eq!(
+        received.single_part_or_throw().unwrap().as_bytes(),
+        b"plain-data"
+    );
     assert_eq!(reply_token, None);
 }
 
 #[test]
 fn reply_token_rejects_a_different_router_owner_before_native_submit() {
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
-    let other_router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let other_router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     router.bind("inproc://rust-reply-token-owner").unwrap();
     dealer.connect("inproc://rust-reply-token-owner").unwrap();
     dealer
@@ -811,8 +817,8 @@ fn reply_token_rejects_a_different_router_owner_before_native_submit() {
 #[test]
 fn reply_token_from_closed_router_is_rejected_by_recreated_router() {
     let ctx = Context::new().unwrap();
-    let original_router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let original_router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     original_router
         .bind("inproc://rust-stale-reply-token-owner")
         .unwrap();
@@ -850,7 +856,7 @@ fn reply_token_from_closed_router_is_rejected_by_recreated_router() {
     let (rid, stale_token, mut original_router) = responder.join().unwrap();
     original_router.close().unwrap();
 
-    let recreated_router = ctx.router_socket().unwrap();
+    let recreated_router = ctx.create_router_socket().unwrap();
     let error = recreated_router
         .reply(&rid, stale_token)
         .message(Message::try_from(b"must-not-reach-native").unwrap())

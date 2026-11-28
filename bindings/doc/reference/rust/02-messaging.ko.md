@@ -80,13 +80,13 @@ if dealer.recv(&mut received, RecvFlags::NONE)? {
 | `reply_token()` | `Option<ReplyToken>`, reply 가능할 때만 존재하는 opaque socket-owned one-shot capability |
 | `parts()` | `&[Message]`, 이 envelope이 담은 모든 message part |
 | `first_part() -> Result<&Message, RecvError>` | 소유권 이전 없이 첫 part |
-| `single_part()` / `single_part_or_error()` | 동등 — 둘 다 `self`를 소비하고 `Result<Message, RecvError>`를 반환, 정확히 하나가 아니면 error |
+| `single_part_or_throw()` | `self`를 소비하고 `Result<Message, RecvError>`를 반환, part가 정확히 하나가 아니면(빈 결과 포함) `InvalidState` error |
 | `into_parts() -> Vec<Message>` | `self`를 소비하며 모든 part의 소유권을 이전 |
 | `close(self) -> Result<(), CloseError>` | `self`를 소비, 소유한 모든 part를 닫음 |
 | `reply()` | 공유 `ReplyOp<Empty>` builder를 시작; opaque reply token이 있는 envelope에서만 유효 |
 | `send()` | 공유 `SendOp<Empty>` builder를 시작, 이 envelope이 포착한 source route로 향함 |
 
-**Completion result.** 모든 member는 동기다. 여러 메서드(`single_part`,
+**Completion result.** 모든 member는 동기다. 여러 메서드(`single_part_or_throw`,
 `into_parts`, `close`)가 `self`를 값으로 받아 envelope을 소비한다 —
 Rust의 소유권 시스템이 컴파일 타임에 소비된 `Received`가 재사용될 수
 없음을 강제한다, 소비 후 재사용이 런타임 계약일 뿐인 다른 언어와 다르다.
@@ -94,7 +94,7 @@ Rust의 소유권 시스템이 컴파일 타임에 소비된 `Received`가 재�
 **선택 기준.** message마다 새로 생성하는 대신 receive loop 전체에서(`&mut`
 로) `Received` 하나를 재사용한다. 소비하지 않는 조회엔 `first_part()`를,
 envelope 자체가 더 이상 필요 없고 part를 꺼내야 할 땐
-`single_part()`/`into_parts()`를 사용한다.
+`single_part_or_throw()`/`into_parts()`를 사용한다.
 
 ---
 
@@ -119,7 +119,7 @@ member는 `Received`의 형태를 그대로 반영한다.
 | `topic() -> &str` | 이 publish가 전송된 topic |
 | `routing_id()` | `Option<&RoutingId>`, publisher의 routing id, receive 경로가 제공할 때만 존재 |
 | `parts()` | `&[Message]`, 이 publish가 담은 모든 message part |
-| `first_part()` / `single_part()` / `single_part_or_error()` / `into_parts()` / `close(self)` | `Received`와 같은 형태 |
+| `first_part()` / `single_part_or_throw()` / `into_parts()` / `close(self)` | `Received`와 같은 형태 |
 
 **Completion result.** 동기다. `Received`와 같은 소비/비소비 member
 구분이다.

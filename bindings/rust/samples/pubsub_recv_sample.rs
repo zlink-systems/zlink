@@ -2,6 +2,8 @@
 
 mod sample_support;
 
+use std::time::Duration;
+
 use zlink::{Context, Message, RecvFlags, SocketMonitor, SubscriptionEvent, TopicMessage};
 
 fn main() {
@@ -29,7 +31,7 @@ fn main() {
 
     pub_sock
         .common_options()
-        .set_receive_timeout(1_000)
+        .set_receive_timeout(Some(Duration::from_millis(1_000)))
         .expect("set subscription event timeout failed");
     let mut event = SubscriptionEvent::empty();
     assert!(
@@ -54,13 +56,13 @@ fn main() {
             .subscribe(&mut topic_msg, RecvFlags::NONE)
             .expect("subscribe recv failed")
     );
-    assert_eq!(topic_msg.topic(), topic);
-    assert_eq!(topic_msg.parts()[0].as_str().unwrap(), "101.25");
+    let received_topic = topic_msg.topic().to_owned();
+    assert_eq!(received_topic, topic);
+    let message = topic_msg.single_part_or_throw().expect("expected one part");
+    let payload = message.as_str().expect("utf8 error");
+    assert_eq!(payload, "101.25");
     println!(
-        "[pubsub/recv] publish: \"{}/101.25\" → subscribe: \"{}/{}\"",
-        topic_msg.topic(),
-        topic_msg.topic(),
-        topic_msg.parts()[0].as_str().unwrap()
+        "[pubsub/recv] publish: \"{topic}/101.25\" -> subscribe: \"{received_topic}/{payload}\""
     );
     // --8<-- [end:doc]
 }

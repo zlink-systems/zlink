@@ -72,6 +72,7 @@ fi
 rm -f "$LIB_LOG"
 
 run_test_file surface_tests
+run_test_file single_part_or_throw_tests
 run_test_file contract_tests
 run_test_file router_selected_route_tests
 run_test_file ffi_layout_tests
@@ -88,17 +89,30 @@ run_test_file monitor_tests
 run_test_file context_poller_close_tests
 run_test_file connection_attempt_tests
 
+run_test_file typed_monitor_tests
+run_test_file timer_wait_tests
+run_test_file raw_poll_tests
+run_test_file proxy_tests
+run_test_file optional_socket_duration_tests
+run_test_file peer_weight_boundary_tests
+run_test_file routed_option_getter_tests
+run_test_file stream_recv_mode_boundary_tests
+run_test_file multipart_close_tests
+run_test_file tls_tests
+run_test_file duration_boundary_tests
+
 TOTAL=$((TOTAL + 1))
 echo -n "  samples ... "
-if "$PROJECT_DIR/samples/run_samples.sh" >/tmp/zlink-rust-samples.log 2>&1; then
+SAMPLES_LOG="$(mktemp)"
+if "$PROJECT_DIR/samples/run_samples.sh" >"$SAMPLES_LOG" 2>&1; then
     echo "PASS"
     PASS=$((PASS + 1))
 else
     echo "FAIL"
-    cat /tmp/zlink-rust-samples.log
+    cat "$SAMPLES_LOG"
     FAIL=$((FAIL + 1))
 fi
-rm -f /tmp/zlink-rust-samples.log
+rm -f "$SAMPLES_LOG"
 
 echo ""
 echo "=== Summary ==="

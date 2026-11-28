@@ -7,5 +7,4 @@ pub(crate) mod options;
 pub(crate) mod pubsub_socket_impl;
 pub(crate) mod routed_socket_impl;
 pub(crate) mod socket;
-pub(crate) mod socket_options_impl;
 pub(crate) mod stream_socket_impl;

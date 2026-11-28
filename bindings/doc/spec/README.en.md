@@ -1397,6 +1397,7 @@ owns record atomicity, consumption of the complete array, and concurrent-submiss
 owns the race between close and an in-flight submission. A binding whose public API preserves a
 message on failure also retains the source under its language ownership contract, independently of
 the staging record above. A binding adds no multipart ABI or public transaction abstraction.
+When a consumed (closed) public `Message` is put into a send operation again, the binding ends it with `INVALID_HANDLE` without submitting to Core; it never sends an empty frame. Reading a consumed `Message` gives empty data and size 0.
 
 Request reply completion, timeout, and language wait cancellation follow
 [Timeout](#timeout) and the [async execution model](async-execution-model.en.md#6-caller-wait-cancellation).
