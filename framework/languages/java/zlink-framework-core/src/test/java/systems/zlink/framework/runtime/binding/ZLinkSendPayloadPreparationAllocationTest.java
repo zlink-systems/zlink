@@ -108,7 +108,7 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                     for (int i = 0; i < SENDS; i++)
                         if (calls[i] != null) {
                             reject(calls[i]);
-                            assertThrows(IllegalStateException.class, outputs[i]::refCount);
+                            assertConsumed(outputs[i]);
                         }
                 }
                 System.out.printf(
