@@ -1,3 +1,4 @@
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
 import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
 import type { ServiceRelocationEnvelope } from './service-relocation-runtime';
 
@@ -30,6 +31,16 @@ export class ServiceRelocationPostCommitError extends Error {
   ) {
     super('Relocation owner committed, but target publication failed.');
     this.name = 'ServiceRelocationPostCommitError';
+  }
+}
+
+export class ServiceRelocationAuthorityUnsettledAtStopError extends ZLinkFrameworkException {
+  constructor(cause: unknown) {
+    super(
+      ZLinkFrameworkErrorKind.Unavailable,
+      'Relocation authority was unsettled at the host stop deadline.',
+      cause
+    );
   }
 }
 

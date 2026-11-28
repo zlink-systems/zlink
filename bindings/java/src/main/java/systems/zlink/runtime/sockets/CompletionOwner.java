@@ -20,7 +20,6 @@ import systems.zlink.runtime.nativeapi.NativeErrno;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
 import systems.zlink.runtime.nativeapi.NativeMessage;
 import systems.zlink.runtime.nativeapi.NativeRoutingIds;
-import systems.zlink.runtime.nativeapi.NativeSubmitErrors;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -339,8 +338,7 @@ final class CompletionOwner implements AutoCloseable {
                 int errno = Native.errno();
                 long id = completion
                     ? idOut.get(ValueLayout.JAVA_LONG, 0) : 0L;
-                return new SubmitAttempt(SubmitResult.fromValue(rc), errno,
-                    id);
+                return classifyFailure(SubmitResult.fromValue(rc), errno, id);
             }
             long id = completion
                 ? idOut.get(ValueLayout.JAVA_LONG, 0) : 0L;
@@ -839,9 +837,17 @@ final class CompletionOwner implements AutoCloseable {
         retries.clear();
     }
 
+    private static SubmitAttempt classifyFailure(SubmitResult result, int errno,
+                                                 long id) {
+        SubmitAttempt attempt = new SubmitAttempt(result, errno, id);
+        if (isWritableWait(attempt) && errno != NativeErrno.EAGAIN) {
+            return new SubmitAttempt(SubmitResult.INTERNAL_ERROR, NativeErrno.EPROTO, 0L);
+        }
+        return attempt;
+    }
+
     private static boolean isWritableWait(SubmitAttempt attempt) {
         return attempt.result() == SubmitResult.BACKPRESSURED
-            && NativeSubmitErrors.isBackpressured(attempt.errno())
             && attempt.completionId() != 0L;
     }
 

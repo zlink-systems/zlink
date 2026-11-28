@@ -199,7 +199,7 @@ class PerfMultiRunnerTests(unittest.TestCase):
                 list(POLICY_TRANSPORTS),
                 [],
                 clients,
-                {"PERF_MULTI_MONITOR_HWM": "100000"},
+                {"PERF_MULTI_MONITOR_HWM_BYTES": "100000"},
             )
             self.assertEqual(options["default_clients"], "100")
             self.assertEqual(options["default_stream_clients"], "100")
@@ -219,7 +219,11 @@ class PerfMultiRunnerTests(unittest.TestCase):
         self.assertTrue(args.reuse_build)
 
     def test_python_runner_loads_source_tree_binding(self):
-        require_binding_runtime(ROOT / "src")
+        if "zlink._native._zlink_native" in sys.modules:
+            require_binding_runtime(ROOT / "src")
+        else:
+            with self.assertRaisesRegex(SystemExit, "zlink native extension"):
+                require_binding_runtime(ROOT / "src")
 
     def test_python_runner_rejects_stale_native_extension(self):
         with tempfile.TemporaryDirectory() as tmp:

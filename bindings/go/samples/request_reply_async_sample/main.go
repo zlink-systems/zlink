@@ -22,9 +22,11 @@ func main() {
 	samplecommon.Must(err)
 	defer dealerSocket.Close()
 
-	routerMon := samplecommon.OpenMonitor(routerSocket)
+	routerMon, err := zlink.OpenSocketMonitor(routerSocket, zlink.MonitorEventConnectionReady)
+	samplecommon.Must(err)
 	defer routerMon.Close()
-	dealerMon := samplecommon.OpenMonitor(dealerSocket)
+	dealerMon, err := zlink.OpenSocketMonitor(dealerSocket, zlink.MonitorEventConnectionReady)
+	samplecommon.Must(err)
 	defer dealerMon.Close()
 
 	endpoint := samplecommon.UniqueTCP("request-reply-async")

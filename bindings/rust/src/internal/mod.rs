@@ -14,8 +14,8 @@ pub(crate) use completion_state::{
     OwnerState,
 };
 pub(crate) use handle_storage::{
-    ContextStorage, MonitorStorage, PollerSocketRegistration, PollerStorage, SocketStorage,
-    TimerStorage,
+    AtomicCounterStorage, ContextStorage, CoreUtilities, MonitorStorage, PollerSocketRegistration,
+    PollerStorage, SocketStorage, StopwatchStorage, ThreadStorage, TimerStorage,
 };
 pub(crate) use message_parts::MessageParts;
 pub(crate) use message_storage::{MessageStorage, NativeReceiveScratch};

@@ -6,7 +6,10 @@ import io.netty.buffer.ByteBuf;
 
 import systems.zlink.contracts.errors.ConfigResult;
 import systems.zlink.contracts.errors.ZlinkConfigException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.internal.ContractAccess;
+import systems.zlink.internal.NativeErrorCodes;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -22,9 +25,10 @@ import java.util.concurrent.ArrayBlockingQueue;
  * bounded by Java object reachability.
  *
  * <p>After a send consumes ownership or {@link #close()} releases ownership,
- * the caller must not use this object again. This includes repeated close calls
- * and identity-based metadata lookup because receive paths may reuse the Java
- * wrapper for a later native frame.
+ * reads of the payload return empty data and size zero, and submitting the
+ * message fails with {@link SubmitResult#INVALID_HANDLE}. Receive paths may
+ * reuse a wrapper after its owning receive result releases it. That release
+ * ends the lifetime of all references to the wrapper.
  */
 public final class Message implements AutoCloseable {
     private static final ContractAccess.NativeMessageAccess NATIVE_ACCESS;
@@ -87,6 +91,7 @@ public final class Message implements AutoCloseable {
 
             @Override
             public void transferTo(Message message, Object destination) {
+                message.requireSubmittable();
                 message.transferTo(destination);
             }
 
@@ -109,7 +114,8 @@ public final class Message implements AutoCloseable {
 
             @Override
             public Message sharedCopyOf(Message message) {
-                return Message.sharedFrom(message);
+                message.requireValidNativeOwnership();
+                return message.copyShared();
             }
 
             @Override
@@ -279,9 +285,12 @@ public final class Message implements AutoCloseable {
         return msg;
     }
 
-    /** Returns a new message sharing this message's native payload. */
+    /**
+     * Returns a new message sharing this message's native payload, or a new
+     * empty message if this message was consumed or closed.
+     */
     public Message copy() {
-        return sharedFrom(this);
+        return valid() ? copyShared() : new Message();
     }
 
     /** Returns a new message holding an independent copy of this payload. */
@@ -343,9 +352,7 @@ public final class Message implements AutoCloseable {
         return from(value.getBytes(StandardCharsets.UTF_8));
     }
 
-    static Message sharedFrom(Message source) {
-        Objects.requireNonNull(source, "source");
-        source.requireValidNativeOwnership();
+    private Message copyShared() {
         Message msg = new Message(true);
         int rc = ContractAccess.nativeMessageInit(msg.msg);
         if (rc != 0) {
@@ -359,7 +366,7 @@ public final class Message implements AutoCloseable {
             throw failure;
         }
         msg.valid = true;
-        rc = ContractAccess.nativeMessageCopy(msg.msg, source.msg);
+        rc = ContractAccess.nativeMessageCopy(msg.msg, this.msg);
         if (rc != 0) {
             int errno = ContractAccess.nativeErrno();
             ZlinkConfigException failure = new ZlinkConfigException(ConfigResult.fromValue(rc), errno);
@@ -371,8 +378,8 @@ public final class Message implements AutoCloseable {
             throw failure;
         }
         msg.recvArmed = false;
-        msg.more = source.more;
-        msg.cachePayload(source.cachedSize);
+        msg.more = more;
+        msg.cachePayload(cachedSize);
         return msg;
     }
 
@@ -439,7 +446,7 @@ public final class Message implements AutoCloseable {
     }
 
     public int size() {
-        return valid && !closed ? cachedSize : 0;
+        return valid() ? cachedSize : 0;
     }
 
     public boolean more() {
@@ -447,24 +454,23 @@ public final class Message implements AutoCloseable {
     }
 
     public int refCount() {
-        requireValidNativeOwnership();
-        return ContractAccess.nativeMessageRefCount(msg);
+        return valid() ? ContractAccess.nativeMessageRefCount(msg) : 0;
     }
 
     Object dataSegment() {
-        return valid && !closed && cachedPayload != null
+        return valid() && cachedPayload != null
             ? cachedPayload
             : ContractAccess.nativeMessageHandleFromAddress(0L);
     }
 
     Object dataSegment(int knownSize) {
-        if (!valid || closed || knownSize <= 0 || cachedPayload == null)
+        if (!valid() || knownSize <= 0 || cachedPayload == null)
             return ContractAccess.nativeMessageHandleFromAddress(0L);
         return NATIVE_ACCESS.slice(cachedPayload, 0, knownSize);
     }
 
     Object nativeHandle() {
-        requireValidNativeOwnership();
+        requireSubmittable();
         return msg;
     }
 
@@ -515,7 +521,7 @@ public final class Message implements AutoCloseable {
     }
 
     public ByteBuffer dataBuffer() {
-        if (!valid || closed || cachedPayload == null)
+        if (!valid() || cachedPayload == null)
             return ByteBuffer.allocate(0).asReadOnlyBuffer();
         ByteBuffer base = cachedReadOnlyDataBuffer;
         if (base == null) {
@@ -745,7 +751,7 @@ public final class Message implements AutoCloseable {
     }
 
     void copyTo(Object destination) {
-        requireValidNativeOwnership();
+        requireSubmittable();
         int rc = ContractAccess.nativeMessageInit(destination);
         if (rc != 0)
             throw new ZlinkConfigException(ConfigResult.fromValue(rc), ContractAccess.nativeErrno());
@@ -763,7 +769,7 @@ public final class Message implements AutoCloseable {
     }
 
     void moveTo(Object destination) {
-        requireValidNativeOwnership();
+        requireSubmittable();
         int rc = ContractAccess.nativeMessageMove(destination, msg);
         if (rc != 0)
             throw new ZlinkConfigException(ConfigResult.fromValue(rc), ContractAccess.nativeErrno());
@@ -772,8 +778,7 @@ public final class Message implements AutoCloseable {
         clearPayloadCache();
     }
 
-    void transferTo(Object destination) {
-        requireValidNativeOwnership();
+    private void transferTo(Object destination) {
         int rc = ContractAccess.nativeMessageInit(destination);
         if (rc != 0)
             throw new ZlinkConfigException(ConfigResult.fromValue(rc), ContractAccess.nativeErrno());
@@ -1012,8 +1017,15 @@ public final class Message implements AutoCloseable {
     }
 
     private void requireValidNativeOwnership() {
-        if (!valid || closed) {
+        if (!valid()) {
             throw new IllegalStateException("message is closed");
+        }
+    }
+
+    private void requireSubmittable() {
+        if (!valid()) {
+            throw new ZlinkSubmitException(SubmitResult.INVALID_HANDLE,
+                NativeErrorCodes.EFAULT);
         }
     }
 

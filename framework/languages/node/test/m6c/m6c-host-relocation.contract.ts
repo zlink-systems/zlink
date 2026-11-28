@@ -2964,7 +2964,6 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
   let canonicalHandoffId: string | undefined;
   const actorId = 'actor-host-profile';
   const completionOperationId = { high: 61n, low: 67n };
-  let canonicalAdmissionOperationId = completionOperationId;
   const sourceActor = { context: { actorId, meshName: 'mesh-a' } };
   const sourceActorRef = {
     actorId,
@@ -3999,7 +3998,6 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         5_000
       );
       const admissionResult = await admission.promise;
-      canonicalAdmissionOperationId = { high: 2n, low: admission.id };
       assert.equal(admissionResult.terminalResult, RequestResult.Ok);
       assert.equal(admissionResult.kindData?.kind, 'actorJoinCompletion');
       canonicalHandoffId =
@@ -4034,7 +4032,6 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         : {
             canonicalRecovery: {
               handoffId: canonicalHandoffId!,
-              admissionOperationId: canonicalAdmissionOperationId,
               requestContentType: 'application/json',
               request: Buffer.from('canonical-request'),
               replyContentType: 'application/octet-stream',

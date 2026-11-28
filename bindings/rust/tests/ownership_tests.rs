@@ -11,10 +11,10 @@ use zlink::{Context, Message, Poller, Received, RecvFlags, RoutingId, Timer};
 #[test]
 fn send_consumes_message_ownership() {
     let ctx = Context::new().unwrap();
-    let a = ctx.pair_socket().unwrap();
+    let a = ctx.create_pair_socket().unwrap();
     a.bind("inproc://own-send-consume").unwrap();
 
-    let b = ctx.pair_socket().unwrap();
+    let b = ctx.create_pair_socket().unwrap();
     test_support::connect_pair_and_confirm(&a, &b, || {
         b.connect("inproc://own-send-consume").unwrap()
     });
@@ -33,10 +33,10 @@ fn send_consumes_message_ownership() {
 #[test]
 fn send_multipart_consumes_all_parts() {
     let ctx = Context::new().unwrap();
-    let a = ctx.pair_socket().unwrap();
+    let a = ctx.create_pair_socket().unwrap();
     a.bind("inproc://own-multi-consume").unwrap();
 
-    let b = ctx.pair_socket().unwrap();
+    let b = ctx.create_pair_socket().unwrap();
     test_support::connect_pair_and_confirm(&a, &b, || {
         b.connect("inproc://own-multi-consume").unwrap()
     });
@@ -58,10 +58,10 @@ fn send_multipart_consumes_all_parts() {
 #[test]
 fn recv_ownership_transfers_to_caller() {
     let ctx = Context::new().unwrap();
-    let a = ctx.pair_socket().unwrap();
+    let a = ctx.create_pair_socket().unwrap();
     a.bind("inproc://own-recv-transfer").unwrap();
 
-    let b = ctx.pair_socket().unwrap();
+    let b = ctx.create_pair_socket().unwrap();
     test_support::connect_pair_and_confirm(&a, &b, || {
         b.connect("inproc://own-recv-transfer").unwrap()
     });
@@ -93,10 +93,13 @@ fn send_failure_does_not_leak() {
     // If send fails, messages are still consumed (ownership transferred to
     // native on any return path per the C API contract).
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
     router.bind("inproc://own-send-fail").unwrap();
     router.router_options().set_mandatory(true).unwrap();
-    router.common_options().set_send_timeout(50).unwrap();
+    router
+        .common_options()
+        .set_send_timeout(Some(Duration::from_millis(50)))
+        .unwrap();
 
     let rid = RoutingId::from(b"ghost");
     let msg = Message::try_from(b"will-fail").unwrap();
@@ -109,9 +112,9 @@ fn repeated_multipart_recv_preserves_shape() {
     let ctx = Context::new().unwrap();
 
     // Direct recv path
-    let a1 = ctx.pair_socket().unwrap();
+    let a1 = ctx.create_pair_socket().unwrap();
     a1.bind("inproc://own-shape-direct").unwrap();
-    let b1 = ctx.pair_socket().unwrap();
+    let b1 = ctx.create_pair_socket().unwrap();
     test_support::connect_pair_and_confirm(&a1, &b1, || {
         b1.connect("inproc://own-shape-direct").unwrap()
     });
@@ -137,10 +140,10 @@ fn repeated_multipart_recv_preserves_shape() {
         .collect();
 
     // Direct recv path with the same frame ownership semantics.
-    let a2 = ctx.pair_socket().unwrap();
+    let a2 = ctx.create_pair_socket().unwrap();
     a2.bind("inproc://own-shape-repeat").unwrap();
 
-    let b2 = ctx.pair_socket().unwrap();
+    let b2 = ctx.create_pair_socket().unwrap();
     test_support::connect_pair_and_confirm(&a2, &b2, || {
         b2.connect("inproc://own-shape-repeat").unwrap()
     });
@@ -176,9 +179,9 @@ fn multipart_recv_adopts_parts_into_uninitialized_message_slots() {
     const MARKER_ENV: &str = "ZLINK_AUDIT_MARKER";
 
     let ctx = Context::new().unwrap();
-    let receiver = ctx.pair_socket().unwrap();
+    let receiver = ctx.create_pair_socket().unwrap();
     receiver.bind("inproc://own-adopt-uninitialized").unwrap();
-    let sender = ctx.pair_socket().unwrap();
+    let sender = ctx.create_pair_socket().unwrap();
     test_support::connect_pair_and_confirm(&receiver, &sender, || {
         sender.connect("inproc://own-adopt-uninitialized").unwrap()
     });
@@ -213,10 +216,10 @@ fn multipart_recv_adopts_parts_into_uninitialized_message_slots() {
 #[test]
 fn pull_receive_owns_parts() {
     let ctx = Context::new().unwrap();
-    let server = ctx.pair_socket().unwrap();
+    let server = ctx.create_pair_socket().unwrap();
     server.bind("inproc://own-pull-receive").unwrap();
 
-    let client = ctx.pair_socket().unwrap();
+    let client = ctx.create_pair_socket().unwrap();
     test_support::connect_pair_and_confirm(&server, &client, || {
         client.connect("inproc://own-pull-receive").unwrap()
     });
@@ -233,7 +236,7 @@ fn request_future_preserves_more_than_1024_reply_parts() {
     const PART_COUNT: usize = 1025;
 
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
     router.bind("inproc://own-request-many-parts").unwrap();
 
     let (_dealer, _completion_driver, _, future, request) = test_support::request_until_received(
@@ -264,9 +267,9 @@ fn blocking_send_and_reply_do_not_copy_message_parts() {
 
     let ctx = Context::new().unwrap();
 
-    let receiver = ctx.pair_socket().unwrap();
+    let receiver = ctx.create_pair_socket().unwrap();
     receiver.bind("inproc://own-sync-part-transfer").unwrap();
-    let sender = ctx.pair_socket().unwrap();
+    let sender = ctx.create_pair_socket().unwrap();
     test_support::connect_pair_and_confirm(&receiver, &sender, || {
         sender.connect("inproc://own-sync-part-transfer").unwrap()
     });
@@ -286,9 +289,9 @@ fn blocking_send_and_reply_do_not_copy_message_parts() {
     assert_eq!(received_send.parts()[0].as_bytes(), b"send-first");
     assert_eq!(received_send.parts()[1].as_bytes(), b"send-second");
 
-    let router = ctx.router_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
     router.bind("inproc://own-sync-reply-transfer").unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     let _dealer_completion_driver = test_support::CompletionPollerDriver::new(&dealer);
     test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
         dealer.connect("inproc://own-sync-reply-transfer").unwrap()

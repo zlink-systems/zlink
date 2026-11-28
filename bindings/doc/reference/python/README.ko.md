@@ -8,7 +8,7 @@
 따른다. 이는 bindings 계층(Core C ABI의 언어별 투영)이다 — framework 계층(자신의
 레퍼런스 트리가 `framework/doc/framework/python/reference/`에 있음)이 아니다.
 
-Category는 [.NET 바인딩 스펙](../dotnet/README.ko.md)의 Contract Folder Layout을 공통
+Category는 [.NET 바인딩 스펙](../../spec/dotnet/README.ko.md)의 Contract Folder Layout을 공통
 아키텍처 지도로 따른다. 지금까지의 모든 wrapper binding과 마찬가지로 이 트리도 6개가
 아니라 5개 category다 — `contracts/`엔 `service/` 패키지가 없다. SPOT/Actor는
 framework 계층에만 존재한다. 아래 Contract 원본 열은 스펙 산문이 아니라 실제 파일
@@ -16,23 +16,15 @@ framework 계층에만 존재한다. 아래 Contract 원본 열은 스펙 산문
 
 아래 모든 category에 적용되는 Python 고유 참고:
 
-- **모든 contract 타입이 `typing.Protocol`이다**(구조적 타이핑, 대부분
-  `@runtime_checkable`) — concrete 기반 class가 아니다. 실제 구현은
-  `_runtime`/`_native` 아래에 있으며 직접 import되지 않는다. caller는 항상
-  `Protocol` 형태만 본다.
-- **factory 함수가 package 최상위에 있다**(`bindings/python/src/zlink/__init__.py`:
-  `create_context`, `create_pair_socket`, `version`, `has`, `proxy`, `sleep`, ...),
-  node/rust와 같은 package-root 관용구다, `contracts/core/`가 아니다.
-- **native storage를 소유하는 모든 resource 타입이 sync·async context-manager
-  프로토콜을 둘 다 지원한다**(`__enter__`/`__exit__` *그리고*
-  `__aenter__`/`__aexit__`) — `with`/`async with` 둘 다 동작한다, 지금까지 다룬
-  다른 모든 언어 중 유일하다.
-- **이 binding의 어떤 socket type도 `set_routing_id`/`get_routing_id`/`routing_id`
-  property를 선언하지 않는다** — `DealerSocket`도, `RouterSocket`도,
-  `StreamSocket`도 아니다. `RouterSocketOptions.connect_routing_id`만 존재하며,
-  이건 socket 자신의 identity가 아니라 *다음 outgoing connection*의 routing id를
-  할당한다. 지금까지 다룬 다른 모든 언어는 최소한 Dealer/Router/Stream에
-  routing-id setter/getter를 노출한다.
+- 소켓과 option facade는 `typing.Protocol`이다. 이벤트 스냅샷과 enum은
+  구체 타입이다.
+- `create_context`와 `create_pair_socket` 같은 팩토리는 패키지 루트에서
+  가져온다.
+- 소켓은 `with`를 지원한다. `Context`와 `Message`는 `with`와
+  `async with`를 모두 지원한다.
+- DEALER·ROUTER·STREAM은 `set_routing_id`와 `get_routing_id`로 소켓의
+  routing ID를 설정하고 조회한다. `RouterSocketOptions.connect_routing_id`는
+  다음 outbound 연결의 peer routing ID를 지정한다.
 
 ## 로케일 관례
 

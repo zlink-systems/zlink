@@ -23,8 +23,6 @@ import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
-import systems.zlink.framework.runtime.internal.backend.*;
-import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 
@@ -59,7 +57,7 @@ final class ZLinkActorCreateBeforeOwnerLeaseAdmissionTest {
                                 () -> runtime.actorManager().create("player-1", "player").submit());
                 assertTrue(ZLinkLocationRuntime.isExecutionPaused(error));
                 assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN, error.kind());
-                assertEquals("The owner lease admission deadline has expired.", error.getMessage());
+                assertEquals("The owner lease admission is not open yet.", error.getMessage());
                 assertFalse(startup.isDone());
             } finally {
                 store.releaseClaim.complete(null);
@@ -135,10 +133,6 @@ final class ZLinkActorCreateBeforeOwnerLeaseAdmissionTest {
                 ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
             return inner.scan(request, cancellation);
         }
-    }
-
-    private static DefaultZLinkFrameworkOptions optionsWithSpotNodeAndActorFactory() {
-        return optionsWithSpotNodeAndActorFactory(new ZLinkInMemoryLocationStore());
     }
 
     private static DefaultZLinkFrameworkOptions optionsWithSpotNodeAndActorFactory(

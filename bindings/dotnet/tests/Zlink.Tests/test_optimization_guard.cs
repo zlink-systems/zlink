@@ -220,36 +220,27 @@ public sealed class test_optimization_guard
 
         foreach (string client in clients)
         {
-            string source = File.ReadAllText(Path.Combine(sourceRoot, client));
-            int round = source.IndexOf("int roundStart = 0;",
-                StringComparison.Ordinal);
-            Assert.True(round >= 0, client);
-
-            int poll = source.IndexOf("PollSocketEvents(", round,
-                StringComparison.Ordinal);
-            Assert.True(poll > round, client);
-
-            int receiveDrain = source.IndexOf("HandleClientEvent(", poll,
-                StringComparison.Ordinal);
-
-            Assert.True(receiveDrain > poll, client);
-            Assert.Contains(
-                "for (int attempts = 0; attempts < slots.Length; attempts++)",
-                source, StringComparison.Ordinal);
-            Assert.Contains("if (slot.AdmissionPending)", source,
-                StringComparison.Ordinal);
-            Assert.Contains(
-                "while (Stopwatch.GetTimestamp() < benchDeadlineTicks)", source,
-                StringComparison.Ordinal);
+            string source = ReadSourceForOrderedChecks(Path.Combine(sourceRoot, client));
+            // Each socket gets a public completion owner before submission.
+            // The send loop and echo drain use that same poller for completion and POLLIN.
+            AssertSourceOrder(source, client,
+                "Array.Fill(eventMasks, SocketPollIn | PollEventFlags.PollCompletion);",
+                "PollSocketEvents(pollManager, sockets, eventMasks, 0);",
+                "new MultiSenderRotation(slots.Length)",
+                "for (; visited < slots.Length;)",
+                "slots[rotation.Index]",
+                "if (slot.AdmissionPending) { rotation.Advance(); visited++; continue; }",
+                "StartAdmission(slot, replies, schedule, RecordAccepted)",
+                "rotation.Accepted()",
+                "while (Stopwatch.GetTimestamp() < benchDeadlineTicks)",
+                "var (submitted, visitedAll) = SubmitDue();",
+                "int completionWaitMs = submitted ? 0",
+                "PollSocketEvents(pollManager, sockets, eventMasks, completionWaitMs);",
+                "for (int i = 0; i < readyCount; i++) HandleClientEvent(pollManager, slots,",
+                "await replies.WaitAsync(",
+                "timeoutMs => PollSocketEvents(pollManager, sockets, eventMasks, timeoutMs)",
+                "for (int i = 0; i < readyCount; i++) HandleClientEvent(pollManager, slots,");
             Assert.Contains("submission.Result == SubmitResult.Ok", source,
-                StringComparison.Ordinal);
-            Assert.Contains(
-                "SocketPollIn | PollEventFlags.PollCompletion", source,
-                StringComparison.Ordinal);
-            Assert.Contains(
-                "PollSocketEvents(pollManager, sockets, eventMasks, 0);", source,
-                StringComparison.Ordinal);
-            Assert.Contains("int completionWaitMs = submittedAny", source,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("admissionSignal.", source,
                 StringComparison.Ordinal);
@@ -298,15 +289,23 @@ public sealed class test_optimization_guard
         string sourceRoot = Path.Combine(BindingRoot(), "perf", "multi",
             "Zlink.BindingBench.Multi", "src");
 
-        string dealerDealer = File.ReadAllText(Path.Combine(sourceRoot,
-            "PerfMultiDealerDealerClient.cs"));
-        Assert.Contains("Array.Fill(completionMasks, PollEventFlags.PollCompletion)",
-            dealerDealer, StringComparison.Ordinal);
-        Assert.True(dealerDealer.IndexOf(
-                "PollSocketEvents(context, pollManager, activeClients,",
-                StringComparison.Ordinal)
-            < dealerDealer.IndexOf("sendTasks[i] = SendLoopAsync",
-                StringComparison.Ordinal));
+        const string dealerDealerClient = "PerfMultiDealerDealerClient.cs";
+        string dealerDealer = ReadSourceForOrderedChecks(Path.Combine(sourceRoot,
+            dealerDealerClient));
+        // Register the public completion owner for every active socket before
+        // either send window. Drive that owner before consuming pending admissions.
+        AssertSourceOrder(dealerDealer, dealerDealerClient,
+            "private static bool RunSendPhase(",
+            "pollManager.PollSockets(activeClients, PollEventFlags.PollCompletion, 0);",
+            "long sent = RunSendWindow(pollManager, activeClients,",
+            "RunSendWindow(pollManager, activeClients,",
+            "internal static long RunSendWindow(PollManager pollManager, List<ISocket> sockets,",
+            "void ProgressAdmissions(",
+            "pollManager.PollSockets(sockets, PollEventFlags.PollCompletion, waitMs);",
+            "admission.GetAwaiter().GetResult();",
+            "SendSubmission submission = PerfSocketIo.SendMeasurementAsync(",
+            "if (pending > 0) ProgressAdmissions(waitMs);",
+            "while (pending > 0) ProgressAdmissions(");
 
         string relay = File.ReadAllText(Path.Combine(sourceRoot,
             "PerfMultiRoutedRelayServer.cs"));
@@ -462,6 +461,25 @@ public sealed class test_optimization_guard
             Path.GetDirectoryName(file)!,
             "..", "..", "..", ".."));
         return Path.Combine(repoRoot, "bindings", "dotnet");
+    }
+
+    private static string ReadSourceForOrderedChecks(string path)
+    {
+        string source = File.ReadAllText(path);
+        source = Regex.Replace(source, @"(?m)^[ \t]*//[^\r\n]*", "");
+        return Regex.Replace(source, @"\s+", " ");
+    }
+
+    private static void AssertSourceOrder(string source, string file,
+        params string[] fragments)
+    {
+        int position = 0;
+        foreach (string fragment in fragments)
+        {
+            int found = source.IndexOf(fragment, position, StringComparison.Ordinal);
+            Assert.True(found >= 0, $"{file} is missing or has reordered `{fragment}`.");
+            position = found + fragment.Length;
+        }
     }
 
     private static HashSet<string> ReadPublicTypeDeclarations(string root)

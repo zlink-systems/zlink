@@ -9,8 +9,6 @@ package native
 */
 import "C"
 
-import "unsafe"
-
 const nativeRecvInitialCapacity = 8
 
 func recvMultipart(nativeBuffer *[]C.zlink_msg_t, reuse []*Message, flags RecvFlags, recv multipartRecvFunc) ([]*Message, error) {
@@ -83,39 +81,4 @@ func adoptReceivedParts(native []C.zlink_msg_t, count int, reuse []*Message) ([]
 		reuse[i] = nil
 	}
 	return parts, nil
-}
-
-func takeParts(ptr *C.zlink_msg_t, partCount C.size_t) ([]*Message, error) {
-	count := int(partCount)
-	if count == 0 || ptr == nil {
-		return nil, nil
-	}
-	raw := unsafe.Slice(ptr, count)
-	parts := make([]*Message, 0, count)
-	for i := 0; i < count; i++ {
-		msg := &Message{}
-		rc74, errno74 := C.zlink_msg_init(&msg.msg)
-		if err := configErrorFromCall(rc74, errno74); err != nil {
-			closeMessageSlice(parts)
-			C.zlink_multipart_close(ptr, partCount)
-			return nil, err
-		}
-		rc75, errno75 := C.zlink_msg_move(&msg.msg, &raw[i])
-		if err := configErrorFromCall(rc75, errno75); err != nil {
-			_ = msg.Close()
-			closeMessageSlice(parts)
-			C.zlink_multipart_close(ptr, partCount)
-			return nil, err
-		}
-		parts = append(parts, msg)
-	}
-	C.zlink_multipart_close(ptr, partCount)
-	return parts, nil
-}
-
-func discardParts(ptr *C.zlink_msg_t, partCount C.size_t) {
-	if ptr == nil || partCount == 0 {
-		return
-	}
-	C.zlink_multipart_close(ptr, partCount)
 }

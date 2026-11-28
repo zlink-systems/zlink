@@ -56,6 +56,7 @@ for (const { remote, failureTarget } of [
         const requestQueued = deferred();
         const handlerEntered = deferred();
         const releaseHandler = deferred();
+        const callbackEntered = deferred();
         const callback = deferred();
         const clearStarted = deferred();
         const releaseClear = deferred();
@@ -116,6 +117,7 @@ for (const { remote, failureTarget } of [
               return;
             }
             callbackCount++;
+            callbackEntered.resolve();
             const authority = await readAuthority();
             callbackFinished = true;
             callback.resolve({ completion, authority });
@@ -246,6 +248,12 @@ for (const { remote, failureTarget } of [
           assert.equal((await setupJoined.promise).status, 'accepted');
 
           const target = remote ? await start(targetRid) : source;
+          const relocate = remote
+            ? t.mock.method(
+                source.get(nest.ZLINK_FRAMEWORK_RUNTIME).serviceRelocation,
+                'relocateActorJoin'
+              )
+            : undefined;
           if (remote) {
             for (const app of [source, target]) {
               for await (const snapshot of app
@@ -286,8 +294,11 @@ for (const { remote, failureTarget } of [
           }
           releaseJoin.resolve();
 
+          let accepted;
+          let enteredBeforeClear;
           if (remote && captured) {
-            const { completion, authority } = await callback.promise;
+            accepted = await callback.promise;
+            const { completion, authority } = accepted;
             assert.equal(completion.status, 'accepted');
             assertTarget(authority);
             assert.equal(authority.relocation?.phase, 'activated');
@@ -310,12 +321,17 @@ for (const { remote, failureTarget } of [
               assertTarget(entered.authority);
             } else {
               assert.equal(callbackCount, 0);
+              enteredBeforeClear = await Promise.race([
+                callbackEntered.promise.then(() => true),
+                delay(150, false)
+              ]);
             }
             releaseClear.resolve();
           }
 
           if (!remote || !captured) {
-            const { completion, authority } = await callback.promise;
+            accepted = await callback.promise;
+            const { completion, authority } = accepted;
             assert.equal(completion.status, 'accepted');
             assertTarget(authority);
             assert.equal(authority.relocation, undefined);
@@ -353,6 +369,27 @@ for (const { remote, failureTarget } of [
               }
             );
             assert.equal(probeCalls, 0);
+          }
+          if (remote && !captured) {
+            assert.deepEqual(
+              {
+                enteredBeforeClear,
+                phaseAtCallback: accepted.authority.relocation?.phase
+              },
+              { enteredBeforeClear: false, phaseAtCallback: undefined },
+              'Join completion must observe steady authority after the finishing CAS'
+            );
+          }
+          if (relocate !== undefined) {
+            assert.equal(relocate.mock.callCount(), 1);
+            // defer() returns void. Observe its ID at the source relocation boundary.
+            const { completionOperationId } = relocate.mock.calls[0].arguments[0];
+            assert.ok(completionOperationId);
+            assert.deepEqual(
+              accepted.completion.operationId,
+              completionOperationId,
+              'target Accepted must carry the original Deferred Join operation ID'
+            );
           }
         } finally {
           releaseJoin.resolve();

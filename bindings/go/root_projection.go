@@ -33,7 +33,6 @@ type (
 	SocketMonitor            = native.SocketMonitor
 
 	RoutingID         = contracts.RoutingID
-	CompletionKind    = contracts.CompletionKind
 	Message           = native.Message
 	ReplyToken        = native.ReplyToken
 	Received          = native.Received
@@ -207,9 +206,6 @@ const (
 	PollSourceSocket         = contracts.PollSourceSocket
 	PollSourceFD             = contracts.PollSourceFD
 	PollSourceTimer          = contracts.PollSourceTimer
-	CompletionSend           = contracts.CompletionSend
-	CompletionRequest        = contracts.CompletionRequest
-	CompletionWritable       = contracts.CompletionWritable
 
 	ConnectionConnecting             = contracts.ConnectionConnecting
 	ConnectionConnected              = contracts.ConnectionConnected

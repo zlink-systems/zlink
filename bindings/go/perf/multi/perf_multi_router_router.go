@@ -171,7 +171,6 @@ func relayShutdownDrainWindow() time.Duration {
 
 func runMultiRouterRouterClientRole(cfg multiConfig, endpoint string) perfcommon.Result {
 	serverID := zlink.NewRoutingID([]byte("SERVER"))
-	stats := perfcommon.NewMultiStats()
 	clientCtx, err := perfcommon.NewMultiClientContext()
 	perfcommon.Must(err)
 	defer clientCtx.Close()
@@ -203,8 +202,13 @@ func runMultiRouterRouterClientRole(cfg multiConfig, endpoint string) perfcommon
 	}()
 
 	validateMultiRouterRoutes(serverID, clients, cfg.msgSize)
-	window := activeDeadline(cfg.duration)
-	runMultiRouterRouterEchoWindow(clients, serverID, cfg, window, stats)
+	targets := make([]multiEchoSocket, len(clients))
+	for i, client := range clients {
+		targets[i] = client.socket
+	}
+	result := runMultiEcho(cfg, targets, func(index int, message *zlink.Message) (zlink.SendSubmission, error) {
+		return perfcommon.SubmitMeasurementSendSubmission(context.Background(), clients[index].socket.SendTo(serverID), message)
+	})
 	if len(clients) > 0 {
 		perfcommon.PrintMultiSocketAutoHWMDetail(
 			clients[0].socket, clients[0].monitor, cfg.pattern, cfg.transport, "client", "endpoint", zlink.SocketTypeRouter, cfg.msgSize,
@@ -213,93 +217,7 @@ func runMultiRouterRouterClientRole(cfg multiConfig, endpoint string) perfcommon
 	if len(clients) > 0 {
 		sendMultiRouterStopToken(clients[0].socket, serverID)
 	}
-	return stats.Snapshot(cfg.duration, cfg.msgSize)
-}
-
-func runMultiRouterRouterEchoWindow(
-	clients []multiRouterClient,
-	serverID zlink.RoutingID,
-	cfg multiConfig,
-	window perfcommon.BenchmarkWindow,
-	stats *perfcommon.Stats,
-) {
-	if len(clients) == 0 {
-		return
-	}
-	poller, err := zlink.NewPoller()
-	perfcommon.Must(err)
-	defer poller.Close()
-	events := make([]zlink.PollEvent, len(clients))
-	for i, client := range clients {
-		perfcommon.Must(poller.AddSocket(
-			client.socket, perfcommon.ZLinkPollIn|zlink.PollCompletion, uintptr(i)))
-	}
-
-	payloads := make([][]byte, len(clients))
-	for index := range payloads {
-		payloads[index] = perfcommon.PreparePayload(cfg.msgSize)
-	}
-	submit := func(index int) (zlink.SendSubmission, error) {
-		submission, sendErr := sendMultiRouterRouterRequest(clients[index].socket, serverID, payloads[index], window)
-		if sendErr != nil {
-			return nil, fmt.Errorf("multi router/router send: %w", sendErr)
-		}
-		return submission, nil
-	}
-	pendingReplies := 0
-	progress := func(wait time.Duration) error {
-		n, waitErr := poller.Wait(events, wait)
-		if waitErr != nil {
-			if perfcommon.IsTransient(waitErr) {
-				return nil
-			}
-			return fmt.Errorf("multi router/router poll: %w", waitErr)
-		}
-		for i := 0; i < n; i++ {
-			idx := int(events[i].Slot)
-			if idx < 0 || idx >= len(clients) {
-				continue
-			}
-			socket := clients[idx].socket
-			if events[i].Revents&perfcommon.ZLinkPollIn != 0 {
-				drained := recvMultiRouterRouterReply(socket, stats, cfg.msgSize, window)
-				if drained > pendingReplies {
-					return fmt.Errorf("multi router/router received %d replies with %d pending", drained, pendingReplies)
-				}
-				pendingReplies -= drained
-			}
-		}
-		return nil
-	}
-	perfcommon.Must(runMultiSendTurns(
-		len(clients), window, "multi router/router", submit, progress,
-		func(submitted int) { pendingReplies += submitted },
-		func() bool { return pendingReplies > 0 }))
-}
-
-func sendMultiRouterRouterRequest(
-	socket *zlink.RouterSocket,
-	serverID zlink.RoutingID,
-	payload []byte,
-	window perfcommon.BenchmarkWindow,
-) (zlink.SendSubmission, error) {
-	perfcommon.StampWindowPayload(payload, window.ActiveAt)
-	message := perfcommon.NewMessage(payload)
-	return perfcommon.SubmitMeasurementSendSubmission(context.Background(), socket.SendTo(serverID), message)
-}
-
-func recvMultiRouterRouterReply(
-	socket *zlink.RouterSocket,
-	stats *perfcommon.Stats,
-	msgSize int,
-	window perfcommon.BenchmarkWindow,
-) int {
-	drained, err := drainRouterReplies(
-		socket, stats, msgSize, perfcommon.PhaseActive, window.ActiveAtNs, window.StopAtNs)
-	if err != nil {
-		perfcommon.Must(fmt.Errorf("multi router/router recv: %w", err))
-	}
-	return drained
+	return result
 }
 
 func validateMultiRouterRoutes(serverID zlink.RoutingID, clients []multiRouterClient, msgSize int) {

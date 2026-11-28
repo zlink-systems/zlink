@@ -93,16 +93,6 @@ final class NativeSymbols {
         return MethodHandles.foldArguments(handle, 0, CAPTURE_STATE_OF_THREAD);
     }
 
-    static MethodHandle cDowncall(String name, FunctionDescriptor fd) {
-        return LINKER.defaultLookup().find(name)
-          .map(symbol -> LINKER.downcallHandle(symbol, fd))
-          .orElseGet(() -> missingDowncall(name, fd));
-    }
-
-    static MethodHandle freeDowncall() {
-        return cDowncall("free", FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
-    }
-
     private static MethodHandle missingDowncall(String name,
                                                 FunctionDescriptor fd) {
         MethodType methodType = fd.toMethodType();

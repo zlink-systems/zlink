@@ -263,6 +263,7 @@ Options:
                          override it with PERF_MULTI_STREAM_MSG_SIZES.
   --transports LIST      Comma-separated transports.
   --duration N           Optional override for multi duration seconds (default 5).
+  --latency-duration N   Latency seconds (positive integer; default: --duration).
   --clients N            Override number of client sockets per pattern (default: 100).
   --hwm N                Debug-only override PERF_MULTI_HWM.
                          Requires PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES=1.
@@ -285,7 +286,8 @@ Options:
                          Override PERF_MULTI_SERVER_READY_TIMEOUT_MS (default: 10000).
   --connect-ready-timeout-ms N
                          Override PERF_MULTI_CONNECT_READY_TIMEOUT_MS (default: 10000).
-  --monitor-hwm N        Override PERF_MULTI_MONITOR_HWM (default: 4096000).
+  --monitor-hwm-bytes BYTES
+                         Override PERF_MULTI_MONITOR_HWM_BYTES in bytes.
   --server-shutdown-timeout-ms N
                          Override PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS (default: 5000).
   --server-bind-port N
@@ -484,6 +486,7 @@ HAS_EXPLICIT_RESULTS_DIR=0
 BUILD_MODE="incremental"
 BUILD_MODE_EXPLICIT=0
 DURATION_SECONDS="${PERF_MULTI_DURATION_SECONDS:-${PERF_DURATION_SECONDS:-5}}"
+LATENCY_DURATION_SECONDS="${PERF_MULTI_LATENCY_DURATION_SECONDS:-}"
 CLIENTS="${PERF_MULTI_CLIENTS:-${PERF_CLIENTS:-}}"
 EFFECTIVE_DEFAULT_CLIENTS="${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
 EFFECTIVE_DEFAULT_STREAM_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
@@ -505,7 +508,7 @@ TRANSPORT_TRANSITION_MS="${PERF_MULTI_TRANSPORT_TRANSITION_MS:-${PERF_TRANSPORT_
 PATTERN_TRANSITION_MS="${PERF_MULTI_PATTERN_TRANSITION_MS:-${PERF_PATTERN_TRANSITION_MS:-3000}}"
 SERVER_READY_TIMEOUT_MS="${PERF_MULTI_SERVER_READY_TIMEOUT_MS:-${PERF_SERVER_READY_TIMEOUT_MS:-10000}}"
 CONNECT_READY_TIMEOUT_MS="${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-10000}}"
-MONITOR_HWM="${PERF_MULTI_MONITOR_HWM:-${PERF_MONITOR_HWM:-4096000}}"
+MONITOR_HWM="${PERF_MULTI_MONITOR_HWM_BYTES:-${PERF_MONITOR_HWM_BYTES:-4096000}}"
 SERVER_SHUTDOWN_TIMEOUT_MS="${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}"
 SERVER_BIND_PORT="${PERF_MULTI_SERVER_BIND_PORT:-${PERF_SERVER_BIND_PORT:-0}}"
 CTX_AUTO_HWM_ENABLE="${PERF_CTX_AUTO_HWM_ENABLE:-1}"
@@ -625,6 +628,18 @@ while [[ $# -gt 0 ]]; do
       fi
       DURATION_SECONDS="${2}"
       shift 2
+      ;;
+    --latency-duration)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: $1 requires a value." >&2
+        exit 1
+      fi
+      LATENCY_DURATION_SECONDS="${2}"
+      shift 2
+      ;;
+    --latency-duration=*)
+      LATENCY_DURATION_SECONDS="${1#*=}"
+      shift
       ;;
     --pin-cpu)
       SCRIPT_ARGS+=( "$1" )
@@ -792,13 +807,17 @@ while [[ $# -gt 0 ]]; do
       CONNECT_READY_TIMEOUT_MS="${2}"
       shift 2
       ;;
-    --monitor-hwm)
+    --monitor-hwm-bytes)
       if [[ $# -lt 2 ]]; then
         echo "Error: $1 requires a value." >&2
         exit 1
       fi
       MONITOR_HWM="${2}"
       shift 2
+      ;;
+    --monitor-hwm-bytes=*)
+      MONITOR_HWM="${1#*=}"
+      shift
       ;;
     --auto-hwm-profile)
       if [[ $# -lt 2 ]]; then
@@ -843,6 +862,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -z "${LATENCY_DURATION_SECONDS}" ]]; then
+  LATENCY_DURATION_SECONDS="${DURATION_SECONDS}"
+fi
+if ! is_uint "${LATENCY_DURATION_SECONDS}" || (( LATENCY_DURATION_SECONDS < 1 )); then
+  echo "Error: --latency-duration must be a positive integer." >&2
+  exit 1
+fi
+
 if [[ "${HAS_EXPLICIT_MSG_SIZES}" -eq 1 ]]; then
   STREAM_MSG_SIZES="${MSG_SIZES_OVERRIDE}"
 fi
@@ -881,7 +908,7 @@ if ! is_uint "${CONNECT_READY_TIMEOUT_MS}"; then
   exit 1
 fi
 if ! is_uint "${MONITOR_HWM}"; then
-  echo "Error: --monitor-hwm must be a non-negative integer." >&2
+  echo "Error: --monitor-hwm-bytes must be a non-negative integer." >&2
   exit 1
 fi
 if ! is_uint "${CTX_AUTO_HWM_ENABLE}"; then
@@ -1107,6 +1134,7 @@ fi
 
 RUN_BASE_ARGS=()
 RUN_BASE_ARGS+=(--duration "${DURATION_SECONDS}")
+RUN_BASE_ARGS+=(--latency-duration "${LATENCY_DURATION_SECONDS}")
 if [[ "${HAS_EXPLICIT_RUNS}" -eq 0 ]]; then
   RUN_BASE_ARGS+=(--runs "1")
 fi
@@ -1130,6 +1158,7 @@ fi
 RUN_ENV+=(PERF_RESULTS_DIR="${RESULTS_DIR_OVERRIDE}")
 RUN_ENV+=(PERF_TRANSPORTS="${TRANSPORTS_OVERRIDE}")
 RUN_ENV+=(PERF_MULTI_DURATION_SECONDS="${DURATION_SECONDS}")
+RUN_ENV+=(PERF_MULTI_LATENCY_DURATION_SECONDS="${LATENCY_DURATION_SECONDS}")
 RUN_ENV+=(PERF_PART_COUNT="${PART_COUNT}")
 RUN_ENV+=(PERF_MULTI_RUN_COOLDOWN_MS="${RUN_COOLDOWN_MS}")
 RUN_ENV+=(PERF_MULTI_TRANSPORT_TRANSITION_MS="${TRANSPORT_TRANSITION_MS}")
@@ -1139,7 +1168,7 @@ if [[ "${#EXPLICIT_PATTERNS[@]}" -eq 0 ]]; then
 fi
 RUN_ENV+=(PERF_MULTI_SERVER_READY_TIMEOUT_MS="${SERVER_READY_TIMEOUT_MS}")
 RUN_ENV+=(PERF_MULTI_CONNECT_READY_TIMEOUT_MS="${CONNECT_READY_TIMEOUT_MS}")
-RUN_ENV+=(PERF_MULTI_MONITOR_HWM="${MONITOR_HWM}")
+RUN_ENV+=(PERF_MULTI_MONITOR_HWM_BYTES="${MONITOR_HWM}")
 RUN_ENV+=(PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS="${SERVER_SHUTDOWN_TIMEOUT_MS}")
 RUN_ENV+=(PERF_MULTI_SERVER_BIND_PORT="${SERVER_BIND_PORT}")
 if [[ -n "${EFFECTIVE_DEFAULT_IO_THREADS}" ]]; then

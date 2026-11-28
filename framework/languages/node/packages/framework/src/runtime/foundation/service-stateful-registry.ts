@@ -97,9 +97,10 @@ export interface ServiceMembershipTransition {
 export class ServiceStaleGenerationError extends Error {
   constructor(
     readonly objectKind: 'actor' | 'spot' | 'binding',
-    readonly key: string
+    readonly key: string,
+    message = `${objectKind} '${key}' generation is stale.`
   ) {
-    super(`${objectKind} '${key}' generation is stale.`);
+    super(message);
     this.name = 'ServiceStaleGenerationError';
   }
 }
@@ -364,21 +365,20 @@ export class ServiceStatefulRegistry {
   }
 
   joinActor(actor: ServiceActorRef, target: ServiceSpotRef): ServiceMembershipTransition {
-    return this.joinActorCore(actor, target);
+    return this.joinActorCore(this.requireActorCore(actor), target);
   }
 
   private joinActorCore(
-    actor: ServiceActorRef,
+    current: ServiceActorState,
     target: ServiceSpotRef
   ): ServiceMembershipTransition {
-    const current = this.requireActorCore(actor);
     this.requireSpotCore(target);
     const next: ServiceActorState = Object.freeze({
       ...current,
       spot: Object.freeze({ ...target }),
       membershipEpoch: current.membershipEpoch + 1n
     });
-    this.actors.set(actor.actorId, next);
+    this.actors.set(current.ref.actorId, next);
     this.updateBindingMembership(next);
     return {
       actor: next,
@@ -389,13 +389,23 @@ export class ServiceStatefulRegistry {
     };
   }
 
-  leaveActor(actor: ServiceActorRef, expectedMembershipEpoch: bigint): ServiceMembershipTransition {
-    const entry = this.createEntrySpotCore().ref;
+  leaveActor(
+    actor: ServiceActorRef,
+    expectedMembershipEpoch: bigint,
+    expectedAuthorityOwnerGeneration: bigint
+  ): ServiceMembershipTransition {
     const current = this.requireActorCore(actor);
+    if (current.authorityOwnerGeneration !== expectedAuthorityOwnerGeneration) {
+      throw new ServiceStaleGenerationError(
+        'actor',
+        actor.actorId,
+        `Actor '${actor.actorId}' owner tenure is not current.`
+      );
+    }
     if (current.membershipEpoch !== expectedMembershipEpoch) {
       throw new ServiceStaleGenerationError('actor', actor.actorId);
     }
-    return this.joinActorCore(actor, entry);
+    return this.joinActorCore(current, this.createEntrySpotCore().ref);
   }
 
   destroyActor(actor: ServiceActorRef): ServiceActorState {

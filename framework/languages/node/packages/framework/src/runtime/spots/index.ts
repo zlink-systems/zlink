@@ -1390,8 +1390,9 @@ export class DefaultZLinkSpotManager {
           this.closeOperations.delete(key);
         }
       });
+      return await active.ready;
     }
-    return await operation.ready!;
+    return await awaitWithAbort(operation.ready, signal);
   }
 
   private async runCloseOperation(

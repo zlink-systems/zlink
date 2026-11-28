@@ -22,6 +22,7 @@ import { OperationTimeoutError } from '../foundation/operation-registry';
 import { durableRequestCanReplay } from '../foundation/durable-service-request';
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   type RoutingId,
   type Type,
@@ -110,6 +111,7 @@ import {
 } from '../foundation/service-relocation-aggregate-committer';
 import {
   ServiceRelocationAuthorityError,
+  ServiceRelocationAuthorityUnsettledAtStopError,
   ServiceRelocationPostCommitError
 } from '../foundation/service-relocation-coordinator';
 import {
@@ -3303,7 +3305,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // The stop deadline prevents new Store calls without cancelling a submitted call.
       const observed = await this.readSourceSettlement(store, envelope, primary, target).catch(
         (error: unknown) => {
-          this.options.shutdownDeadline?.()?.throwIfAborted();
+          requireSourceSettlementBeforeStop(this.options.shutdownDeadline?.());
           if (!isIndeterminateLocationStoreFailure(error)) throw error;
           return undefined;
         }
@@ -3319,7 +3321,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         (this.disposed && window !== undefined);
       if (preserve && observed?.kind === 'source') {
         // An unreadable lease is an uncertain result, not an expiry.
-        this.options.shutdownDeadline?.()?.throwIfAborted();
+        requireSourceSettlementBeforeStop(this.options.shutdownDeadline?.());
         if (
           await this.exactSourceLeaseExpired(owner, undefined, store).catch((error: unknown) => {
             if (!isIndeterminateLocationStoreFailure(error)) throw error;
@@ -3329,7 +3331,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           return 'lost';
         const { payload } = observed.current;
         const publication = this.codec.read(payload);
-        this.options.shutdownDeadline?.()?.throwIfAborted();
+        requireSourceSettlementBeforeStop(this.options.shutdownDeadline?.());
         const preserved = await store
           .compareExchangeAuthority(
             { value: primaryKey(envelope) } as ZLinkAuthorityKey,
@@ -3362,9 +3364,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }
       if (!preserve && window !== undefined) await this.resendSourceCutover(window);
       // The caller awaits this settlement, so the retry timer keeps the loop alive.
-      await new Promise<void>((resolve) =>
-        setTimeout(resolve, RELOCATION_AUTHORITY_POLL_INTERVAL_MS)
-      );
+      const stopDeadline = this.options.shutdownDeadline?.();
+      try {
+        await delay(RELOCATION_AUTHORITY_POLL_INTERVAL_MS, undefined, { signal: stopDeadline });
+      } catch (error) {
+        requireSourceSettlementBeforeStop(stopDeadline);
+        throw error;
+      }
     }
   }
 
@@ -3383,7 +3389,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const followAuthorities = new Map<string, ZLinkAuthoritySnapshot>();
     let primaryCurrent: ZLinkAuthoritySnapshot | undefined;
     for (const participant of envelope.participants) {
-      this.options.shutdownDeadline?.()?.throwIfAborted();
+      requireSourceSettlementBeforeStop(this.options.shutdownDeadline?.());
       const current = await store.readAuthority({
         value: participant.key
       } as ZLinkAuthorityKey);
@@ -6395,7 +6401,7 @@ function appendCanonicalActorJoinRecovery(
         nodeGeneration: coordinator.nodeGeneration,
         expectedAuthorityStoreVersion: coordinator.expectedAuthorityStoreVersion
       },
-      operationId: recovery.admissionOperationId,
+      operationId: profile.completionOperationId,
       ...(recovery.replyContentType === undefined
         ? {}
         : { replyContentType: recovery.replyContentType }),
@@ -6707,6 +6713,12 @@ function wireIdText(value: { readonly high: bigint; readonly low: bigint }): str
  * than the generic internal-failure code (spec 15 §4).
  */
 export class ServiceRelocationDataLostError extends Error {}
+
+function requireSourceSettlementBeforeStop(stopDeadline: AbortSignal | undefined): void {
+  if (stopDeadline?.aborted === true) {
+    throw new ServiceRelocationAuthorityUnsettledAtStopError(stopDeadline.reason);
+  }
+}
 
 /** The local source lifecycle ended a pending relocation operation. */
 class ServiceRelocationRuntimeStoppedError extends Error {

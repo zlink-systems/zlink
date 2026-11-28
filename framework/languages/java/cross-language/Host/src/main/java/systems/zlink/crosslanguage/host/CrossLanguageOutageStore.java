@@ -9,6 +9,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -314,7 +315,7 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    private static ZLinkStoreKey key(String... segments) {
+    static ZLinkStoreKey key(String... segments) {
         for (String segment : segments) {
             if (segment.indexOf('\0') >= 0)
                 throw new IllegalArgumentException("canonical key segment contains NUL");
@@ -322,7 +323,7 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
         return new ZLinkStoreKey(String.join("\0", segments));
     }
 
-    private static JsonNode json(byte[] bytes) {
+    static JsonNode json(byte[] bytes) {
         try {
             JsonNode root = JSON.readTree(bytes);
             if (!root.path("recordVersion").isInt() || root.path("recordVersion").intValue() != 1)
@@ -333,7 +334,7 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
         }
     }
 
-    private static String text(JsonNode node, String field) {
+    static String text(JsonNode node, String field) {
         JsonNode value = node.path(field);
         if (!value.isTextual())
             throw new IllegalStateException("canonical string missing: " + field);
@@ -352,7 +353,7 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
                 root.path("pendingCreation").isNull()
                         && "active".equals(text(allocation, "state"))
                         && "actor".equals(text(allocation, "objectKind"))
-                        && readyActor(Base64.getDecoder().decode(text(root, "payload")));
+                        && actorPayload(root).steadyReady();
         return new Authority(
                 integer(root, "objectGeneration"),
                 integer(root, "authorityOwnerGeneration"),
@@ -364,7 +365,22 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
                 ready);
     }
 
-    private static boolean readyActor(byte[] payload) {
+    record ActorPayload(
+            int operation,
+            int state,
+            String stableType,
+            String actorId,
+            String spot,
+            String spotKind,
+            boolean relocationAbsent,
+            boolean activationAbsent) {
+        boolean steadyReady() {
+            return operation == 0 && state == 1 && relocationAbsent && activationAbsent;
+        }
+    }
+
+    static ActorPayload actorPayload(JsonNode root) {
+        byte[] payload = Base64.getDecoder().decode(text(root, "payload"));
         ByteBuffer envelope = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN);
         if (envelope.remaining() < 15
                 || envelope.getInt() != 0x5a4c4155
@@ -382,10 +398,19 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
         if (envelope.get() != 1) throw new IllegalStateException("authority is not an actor");
         int identitySize = Short.toUnsignedInt(envelope.getShort());
         int identityEnd = envelope.position() + identitySize;
-        skipText(envelope); // Stable type.
-        skipText(envelope); // Actor ID.
+        String stableType = readText(envelope);
+        String actorId = readText(envelope);
         int state = Byte.toUnsignedInt(envelope.get());
-        envelope.position(identityEnd);
+        String spot = readText(envelope);
+        envelope.getLong(); // Spot generation.
+        String spotKind =
+                switch (envelope.get()) {
+                    case 1 -> "entry";
+                    case 2 -> "user";
+                    default -> throw new IllegalStateException("invalid actor Spot kind");
+                };
+        if (envelope.position() != identityEnd)
+            throw new IllegalStateException("invalid actor authority identity length");
         skipText(envelope); // Owner ID.
         envelope.getLong(); // Owner lease generation.
         skipText(envelope); // Mesh name.
@@ -395,7 +420,21 @@ public final class CrossLanguageOutageStore implements ZLinkLocationStore {
         boolean activationAbsent = emptySlot(envelope);
         if (envelope.position() != payload.length - 4)
             throw new IllegalStateException("trailing authority bytes");
-        return operation == 0 && state == 1 && activationAbsent && relocationAbsent;
+        return new ActorPayload(
+                operation,
+                state,
+                stableType,
+                actorId,
+                spot,
+                spotKind,
+                relocationAbsent,
+                activationAbsent);
+    }
+
+    private static String readText(ByteBuffer bytes) {
+        byte[] value = new byte[Byte.toUnsignedInt(bytes.get())];
+        bytes.get(value);
+        return new String(value, StandardCharsets.UTF_8);
     }
 
     private static void skipText(ByteBuffer bytes) {
