@@ -1415,7 +1415,11 @@ PYTHON
 
   local redis_port setup_port sender_port owner_port
   read -r redis_port setup_port sender_port owner_port <<<"$(free_port 4)"
-  local setup_rid=node-user-spot-join-source
+  # Node setup does not finish Join into .NET (#5046) or Java; use Java
+  # setup for those owners to exercise the sealed completion contract.
+  local setup_lang=node
+  [[ "${owner}" == dotnet || "${owner}" == java ]] && setup_lang=java
+  local setup_rid=${setup_lang}-user-spot-join-source
   local sender_rid="${sender}-late-actor-sender"
   local owner_rid="${owner}-user-spot-join-target"
   local setup_events="${RUN_DIR}/setup.events"
@@ -1439,7 +1443,7 @@ PYTHON
     --bind-endpoint "tcp://127.0.0.1:${sender_port}" --event-file "${sender_events}" --start-file "${probe_file}"
   wait_for_line "${sender_events}" 'user-spot-source-peer-ready|ready=true' 180 'user-spot-join-failed|'
 
-  ZLINK_CROSS_JOIN_SETUP=1 start_user_spot_host node setup source "${common[@]}" \
+  ZLINK_CROSS_JOIN_SETUP=1 start_user_spot_host "${setup_lang}" setup source "${common[@]}" \
     --node-rid "${setup_rid}" --peer-rid "${owner_rid}" \
     --bind-endpoint "tcp://127.0.0.1:${setup_port}" --event-file "${setup_events}" \
     --start-file "${start_file}"
@@ -1447,7 +1451,10 @@ PYTHON
   touch "${start_file}"
   assert_source_actor_create "${setup_events}" "${setup_rid}" "${owner_rid}"
   wait_for_line "${setup_events}" 'user-spot-join-request-reply|accepted=true' 60
-  wait_for_canonical_actor_join "${owner_events}.flow"
+  # The Java setup used for .NET and Java owners does not log command 28.
+  if [[ "${setup_lang}" == node ]]; then
+    wait_for_canonical_actor_join "${owner_events}.flow"
+  fi
   wait_for_line "${owner_events}" "late-actor-completion-throw|actor=${actor_id}|nodeRid=${owner_rid}" 60
   wait_for_line "${owner_events}.flow" 'error_message=cross-language Join completion failure' 15
 

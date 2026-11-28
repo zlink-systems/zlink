@@ -257,7 +257,7 @@ void test_application_relocation_remote_production_path (test_context_t &test,
         target.native_node ().objects ().configure_relocation_materialization (
           [] (const auto &, const auto &, const auto &,
               std::stop_token) -> framework::task_t<bool> { co_return true; },
-          [&] (const auto &) {
+          [&] (const auto &, const auto &) {
               lifecycle_callback_entered.store (true, std::memory_order_release);
               release.get ();
               return true;

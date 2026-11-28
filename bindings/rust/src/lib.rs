@@ -16,141 +16,59 @@
 //! - **Socket capability isolation**: each socket type exposes only its own
 //!   capabilities (e.g. `PubSocket` has no `recv`).
 
-#[path = "runtime/native/ffi.rs"]
-mod ffi;
+mod contracts;
 mod internal;
-
-#[path = "contracts/core/context.rs"]
-mod core_context;
-#[path = "contracts/core/utilities.rs"]
-mod core_utilities;
-#[path = "runtime/handles/ctx.rs"]
-mod ctx;
-#[path = "contracts/messaging/received.rs"]
-mod domain;
-#[path = "contracts/errors/errors.rs"]
-mod error;
-#[path = "contracts/sockets/socket_options.rs"]
-mod flags;
-#[path = "contracts/messaging/message.rs"]
-mod message;
-#[path = "runtime/messaging/message.rs"]
-mod message_factory;
-#[path = "contracts/sockets/message_socket_contracts.rs"]
-mod message_socket_contracts;
-#[path = "contracts/messaging/operation_contracts.rs"]
-mod messaging_operation_contracts;
-#[path = "contracts/messaging/operations.rs"]
-mod messaging_operations;
-#[path = "contracts/messaging/subscription_event.rs"]
-mod messaging_subscription_event;
-#[path = "runtime/eventing/monitor.rs"]
-mod monitor;
-#[path = "contracts/eventing/monitor.rs"]
-mod monitor_contracts;
-#[path = "runtime/errors/native_errors.rs"]
-mod native_errors;
-#[path = "runtime/native/routing_id.rs"]
-mod native_routing_id;
-#[path = "runtime/messaging/operations/mod.rs"]
-mod operations;
-#[path = "runtime/sockets/options.rs"]
-mod options;
-#[path = "runtime/eventing/poller.rs"]
-mod poller;
-#[path = "contracts/eventing/poller.rs"]
-mod poller_contracts;
-#[path = "contracts/sockets/pubsub_socket_contracts.rs"]
-mod pubsub_socket_contracts;
-#[path = "runtime/messaging/domain.rs"]
-mod received_operations;
-#[path = "contracts/errors/results.rs"]
-mod results;
-#[path = "contracts/sockets/routed_socket_contracts.rs"]
-mod routed_socket_contracts;
-#[path = "contracts/core/routing_id.rs"]
-mod routing_id;
-#[path = "runtime/core/runtime.rs"]
+mod native;
 mod runtime;
-#[path = "runtime/sockets/socket/mod.rs"]
-mod socket;
-#[path = "contracts/sockets/socket.rs"]
-mod socket_contracts;
-#[path = "contracts/sockets/stream_socket.rs"]
-mod stream_socket_contract;
-#[path = "contracts/messaging/topic_message.rs"]
-mod topic_message_contract;
 
 // -- Public re-exports -------------------------------------------------------
 
-pub use core_context::{
+pub use contracts::core::context::{
     AutoHwmProfile, AutoHwmRecalcReason, Context, ContextOptions, CoreHwmBudgetSnapshot,
 };
-pub use core_utilities::{AtomicCounter, Stopwatch, Thread};
-pub use domain::{Received, ReplyToken};
-pub use error::{
+pub use contracts::core::routing_id::RoutingId;
+pub use contracts::core::utilities::{AtomicCounter, Stopwatch, Thread};
+pub use contracts::errors::errors::{
     BindError, CloseError, ConfigError, ConnectError, HandlerError, RecvError, RequestError,
     SubmitError, ZlinkError,
 };
-pub use flags::{
-    CommonSocketOptions, DealerSocketOptions, PubSocketOptions, ReceiveFlowState, RecvFlags,
-    RidDuplicatePolicy, RouterSocketOptions, SendFlags, StreamRecvMode, StreamSocketOptions,
-    SubSocketOptions, SubmitRetryMode,
+pub use contracts::errors::results::{
+    BindResult, CloseResult, ConfigResult, ConnectResult, HandlerResult, RecvResult, RequestResult,
+    SubmitResult,
 };
-pub use message::Message;
-pub use message_socket_contracts::{DealerSocket, PairSocket};
-pub use messaging_operation_contracts::{CompletionKind, SendResult};
-pub use messaging_operations::{
-    Empty, PublishOp, Ready, ReplyOp, RequestOp, RequestSubmission, SendOp, SendSubmission,
-};
-pub use messaging_subscription_event::SubscriptionEvent;
-pub use monitor_contracts::{
+pub use contracts::eventing::monitor::{
     MONITOR_EVENT_ALL, MONITOR_EVENT_CONNECTION_READY, MonitorEvent, MonitorEventFlags,
     MonitorEventType, MonitorSourceKind, MonitorStatus, Monitorable, SocketMonitor,
     SocketMonitorEventMask, SocketMonitorOpenOptions,
 };
-pub use poller_contracts::{
-    POLLCOMPLETION, POLLIN, POLLOUT, POLLROUTE, PollEvent, PollItem, PollSourceKind, Pollable,
-    Poller, Timer,
+pub use contracts::eventing::poller::{
+    POLLCOMPLETION, POLLCONNECT, POLLIN, POLLOUT, POLLROUTE, PollEvent, PollItem, PollSourceKind,
+    Pollable, Poller,
 };
-pub use pubsub_socket_contracts::{PubSocket, SubSocket, XPubSocket, XSubSocket};
-pub use results::{
-    BindResult, CloseResult, ConfigResult, ConnectResult, HandlerResult, RecvResult, RequestResult,
-    SubmitResult,
+pub use contracts::eventing::timer::Timer;
+pub use contracts::messaging::message::Message;
+pub use contracts::messaging::operation_contracts::{CompletionKind, SendResult};
+pub use contracts::messaging::operations::{
+    Empty, PublishOp, Ready, ReplyOp, RequestOp, RequestSubmission, SendOp, SendSubmission,
 };
-pub use routed_socket_contracts::{RouterRoute, RouterSocket};
-pub use routing_id::RoutingId;
-pub use stream_socket_contract::{StreamPacket, StreamSocket};
-pub use topic_message_contract::TopicMessage;
+pub use contracts::messaging::received::{Received, ReplyToken};
+pub use contracts::messaging::subscription_event::SubscriptionEvent;
+pub use contracts::messaging::topic_message::TopicMessage;
+pub use contracts::sockets::connection_attempt::{
+    ConnectionAttempt, ConnectionAttemptState, ConnectionFailure, ConnectionFailureKind,
+    ConnectionFailureStage,
+};
+pub use contracts::sockets::dealer_socket::DealerSocket;
+pub use contracts::sockets::pair_socket::PairSocket;
+pub use contracts::sockets::pubsub_sockets::{PubSocket, SubSocket, XPubSocket, XSubSocket};
+pub use contracts::sockets::router_socket::{RouterRoute, RouterSocket};
+pub use contracts::sockets::socket_options::{
+    CommonSocketOptions, DealerSocketOptions, PubSocketOptions, ReceiveFlowState, RecvFlags,
+    RidDuplicatePolicy, RouterSocketOptions, SendFlags, StreamRecvMode, StreamSocketOptions,
+    SubSocketOptions, SubmitRetryMode,
+};
+pub use contracts::sockets::stream_socket::{StreamPacket, StreamSocket};
 
-pub fn version() -> (i32, i32, i32) {
-    ctx::version()
-}
-
-pub fn has(capability: &str) -> bool {
-    ctx::has(capability)
-}
-
-pub fn strerror(errnum: i32) -> &'static str {
-    ctx::strerror(errnum)
-}
-
-pub fn proxy(
-    frontend: &dyn Pollable,
-    backend: &dyn Pollable,
-    capture: Option<&dyn Pollable>,
-) -> Result<(), ConfigError> {
-    runtime::proxy(frontend, backend, capture)
-}
-
-pub fn sleep(seconds: i32) {
-    runtime::sleep(seconds);
-}
-
-pub fn multipart_close(parts: &mut [Message]) {
-    runtime::multipart_close(parts);
-}
-
-pub fn poll(items: &mut [PollItem], timeout_ms: i64) -> Result<i32, ConfigError> {
-    poller::poll(items, timeout_ms)
-}
+pub use runtime::core::runtime::{multipart_close, proxy, sleep};
+pub use runtime::eventing::poller::poll;
+pub use runtime::handles::ctx::{has, strerror, version};

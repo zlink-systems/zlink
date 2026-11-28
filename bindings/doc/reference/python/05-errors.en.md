@@ -65,17 +65,19 @@ except SubmitError as ex:
 
 | Member | Meaning |
 | --- | --- |
-| `ZlinkError(code: int, native_errno: int = 0)` | a plain public constructor (unlike languages where the base is protected/abstract and only reachable via a subclass) |
+| `ZlinkError(code: int, internal_errno: int = 0)` | constructs the base error type directly |
 | `code` | property, the zlink result code that classifies the failure |
-| `native_errno` | property, the underlying native errno, `0` when none |
+| `internal_errno` | property that returns the errno underlying the failure, or `0` when none is available |
 | `_TypedZlinkError.result` | property, the typed result enum; declared on the non-public intermediate every typed exception actually derives from — its `__init__` **catches a `ValueError` when the raw code doesn't match any known enum member and preserves the raw integer instead of raising or silently mapping to an unrelated value**, specifically to tolerate a newer Core version reporting a result this binding doesn't know about yet |
+
+`native_errno` is a deprecated alias that returns the same value as `internal_errno`. It will be removed in the next breaking release.
 
 **Completion result.** N/A — this is the exception hierarchy itself, extending the built-in
 `RuntimeError`.
 
-**When to use.** Catch the specific typed exception (`SubmitError`, etc.) to read its typed
-`.result`, or catch the shared `ZlinkError` when only `.code`/`.native_errno` are needed generically
-across exception types. No-data and transient back-pressure are never reported as an ordinary
+**When to use.** Catch a specific exception such as `SubmitError` to read its typed `.result`.
+Catch `ZlinkError` to read `.code` and `.internal_errno` across exception types.
+No-data and transient back-pressure are never reported as an ordinary
 exception — see the Sockets/Messaging categories' `bool`/`None`-returning `recv_into`/`submit`
 conventions instead. Because `.result` can hold a raw `int` instead of the enum when talking to a
 newer Core, compare it with `==` against the enum member rather than assuming `isinstance(ex.result,

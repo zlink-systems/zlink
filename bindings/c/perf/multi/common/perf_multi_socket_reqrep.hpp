@@ -529,7 +529,7 @@ inline bool drain_pending_replies (const endpoint_config_t &config,
       std::chrono::steady_clock::now () + std::chrono::milliseconds (drain_ms);
     while ((any_waiting_reply (*state) || any_retained_request (*state))
            && std::chrono::steady_clock::now () < deadline) {
-        const int wait_ms = poll_timeout_until (deadline, 50);
+        const int wait_ms = poll_timeout_until (deadline, perf_multi_measurement::max_wait_ms);
         const int event_count =
           zlink_poller_wait (state->poller, state->events.empty () ? NULL : &state->events[0],
                              static_cast<int> (state->events.size ()), wait_ms, NULL);
@@ -610,7 +610,7 @@ inline bool run_measurement_window (const endpoint_config_t &config,
     for (size_t i = 0; i < state->slots.size (); ++i)
         state->slots[i].next_seq = 1;
 
-    size_t submit_cursor = 0;
+    perf_multi_measurement::sender_rotation_t senders (state->slots.size ());
     const size_t submit_count =
       request_submit_progress_quantum (msg_size, state->slots.size (),
                                         websocket_transport);
@@ -625,10 +625,10 @@ inline bool run_measurement_window (const endpoint_config_t &config,
     while (std::chrono::steady_clock::now () < deadline && !state->fatal) {
         bool submitted = false;
         for (size_t offset = 0; offset < submit_count; ++offset) {
-            const size_t i = (submit_cursor + offset) % state->slots.size ();
-            client_slot_t &slot = state->slots[i];
             if (schedule && !schedule->due (perf_multi_metric::now_ns ()))
                 break;
+            client_slot_t &slot = state->slots[senders.index ()];
+            senders.advance ();
             bool blocked = false;
             if (!submit_request (config, &slot, target_rid_ptr, run_id, msg_size,
                                  request_timeout_ms, &blocked)) {
@@ -638,19 +638,18 @@ inline bool run_measurement_window (const endpoint_config_t &config,
             if (!blocked)
                 submitted = true;
         }
-        submit_cursor = (submit_cursor + submit_count) % state->slots.size ();
         if (state->fatal)
             break;
         // Keep the next send deadline absolute (epoch + k/rate) so poll
         // wakeups do not accumulate scheduling drift. Completions wake early.
-        auto poll_deadline = deadline;
-        if (!submitted && schedule && !schedule->due (perf_multi_metric::now_ns ())) {
-            const auto next_send_deadline = std::chrono::steady_clock::time_point (
-              std::chrono::duration_cast<std::chrono::steady_clock::duration> (
-                std::chrono::nanoseconds (schedule->next_ns ())));
-            poll_deadline = std::min (poll_deadline, next_send_deadline);
-        }
-        const int wait_ms = submitted ? 0 : poll_timeout_until (poll_deadline, 50);
+        int wait_ms =
+          submitted ? 0 : poll_timeout_until (deadline, perf_multi_measurement::max_wait_ms);
+        if (!submitted && schedule && !schedule->due (perf_multi_metric::now_ns ()))
+            wait_ms = schedule->wait_ms (
+              perf_multi_metric::now_ns (),
+              static_cast<uint64_t> (
+                std::chrono::duration_cast<std::chrono::nanoseconds> (deadline.time_since_epoch ())
+                  .count ()));
         const int event_count =
           zlink_poller_wait (state->poller, state->events.empty () ? NULL : &state->events[0],
                              static_cast<int> (state->events.size ()), wait_ms, NULL);

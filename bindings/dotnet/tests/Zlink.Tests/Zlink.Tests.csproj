@@ -19,6 +19,12 @@
     <ProjectReference Include="../../src/Zlink/Zlink.csproj" />
   </ItemGroup>
 
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+    <None Update="Native/subscription_at_shim.c" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../cpp/include/zlink_errno.h" Link="Native/zlink_errno.h"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- Compile the exact perf coordinator primitive into the test assembly so
          its wake-up races can be tested without exposing a benchmark-internal

@@ -1,5 +1,5 @@
-use crate::error::ConfigError;
-use crate::results::ConfigResult;
+use crate::contracts::errors::errors::ConfigError;
+use crate::contracts::errors::results::ConfigResult;
 
 /// A validated routing identifier.
 ///

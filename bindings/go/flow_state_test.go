@@ -361,3 +361,20 @@ func TestExistingHWMBehaviorUnchangedAfterReceiveFlowStateCalls(t *testing.T) {
 		t.Fatalf("unexpected response = %q", string(part.Data()))
 	}
 }
+
+func TestMonitorStatusTypedFlags(t *testing.T) {
+	var nilStatus *zlink.MonitorStatus
+	if nilStatus.State() != 0 || nilStatus.Detail() != 0 {
+		t.Fatalf("nil status flags = (%v, %v), want zero", nilStatus.State(), nilStatus.Detail())
+	}
+	status := zlink.MonitorStatus{StateFlags: 1<<0 | 1<<3, DetailFlags: 1<<1 | 1<<5}
+	if st := status.State(); !st.Has(zlink.MonitorStateReady) || !st.Has(zlink.MonitorStateClosed) || st.Has(zlink.MonitorStateBoundReady) {
+		t.Fatalf("State() = %#x, want Ready|Closed", uint32(st))
+	}
+	if d := status.Detail(); !d.Has(zlink.MonitorDetailSndPendingMsgs) || !d.Has(zlink.MonitorDetailFlowState) || d.Has(zlink.MonitorDetailAutoHwmBudget) {
+		t.Fatalf("Detail() = %#x, want SndPendingMsgs|FlowState", uint32(d))
+	}
+	if !status.IsReady() || !status.IsFlowStateDetailPopulated() {
+		t.Fatalf("helpers disagree with typed flags")
+	}
+}

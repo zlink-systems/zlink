@@ -93,7 +93,7 @@ raise `ConnectError`, and TLS configuration failures raise `ConfigError`.
 
 SUB and XSUB configure and remove filters with `set_subscription(topic)` and `unset_subscription(topic)`.
 `subscription_at(index)` returns the filter and whether it is a pattern, or `None` if the index has no
-entry. XPUB uses `receive_subscription_event_into(event: SubscriptionEvent, *, flags: int = 0) -> bool` to
+entry. The query rule is [the common Subscription Query](../README.en.md#subscription-query). XPUB uses `receive_subscription_event_into(event: SubscriptionEvent, *, flags: int = 0) -> bool` to
 fill storage created with `create_subscription_event()`.
 
 Every socket exposes the `options` property. Use `router_options`, `dealer_options`, and `stream_options`
@@ -106,7 +106,7 @@ currently selects. `RouterRoute` exposes `routing_id`, `route_generation`. The r
 nonzero opaque token. Compare it only for equality. `PollEventFlag.POLLROUTE` signals a change in a
 selected route.
 
-A connection-attempt snapshot returns one row per outbound connect registration. The target surface (**not implemented yet**, #5752) is
+A connection-attempt snapshot returns one row per outbound connect registration. The surface is
 `connection_attempts_snapshot() -> List[ConnectionAttempt]` on raw sockets other than STREAM, with Poller
 readiness `PollEventFlag.POLLCONNECT`. `ConnectionAttempt` contains `endpoint`, `intent_id`, `revision`,
 `last_failure_id`, `state`, `last_failure`. `ConnectionFailure` contains `kind`, `stage`,
@@ -230,7 +230,7 @@ Function-family errors preserve the 66 non-OK codes in the
 these codes. `ErrorCode` enumerates Core-specific errno values.
 
 A call that returns a Core result gives its matching Python error `result`,
-`code`, and `native_errno`. An input-format error can be checked before the
+`code`, and `internal_errno`. An input-format error can be checked before the
 call, but a native operation failure is never turned into a plain
 `ValueError`. `SubmitError`, `RequestError`, `RecvError`, `BindError`,
 `ConnectError`, `ConfigError`, `CloseError`, and `HandlerError` are all in

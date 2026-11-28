@@ -2,6 +2,18 @@
 
 #include "provider_location_repository.hpp"
 
+#include "runtime/execution/task_result.hpp"
+#include "runtime/locations/aggregate_inventory.hpp"
+#include "runtime/locations/authority_aggregate_relocation.hpp"
+#include "runtime/locations/base64.hpp"
+#include "runtime/locations/location_record_fields.hpp"
+#include "runtime/locations/location_store_write.hpp"
+#include "runtime/locations/sha256.hpp"
+
+#include <zlink/framework/detail/binary_text_codec.hpp>
+
+#include <nlohmann/json.hpp>
+
 #include <charconv>
 #include <limits>
 #include <span>
