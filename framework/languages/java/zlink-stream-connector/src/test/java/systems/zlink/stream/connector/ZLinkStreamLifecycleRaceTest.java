@@ -2,6 +2,7 @@ package systems.zlink.stream.connector;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -12,16 +13,20 @@ import com.sun.jdi.event.EventSet;
 import com.sun.jdi.request.BreakpointRequest;
 import com.sun.jdi.request.EventRequest;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.time.Duration;
-import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Spec 32 §6 and Java §10: connection admission is atomic and CLOSED is terminal. */
 final class ZLinkStreamLifecycleRaceTest {
@@ -39,7 +44,7 @@ final class ZLinkStreamLifecycleRaceTest {
      * the connections accepted by the server.
      */
     @ParameterizedTest
-    @ValueSource(strings = {"connect", "receiveFailure", "serverClosing"})
+    @ValueSource(strings = {"connect", "receiveFailure"})
     void lifecycleRaceHasOneAdmissionAndATerminalClose(String scenario) throws Exception {
         var launcher = Bootstrap.virtualMachineManager().defaultConnector();
         var arguments = launcher.defaultArguments();
@@ -194,6 +199,71 @@ final class ZLinkStreamLifecycleRaceTest {
         }
     }
 
+    @Test
+    void serverClosingRaceLeavesConnectorClosed() throws Exception {
+        var ending = new ScriptedStreamTransport.EndingGate();
+        var transport = new ScriptedStreamTransport(ending);
+        var opens = new AtomicInteger();
+        ZLinkStreamConnector connector =
+                new DefaultZLinkStreamConnector(
+                        ScriptedStreamTransport.options(),
+                        () -> {
+                            opens.incrementAndGet();
+                            return CompletableFuture.completedFuture(transport);
+                        });
+        try (var racers = Executors.newFixedThreadPool(2)) {
+            try {
+                connector
+                        .connect()
+                        .submit()
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                var serverClosing = racers.submit(transport::deliverServerDrain);
+                ending.awaitEntered(WAIT_SECONDS);
+                assertFalse(connector.isConnected());
+
+                var clientClosing =
+                        racers.submit(
+                                () ->
+                                        connector
+                                                .close()
+                                                .submit()
+                                                .toCompletableFuture()
+                                                .get(WAIT_SECONDS, TimeUnit.SECONDS));
+                clientClosing.get(WAIT_SECONDS, TimeUnit.SECONDS);
+                assertEquals(ZLinkStreamConnectionState.CLOSED, connector.state());
+
+                ending.release();
+                serverClosing.get(WAIT_SECONDS, TimeUnit.SECONDS);
+
+                assertEquals(ZLinkStreamConnectionState.CLOSED, connector.state());
+                assertEquals(
+                        Optional.of(ZLinkStreamCloseReason.SERVER_DRAIN), connector.closeReason());
+                var failure =
+                        assertThrows(
+                                ExecutionException.class,
+                                () ->
+                                        connector
+                                                .connect()
+                                                .submit()
+                                                .toCompletableFuture()
+                                                .get(WAIT_SECONDS, TimeUnit.SECONDS));
+                assertEquals(
+                        ZLinkStreamErrorCode.DISCONNECTED,
+                        assertInstanceOf(ZLinkStreamException.class, failure.getCause())
+                                .errorCode());
+                assertEquals(1, opens.get(), "transport connect attempts");
+            } finally {
+                ending.release();
+                connector
+                        .close()
+                        .submit()
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            }
+        }
+    }
+
     public static final class Probe {
         public static void main(String[] args) throws Exception {
             String scenario = args[0];
@@ -246,21 +316,7 @@ final class ZLinkStreamLifecycleRaceTest {
                                     return CompletableFuture.completedFuture(null);
                                 });
                         assertFalse(server.hasAdditionalConnection(Duration.ZERO));
-                        if (scenario.equals("receiveFailure")) {
-                            server.closeCurrentSocket();
-                        } else {
-                            server.sendAsync(
-                                            new ZLinkStreamWireProtocol.Header(
-                                                    ZLinkStreamWireProtocol.KIND_CONTROL,
-                                                    ZLinkStreamWireProtocol.CODEC_RAW,
-                                                    0,
-                                                    null,
-                                                    ZLinkSessionClosingControl.NAME,
-                                                    Map.of(),
-                                                    null),
-                                            new byte[] {1, 4, 0, 0})
-                                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
-                        }
+                        server.closeCurrentSocket();
                     }
                     assertEquals(
                             "proceed",
