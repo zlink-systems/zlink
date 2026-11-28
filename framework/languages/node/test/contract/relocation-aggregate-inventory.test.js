@@ -17,6 +17,10 @@ const {
   decodeAggregateRecord,
   encodeAggregateRecord
 } = require('../../packages/framework/dist/runtime/locations/location-store-repository');
+const {
+  encodeServiceRelocationEnvelope,
+  serviceRelocationIdFromWire
+} = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
 
 function providerKey(goldenKey) {
   assert(goldenKey.startsWith('golden:'));
@@ -110,6 +114,33 @@ for (const vector of [...golden.cases, golden.directJoin]) {
   });
 }
 
+test('§8.3 storage keys match golden', async () => {
+  const { caseName, input, expected } = golden.storageKeys;
+  const hex = input.aggregateId.replaceAll('-', '');
+  const fence = {
+    aggregateId: {
+      value: serviceRelocationIdFromWire({
+        high: BigInt(`0x${hex.slice(0, 16)}`),
+        low: BigInt(`0x${hex.slice(16)}`)
+      })
+    },
+    aggregateGeneration: BigInt(input.aggregateGeneration)
+  };
+  const { participants } = fixtureInventory(golden.cases.find(({ name }) => name === caseName));
+  const provider = new ZLinkInMemoryProviderLocationStore();
+  await new ZLinkAggregateInventoryStore(provider).store({ ...fence, participants });
+
+  assert.equal(aggregateKey(fence).value, expected.aggregate);
+  for (const key of [
+    expected.root,
+    expected.page,
+    expected.authorityPayload,
+    expected.membershipMutation
+  ]) {
+    assert.equal((await provider.read(storeKey(key))).kind, 'found', key);
+  }
+});
+
 test('§8.3 aggregate records reject noncanonical bytes and different identities', () => {
   const vector = golden.cases[0];
   const { fence } = fixtureInventory(vector);
@@ -181,9 +212,6 @@ const {
   ZLinkHostServiceRelocationRuntime,
   relocationFailedFailureCode
 } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
-const {
-  encodeServiceRelocationEnvelope
-} = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
 const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');

@@ -10,6 +10,7 @@
 #include "../support/stateful_object_sync.hpp"
 
 #include <bit>
+#include <charconv>
 #include <filesystem>
 #include <fstream>
 
@@ -32,8 +33,11 @@ TEST (AuthorityAggregateRelocation, ProviderSealMatchesAggregateStorageGolden)
       / "aggregate-storage-v1.json";
     std::ifstream fixture (fixture_path);
     const auto golden = nlohmann::json::parse (fixture);
+    const auto &storage_keys = golden.at ("storageKeys");
+    const auto key_case = storage_keys.at ("caseName").get<std::string> ();
     for (const auto &item : golden.at ("cases")) {
         SCOPED_TRACE (item.at ("name").get<std::string> ());
+        const bool check_keys = item.at ("name") == key_case;
         in_memory_location_store_t provider;
         provider_location_repository_t repository (provider);
         const auto &record = item.at ("aggregate").at ("decoded");
@@ -45,9 +49,18 @@ TEST (AuthorityAggregateRelocation, ProviderSealMatchesAggregateStorageGolden)
         const auto membership = zlink::framework::tests::from_hex (
           hash_inputs.at ("membershipMutationHex").get<std::string> ());
         aggregate_fence_t fence;
-        const auto id = zlink::framework::tests::from_hex ("0123456789abcdef0123456789abcdef");
-        std::ranges::copy (id, fence.aggregate_id.value.begin ());
-        fence.aggregate_generation = 9007199254740993;
+        const auto &identity = check_keys ? storage_keys.at ("input") : record;
+        auto id = identity.at ("aggregateId").get<std::string> ();
+        std::erase (id, '-');
+        ASSERT_EQ (id.size (), 2 * fence.aggregate_id.value.size ());
+        for (std::size_t index = 0; index < fence.aggregate_id.value.size (); ++index) {
+            const auto *start = id.data () + 2 * index;
+            unsigned int byte = 0;
+            ASSERT_EQ (std::from_chars (start, start + 2, byte, 16).ptr, start + 2);
+            fence.aggregate_id.value[index] = static_cast<std::byte> (byte);
+        }
+        fence.aggregate_generation =
+          std::stoull (identity.at ("aggregateGeneration").get<std::string> ());
         std::vector<aggregate_participant_t> participants;
         for (const auto &page : item.at ("pages")) {
             for (const auto &entry : page.at ("decoded").at ("entries")) {
@@ -80,6 +93,25 @@ TEST (AuthorityAggregateRelocation, ProviderSealMatchesAggregateStorageGolden)
         EXPECT_EQ (read->size (), participants.size ());
         EXPECT_FALSE (
           repository.read_relocation_inventory (fence, std::string (64, '0')).result ().value ());
+        if (check_keys) {
+            const auto &expected = storage_keys.at ("expected");
+            for (const auto kind : {"root", "page", "authorityPayload", "membershipMutation"}) {
+                const auto key = expected.at (kind).get<std::string> ();
+                const auto row = provider.read ({key}).result ().value ();
+                EXPECT_TRUE (std::holds_alternative<store_found_t> (row)) << key;
+            }
+            const auto key = expected.at ("aggregate").get<std::string> ();
+            const auto body = zlink::framework::tests::from_hex (
+              item.at ("aggregate").at ("jcsHex").get<std::string> ());
+            store_write_request_t write;
+            write.mutations.push_back (store_put_t{{key}, body, {}});
+            ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+              provider.write (std::move (write)).result ().value ()));
+            const auto aggregate =
+              repository.read_aggregate_participants (fence).result ().value ();
+            ASSERT_TRUE (aggregate) << key;
+            EXPECT_EQ (aggregate->size (), participants.size ());
+        }
     }
 }
 

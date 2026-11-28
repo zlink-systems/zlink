@@ -7,6 +7,49 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class AggregateInventoryGoldenConformanceTests
 {
     [Fact]
+    public void StorageKeysMatchGolden()
+    {
+        using var fixture = LoadFixture();
+        var vector = fixture.RootElement.GetProperty("storageKeys");
+        var input = vector.GetProperty("input");
+        var expected = vector.GetProperty("expected");
+        var prefix = input.GetProperty("prefix").GetString()!;
+        var fence = new ZLinkAggregateFence(
+            input.GetProperty("aggregateId").GetGuid(),
+            ulong.Parse(input.GetProperty("aggregateGeneration").GetString()!)
+        );
+        var participantIndex = input.GetProperty("participantIndex").GetInt32();
+
+        Assert.Equal(
+            expected.GetProperty("aggregate").GetString(),
+            ZLinkAggregateInventory.AggregateKey(prefix, fence).Value
+        );
+        Assert.Equal(
+            expected.GetProperty("root").GetString(),
+            ZLinkAggregateInventory.RootKey(prefix, fence).Value
+        );
+        Assert.Equal(
+            expected.GetProperty("page").GetString(),
+            ZLinkAggregateInventory
+                .PageKey(
+                    prefix,
+                    fence,
+                    input.GetProperty("level").GetInt32(),
+                    input.GetProperty("pageIndex").GetInt32()
+                )
+                .Value
+        );
+        Assert.Equal(
+            expected.GetProperty("authorityPayload").GetString(),
+            ZLinkAggregateInventory.ParticipantKey(prefix, fence, participantIndex, false).Value
+        );
+        Assert.Equal(
+            expected.GetProperty("membershipMutation").GetString(),
+            ZLinkAggregateInventory.ParticipantKey(prefix, fence, participantIndex, true).Value
+        );
+    }
+
+    [Fact]
     public async Task DirectJoinUsesRelocationIdOnInitialSealAndRetry()
     {
         using var fixture = LoadFixture();

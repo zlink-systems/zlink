@@ -140,6 +140,34 @@ const storageGoldenBytes = readFileSync(
 );
 const storageGolden = JSON.parse(storageGoldenBytes);
 
+test("aggregate storage keys use lowercase UUIDs and unpadded decimal components", () => {
+  const { caseName, input, expected } = storageGolden.storageKeys;
+  assert.deepEqual(input, {
+    prefix: "zlink:v11:",
+    aggregateId: "01234567-89AB-CDEF-0123-456789ABCDEF",
+    aggregateGeneration: "9007199254740993",
+    level: 1,
+    pageIndex: 0,
+    participantIndex: 1024,
+  });
+  assert.deepEqual(expected, {
+    aggregate: "zlink:v11:aggregate:01234567-89ab-cdef-0123-456789abcdef:9007199254740993",
+    root: "zlink:v11:aggregate-inventory:01234567-89ab-cdef-0123-456789abcdef:9007199254740993:root",
+    page: "zlink:v11:aggregate-inventory:01234567-89ab-cdef-0123-456789abcdef:9007199254740993:page:1:0",
+    authorityPayload: "zlink:v11:aggregate-inventory:01234567-89ab-cdef-0123-456789abcdef:9007199254740993:participant:1024:authorityPayload",
+    membershipMutation: "zlink:v11:aggregate-inventory:01234567-89ab-cdef-0123-456789abcdef:9007199254740993:participant:1024:membershipMutation",
+  });
+  const inventory = storageGolden.cases.find(({ name }) => name === caseName);
+  const providerKey = (key) => key.replace(/^golden:/, input.prefix);
+  assert.equal(providerKey(inventory.aggregate.key), expected.aggregate);
+  assert.equal(providerKey(inventory.root.key), expected.root);
+  const page = inventory.pages.find(({ decoded }) =>
+    decoded.level === input.level && decoded.index === input.pageIndex);
+  assert.equal(providerKey(page.key), expected.page);
+  assert(inventory.pages.some(({ decoded }) =>
+    decoded.entries.some(({ index }) => index === input.participantIndex)));
+});
+
 test("aggregate storage generator reproduces the accepted and rejected fixture bytes", () => {
   assert(storageGolden.rejected, "aggregate storage fixture must include rejection vectors");
   assert.deepEqual(storageGolden.rejected.map(({ name }) => name), [

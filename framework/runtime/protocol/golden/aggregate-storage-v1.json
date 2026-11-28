@@ -2,6 +2,24 @@
   "spec": "01-location-runtime.ko.md#83-aggregate-기록과-이동-대상-목록의-저장-형식",
   "canonicalization": "RFC8785 (canonicalize@2.1.0)",
   "byteEncoding": "jcsHex is exact UTF-8 storage bytes; no BOM or trailing newline",
+  "storageKeys": {
+    "caseName": "two-level-1025",
+    "input": {
+      "prefix": "zlink:v11:",
+      "aggregateId": "01234567-89AB-CDEF-0123-456789ABCDEF",
+      "aggregateGeneration": "9007199254740993",
+      "level": 1,
+      "pageIndex": 0,
+      "participantIndex": 1024
+    },
+    "expected": {
+      "aggregate": "zlink:v11:aggregate:01234567-89ab-cdef-0123-456789abcdef:9007199254740993",
+      "root": "zlink:v11:aggregate-inventory:01234567-89ab-cdef-0123-456789abcdef:9007199254740993:root",
+      "page": "zlink:v11:aggregate-inventory:01234567-89ab-cdef-0123-456789abcdef:9007199254740993:page:1:0",
+      "authorityPayload": "zlink:v11:aggregate-inventory:01234567-89ab-cdef-0123-456789abcdef:9007199254740993:participant:1024:authorityPayload",
+      "membershipMutation": "zlink:v11:aggregate-inventory:01234567-89ab-cdef-0123-456789abcdef:9007199254740993:participant:1024:membershipMutation"
+    }
+  },
   "cases": [
     {
       "name": "small-3",

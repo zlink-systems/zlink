@@ -111,6 +111,26 @@ export function generateAggregateStorageFixtures(schema) {
   }
   const small = inventory("small-3", 3);
   const multiPage = inventory("two-level-1025", 1025);
+  const storageKeyInput = {
+    prefix: "zlink:v11:",
+    aggregateId: aggregateId.toUpperCase(),
+    aggregateGeneration,
+    level: 1,
+    pageIndex: 0,
+    participantIndex: 1024,
+  };
+  const storageKeyFields = { ...storageKeyInput, aggregateId: storageKeyInput.aggregateId.toLowerCase() };
+  const storageKeys = {
+    caseName: multiPage.name,
+    input: storageKeyInput,
+    expected: {
+      aggregate: keyFor("aggregate", storageKeyFields),
+      root: keyFor("root", storageKeyFields),
+      page: keyFor("page", { ...storageKeyFields, index: storageKeyInput.pageIndex }),
+      authorityPayload: keyFor("authorityPayload", { ...storageKeyFields, index: storageKeyInput.participantIndex }),
+      membershipMutation: keyFor("membershipMutation", { ...storageKeyFields, index: storageKeyInput.participantIndex }),
+    },
+  };
   const leaf = small.pages[0];
   const top = multiPage.pages.at(-1);
 
@@ -141,6 +161,7 @@ export function generateAggregateStorageFixtures(schema) {
   return {
     spec: storage.spec, canonicalization: "RFC8785 (canonicalize@2.1.0)",
     byteEncoding: "jcsHex is exact UTF-8 storage bytes; no BOM or trailing newline",
+    storageKeys,
     cases: [small, multiPage, inventory("empty-0", 0), inventory("byte-limited-256", 256, true),
       inventory("no-membership-change-1", 1, false, undefined, NO_MEMBERSHIP_CHANGE_HEX)],
     rejected,

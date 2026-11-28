@@ -145,6 +145,32 @@ final class ZLinkAggregateInventoryStoreTest {
     }
 
     @Test
+    void writesGoldenStorageKeys() {
+        var vector = GOLDEN.get("storageKeys");
+        var input = vector.get("input");
+        var expected = vector.get("expected");
+        var fence =
+                new ZLinkAggregateFence(
+                        UUID.fromString(input.get("aggregateId").asText()),
+                        Long.parseLong(input.get("aggregateGeneration").asText()));
+        var inventory = goldenRequest(named("cases", vector.get("caseName").asText()));
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var store = new ZLinkAggregateInventoryStore(provider);
+        store.store(fence, inventory.participants(), () -> false).toCompletableFuture().join();
+
+        assertEquals(
+                expected.get("aggregate").asText(),
+                ZLinkProviderAuthorityRepository.aggregateKey(fence).value());
+        for (String kind : List.of("root", "page", "authorityPayload", "membershipMutation")) {
+            String key = expected.get(kind).asText();
+            assertInstanceOf(
+                    ZLinkStoreReadFound.class,
+                    provider.read(new ZLinkStoreKey(key), () -> false).toCompletableFuture().join(),
+                    key);
+        }
+    }
+
+    @Test
     void writesDirectJoinInventoryWithRelocationIdAndGenerationOne() {
         JsonNode vector = GOLDEN.get("directJoin");
         JsonNode entry = vector.get("pages").get(0).get("decoded").get("entries").get(0);
