@@ -55,9 +55,15 @@ public sealed class BoundSessionCloseOrderTests
                 .GetListenerStatus(ZLinkListenerKind.Stream, "clients")
                 .Endpoint;
             var actors = app.Services.GetRequiredService<IZLinkActorClient>();
+            var actorManager = app.Services.GetRequiredService<IZLinkActorManager>();
             for (var iteration = 0; iteration < 40; iteration++)
             {
                 var actor = "ordered:" + Guid.NewGuid();
+                var created = await actorManager
+                    .Create(actor, "actor")
+                    .InMesh("disconnect")
+                    .Async();
+                Assert.IsType<ZLinkActorCreateResult.Created>(created);
                 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 using var peer = new TcpClient();
                 var address = new Uri(endpoint);

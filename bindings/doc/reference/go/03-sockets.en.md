@@ -243,10 +243,15 @@ so far. Subscription receive remains a pull-only path.
 | | `PubOptions() *PubSocketOptions` | the per-type options facade |
 | `SubSocket` / `XSubSocket` | `Subscribe(out *TopicMessage, flags RecvFlags) (bool, error)` | populates `out` with the next matching publish |
 | | `SetSubscription(filter string) error` / `UnsetSubscription(filter string) error` | adds/removes a topic filter; subscriptions accumulate |
-| | `SubscriptionAt(index int) (string, bool, error)` | a `(filter, isPattern, error)` triple — the filter at that index |
+| | `SubscriptionAt(index int) (Subscription, bool, error)` | returns the filter and pattern flag as `Subscription{Filter string; Pattern bool}`, or `(Subscription{}, false, nil)` when Core returns `ENOENT` |
 | | `TopicsCount() (int, error)` | active subscription count |
 | `XPubSocket` | `ReceiveSubscriptionEvent(out *SubscriptionEvent, flags RecvFlags) (bool, error)` | populates `out` with the next subscribe/unsubscribe, added on top of the `PubSocket` surface it embeds via `publishSocket` |
 | | `Publish(topic string) SendOp` | its own copy, not reused from `PubSocket`, though identical in shape |
+
+The binding supplies its own buffer on the first call to `zlink_subscription_at`. A successful
+call completes the query, including when the filter is empty. If Core returns `ENOBUFS`, the
+binding calls Core once more with the required length Core returned. Other Core failures
+return `*ConfigError`.
 
 **Completion result.** `Subscribe`/`ReceiveSubscriptionEvent` follow the same `(false,
 nil)`-on-`DontWait` convention.

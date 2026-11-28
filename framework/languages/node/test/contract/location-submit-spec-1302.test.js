@@ -314,39 +314,34 @@ test('Instance activation does not start payload put when its deadline expires d
 });
 
 for (const retryResult of ['conflict', 'missing']) {
-  test(`Relocation Store immediate ${retryResult} responses allow the operation deadline to terminate`, () => {
-    const { execFileSync } = require('node:child_process');
-    const repositoryPath = require.resolve('../../packages/framework/dist/runtime/locations/relocation-blob');
-    const operationDeadlineMs = 20;
-    const childWatchdogMs = 1000;
-    const source = `
-      const assert = require('node:assert/strict');
-      const { putNewRelocationBlob } = require(${JSON.stringify(repositoryPath)});
-      const signal = AbortSignal.timeout(${operationDeadlineMs});
-      const references = [];
-      const store = {
-        async put(reference) {
-          references.push(reference.value);
-          if (${JSON.stringify(retryResult)} === 'missing') throw new Error('Put response lost');
-          return { kind: 'conflict', storeNow: new Date(0) };
-        },
-        async read() { return { kind: 'missing', storeNow: new Date(0) }; }
-      };
-      putNewRelocationBlob(store, Uint8Array.of(1), 1000, signal).then(
-        () => { throw new Error('Unexpected Put success'); },
-        (error) => {
-          assert.equal(signal.aborted, true);
-          assert.equal(error, signal.reason);
-          assert.ok(references.length > 0);
-          if (${JSON.stringify(retryResult)} === 'missing') assert.equal(new Set(references).size, 1);
-          console.log('operation-deadline=terminated');
+  test(`Relocation Store immediate ${retryResult} responses allow the operation deadline to terminate`, async (context) => {
+    const controller = new AbortController();
+    const { signal } = controller;
+    const deadline = new DOMException('The operation deadline was exceeded.', 'TimeoutError');
+    const references = [];
+    const store = {
+      async put(reference) {
+        references.push(reference.value);
+        if (references.length === 2) {
+          // Deliver the deadline on the event loop while the store still responds immediately.
+          const expiry = setImmediate(() => controller.abort(deadline));
+          context.after(() => clearImmediate(expiry));
+        } else if (references.length > 2) {
+          throw new TypeError('A third write started before the deadline was processed');
         }
-      );
-    `;
-    const output = execFileSync(process.execPath, ['-e', source], {
-      timeout: childWatchdogMs,
-      encoding: 'utf8'
-    });
-    assert.match(output, /operation-deadline=terminated/u);
+        if (retryResult === 'missing') throw new Error('Put response lost');
+        return { kind: 'conflict', storeNow: new Date(0) };
+      },
+      async read() {
+        return { kind: 'missing', storeNow: new Date(0) };
+      }
+    };
+    await assert.rejects(
+      putNewRelocationBlob(store, Uint8Array.of(1), 1000, signal),
+      (error) => error === signal.reason
+    );
+    assert.equal(signal.aborted, true);
+    assert.equal(references.length, 2);
+    assert.equal(new Set(references).size, retryResult === 'missing' ? 1 : 2);
   });
 }

@@ -1,6 +1,7 @@
 #pragma once
 #include "world.hpp"
 #include "test_json.hpp"
+#include "server/shared/match_contracts.hpp"
 #include <zlink/stream_connector.hpp>
 #include <nlohmann/json.hpp>
 #include <variant>
@@ -21,7 +22,14 @@ inline void checked (sc::result_t<void> result)
 }
 class Client
 {
-    using Event = std::variant<TableView, HandDealt, HandResult, ActionRejected, SessionInfo>;
+    using Event = std::variant<TableView,
+                               HandDealt,
+                               HandResult,
+                               ActionRejected,
+                               SessionInfo,
+                               MatchQueued,
+                               MatchFound,
+                               MatchCancelled>;
     std::mutex mutex_;
     std::condition_variable changed_;
     std::vector<Event> pending_, history_;
@@ -42,7 +50,8 @@ class Client
     }
 
   public:
-    const std::string player_id, table_id;
+    std::string player_id;
+    const std::string table_id;
     Client (const std::string &endpoint, std::string player, std::string table) :
         player_id (std::move (player)), table_id (std::move (table))
     {
@@ -57,6 +66,9 @@ class Client
         listen<HandResult> ();
         listen<ActionRejected> ();
         listen<SessionInfo> ();
+        listen<MatchQueued> ();
+        listen<MatchFound> ();
+        listen<MatchCancelled> ();
         subscriptions_.push_back (connector_.on_error ([this] (const auto &error) {
             {
                 std::lock_guard lock (mutex_);
@@ -124,6 +136,24 @@ class Client
         healthy ();
         std::lock_guard lock (mutex_);
         pending_.clear ();
+    }
+    void require_match_sequence (const MatchFound &found)
+    {
+        std::lock_guard lock (mutex_);
+        const auto queued = std::ranges::find_if (history_, [&] (const Event &event) {
+            const auto *packet = std::get_if<MatchQueued> (&event);
+            return packet && packet->ticketId == found.ticketId;
+        });
+        const auto assigned = std::ranges::find_if (history_, [&] (const Event &event) {
+            const auto *packet = std::get_if<MatchFound> (&event);
+            return packet && packet->ticketId == found.ticketId;
+        });
+        const auto view = std::ranges::find_if (history_, [&] (const Event &event) {
+            const auto *packet = std::get_if<TableView> (&event);
+            return packet && packet->tableId == found.roomId;
+        });
+        require (queued < assigned && assigned < view && view != history_.end (),
+                 "Expected MatchQueued, MatchFound, then TableView");
     }
     void privacy (const HandDealt &own)
     {

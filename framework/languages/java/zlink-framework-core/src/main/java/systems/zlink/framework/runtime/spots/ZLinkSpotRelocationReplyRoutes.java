@@ -632,6 +632,10 @@ final class ZLinkSpotRelocationReplyRoutes {
 
         void completeLocal() {
             if (!released.compareAndSet(false, true)) return;
+            discardLocal();
+        }
+
+        private void discardLocal() {
             if (request) {
                 owner.completeLocal(operation);
             }
@@ -704,6 +708,19 @@ final class ZLinkSpotRelocationReplyRoutes {
             record();
             Registration current = inStateLane(() -> delegate);
             current.releaseForRelocation();
+        }
+
+        void discardLocal() {
+            stateLane
+                    .runNowOrQueue(
+                            () -> {
+                                completedLocally = true;
+                                return delegate;
+                            })
+                    .thenAccept(
+                            current -> {
+                                if (current != null) current.discardLocal();
+                            });
         }
 
         private <T> T inStateLane(Supplier<T> work) {

@@ -15,6 +15,7 @@ import systems.zlink.framework.actors.ZLinkActorDirectory;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorGetOrCreateCall;
 import systems.zlink.framework.actors.ZLinkActorJoinCall;
+import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
@@ -37,6 +38,8 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
@@ -103,6 +106,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
@@ -4393,6 +4397,53 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 .thenCompose(turn -> dispatches.enqueue(turn, operation));
     }
 
+    CompletionStage<Void> enqueueActorJoinCompletion(
+            ZLinkActor actor, ZLinkActorJoinCompletion completion) {
+        DefaultActorContext context = requireContext(actor);
+        return enqueueActorLifecycleTurn(
+                context.actorId(), () -> deliverActorJoinCompletion(context, completion));
+    }
+
+    public CompletionStage<Void> deliverActorJoinCompletion(
+            PreparedTransferredActor prepared, ZLinkActorJoinCompletion completion) {
+        prepared.requireOwner(this);
+        return deliverActorJoinCompletion(prepared.context, completion);
+    }
+
+    CompletionStage<Void> deliverActorJoinCompletion(
+            DefaultActorContext context, ZLinkActorJoinCompletion completion) {
+        ZLinkActor actor = context.actor();
+        CompletionStage<Void> callback =
+                ZLinkSerialExecutionQueue.manageCurrent(
+                        invokeActorLifecycle(
+                                actor,
+                                () -> {
+                                    CompletionStage<Void> stage = actor.onJoinCompleted(completion);
+                                    return stage == null
+                                            ? CompletableFuture.completedFuture(null)
+                                            : stage;
+                                }));
+        if (!(completion instanceof ZLinkActorJoinCompletion.Accepted)) return callback;
+        return callback.exceptionally(
+                failure -> {
+                    // Keep the committed Join's handoff running and refuse application turns.
+                    context.state.sealDeferredJoin();
+                    Throwable cause = unwrap(failure);
+                    if (flow != null) {
+                        flow.reportFailure(
+                                ZLinkDispatchErrorSurface.ACTOR_RELOCATION,
+                                ZLinkDispatchMessageKind.CONTROL,
+                                ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                                ZLinkDispatchErrorAction.DROP,
+                                "OnJoinCompleted",
+                                context.actorId(),
+                                cause);
+                    }
+                    LOGGER.log(Level.WARNING, "Actor Join completion callback failed", cause);
+                    return null;
+                });
+    }
+
     public <T> CompletionStage<T> invokeActorLifecycle(
             ZLinkActor actor, Supplier<CompletionStage<T>> operation) {
         Objects.requireNonNull(actor, "actor");
@@ -5212,6 +5263,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
         void releaseDeferredJoin(Object claim) {
             state.releaseDeferredJoin(claim);
+        }
+
+        void requireApplicationExecution() {
+            state.requireApplicationExecution();
         }
 
         void beginMove() {

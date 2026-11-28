@@ -774,8 +774,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             unindexDeadline(current);
             // E5 already removed completed entries; wheel cleanup does not claim them again.
             if (take(current) == null) continue;
-            current.completeWithFailure(
-                    Objects.requireNonNull(timeoutFailure.get(), "timeout failure"));
+            current.completeExpired(timeoutFailure, deadlineOrigin, nowNanos);
             current.dispatchNext(null);
             if (expiredTail == null) expiredHead = current;
             else expiredTail.dispatchNext(current);
@@ -1193,6 +1192,14 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             completeWithoutValue(FAILURE, failure);
         }
 
+        void completeExpired(
+                Supplier<? extends Throwable> timeoutFailure,
+                long deadlineOrigin,
+                long ownerVisitNanos) {
+            completeWithoutValue(
+                    FAILURE, Objects.requireNonNull(timeoutFailure.get(), "timeout failure"));
+        }
+
         void completeWithCancellation() {
             completeWithoutValue(CANCELLATION, null);
         }
@@ -1266,6 +1273,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private static final class ObservedEntry<T> extends Entry<T> {
         private final ZLinkServiceRequestProgress.Recording progress;
         private long expired;
+        private long scheduledDeadlineNanos;
+        private long ownerVisitNanos;
 
         private ObservedEntry(
                 UUID id,
@@ -1278,18 +1287,38 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
         @Override
         void completeWithFailure(Throwable failure) {
-            if (failure instanceof TimeoutException
-                    || failure instanceof ZLinkFrameworkException typed
-                            && typed.kind() == ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) {
-                expired = progress.elapsed();
+            if (isDeadlineFailure(failure)) expired = progress.elapsed();
+            super.completeWithFailure(failure);
+        }
+
+        @Override
+        void completeExpired(
+                Supplier<? extends Throwable> timeoutFailure,
+                long deadlineOrigin,
+                long ownerVisitNanos) {
+            long terminal = progress.elapsed();
+            Throwable failure = Objects.requireNonNull(timeoutFailure.get(), "timeout failure");
+            if (isDeadlineFailure(failure)) {
+                expired = terminal;
+                scheduledDeadlineNanos = deadlineOrigin + super.deadlineTick * DEADLINE_TICK_NANOS;
+                this.ownerVisitNanos = ownerVisitNanos;
             }
             super.completeWithFailure(failure);
+        }
+
+        private static boolean isDeadlineFailure(Throwable failure) {
+            return failure instanceof TimeoutException
+                    || failure instanceof ZLinkFrameworkException typed
+                            && typed.kind() == ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED;
         }
 
         @Override
         void dispatch() {
             try {
-                if (expired != 0) progress.report(expired);
+                if (expired != 0) {
+                    progress.report(
+                            expired, scheduledDeadlineNanos, ownerVisitNanos, System.nanoTime());
+                }
             } finally {
                 super.dispatch();
             }

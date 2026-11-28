@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include "../support/discarded_authority_fixture.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 
 namespace
 {
@@ -38,7 +39,7 @@ TEST_P (DiscardedAuthority, PreserveReplacesOnlyLeaseToken)
                             .capacity;
     EXPECT_EQ (released.actors.active, 0u);
     owner = next;
-    const auto later = create ("later");
+    const auto later = create ("actor");
     EXPECT_EQ (later.object_generation, before.object_generation + 1);
     EXPECT_EQ (later.authority_owner_generation, before.authority_owner_generation + 1);
 }
@@ -202,8 +203,8 @@ TEST_P (DiscardedAuthority, SpotCleanupRequiresEveryMemberToBeRemoved)
 
 TEST_P (DiscardedAuthority, StaleCleanupKeepsOtherActorAndGenerationCapacity)
 {
-    const auto before = create ("actor");
     const auto other = create ("other");
+    const auto before = create ("actor");
     const auto next = replace_owner ();
     const auto writes = opaque.writes.size ();
     EXPECT_TRUE (repository->cleanup_discarded (actor_authority_key ("actor"), before, next)
@@ -218,9 +219,9 @@ TEST_P (DiscardedAuthority, StaleCleanupKeepsOtherActorAndGenerationCapacity)
                                std::string ("authority") + '\0' + "actor" + '\0' + "actor");
     }
     owner = next;
-    const auto after = create ("new");
-    EXPECT_EQ (after.object_generation, other.object_generation + 1);
-    EXPECT_EQ (after.authority_owner_generation, other.authority_owner_generation + 1);
+    const auto after = create ("actor");
+    EXPECT_EQ (after.object_generation, before.object_generation + 1);
+    EXPECT_EQ (after.authority_owner_generation, before.authority_owner_generation + 1);
 }
 
 TEST_P (DiscardedAuthority, SpotScanFailureOrExpiryNeverMeansZeroRows)

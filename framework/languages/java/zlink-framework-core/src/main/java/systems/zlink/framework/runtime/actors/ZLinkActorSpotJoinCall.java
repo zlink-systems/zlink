@@ -402,14 +402,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     }
 
     private CompletionStage<Void> notifyCompletion(ZLinkActorJoinCompletion completion) {
-        try {
-            CompletionStage<Void> stage = context.actor().onJoinCompleted(completion);
-            CompletionStage<Void> normalized =
-                    stage == null ? CompletableFuture.completedFuture(null) : stage;
-            return normalized;
-        } catch (RuntimeException error) {
-            return CompletableFuture.failedFuture(error);
-        }
+        return services.actors().deliverActorJoinCompletion(context, completion);
     }
 
     static ZLinkActorJoinOperationId newOperationId() {

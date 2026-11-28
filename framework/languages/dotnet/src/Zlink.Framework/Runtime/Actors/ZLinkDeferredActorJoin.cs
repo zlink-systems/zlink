@@ -111,6 +111,8 @@ internal sealed class ZLinkDeferredActorJoin(
     private readonly DateTimeOffset _absoluteDeadline =
         runtime.Registration.TimeProvider.GetUtcNow() + timeout;
     private readonly ZLinkActorJoinOperationId _operationId = CreateOperationId();
+    private readonly bool _pendingCapturedRequestAtRegistration =
+        actorState.OwnsCurrentDispatch && actorState.Handoff.HasPendingCapturedRequests();
 
     // The deferred Join runs after the submitting callback, so the causal flow of
     // that callback is captured here and re-entered in RunAsync.
@@ -224,7 +226,9 @@ internal sealed class ZLinkDeferredActorJoin(
                 ZLinkFlowOrigin.Application,
                 createIfAbsent: false
             );
-            using var dispatch = actorState.EnterDeferredJoinExecution();
+            using var dispatch = actorState.EnterDeferredJoinExecution(
+                _pendingCapturedRequestAtRegistration
+            );
             ZLinkActorJoinCompletion? completion = null;
             ZLinkActorJoinResult.Relayed? relayed = null;
             if (failure is null && RemainingTimeout() <= TimeSpan.Zero)
@@ -313,9 +317,29 @@ internal sealed class ZLinkDeferredActorJoin(
             // Source cleanup failures belong to the infrastructure task owner,
             // outside the public completion conversion above.
             if (relayed is not null)
-                await relayed.SourceCleanup().ConfigureAwait(false);
+                try
+                {
+                    await relayed.SourceCleanup().ConfigureAwait(false);
+                }
+                catch (Locations.ZLinkAuthorityUnsettledAtStopException) when (completion is null)
+                {
+                    //  Host relocation §14: the stop deadline passed with the authority
+                    //  undecided. The stopping node does not settle it, so the waiting
+                    //  Join caller is told to retry.
+                    completion = new ZLinkActorJoinCompletion.Failed(
+                        _operationId,
+                        ZLinkFrameworkErrorKind.Unavailable
+                    );
+                }
             if (completion is not null)
-                await NotifySourceAsync(completion, cancellationToken).ConfigureAwait(false);
+                await runtime
+                    .DeliverActorJoinCompletionAsync(
+                        actorState,
+                        actor,
+                        completion,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
         }
         finally
         {
@@ -334,14 +358,6 @@ internal sealed class ZLinkDeferredActorJoin(
 
     private TimeSpan RemainingTimeout() =>
         timeout - runtime.Registration.TimeProvider.GetElapsedTime(_registeredTimestamp);
-
-    private ValueTask NotifySourceAsync(
-        ZLinkActorJoinCompletion completion,
-        CancellationToken cancellationToken
-    )
-    {
-        return actor.OnJoinCompletedAsync(completion, cancellationToken);
-    }
 
     private ZLinkFrameworkErrorKind MapFailure(Exception exception)
     {

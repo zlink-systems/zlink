@@ -271,7 +271,7 @@ an Actor use the same header, so an Actor receives one header format whatever th
 
 ## 3. Command Space
 
-Wire v1 uses the following IDs. `7..15`, `32`, `35`, `41`, `45`, and `55..255` are
+Wire v1 uses the following IDs. `7..15`, `32`, `35`, `41`, `45`, and `56..255` are
 reserved and never reused for another meaning. A previous command name in parentheses
 is diagnostic compatibility text, not a command that is decoded or sent.
 
@@ -322,6 +322,7 @@ is diagnostic compatibility text, not a command that is decoded or sent.
 | 52 | `relocationState` | infrastructure | none | — | Direct source-memory-to-target payload chunk transfer (base/final stage) |
 | 53 | `relocationFailed` | infrastructure | none | — | Explicit reply to a matching `relocationPrepare` reporting assembly or preparation failure |
 | 54 | `boundSessionClose` | infrastructure | none | — | Requests the Session owner to close the current binding's physical connection |
+| 55 | `instanceSpotFollow` | application | required | `metadata` | A Ready Instance Spot one-way forwarded by Message Follow (operation ID 0, no reply route). [Location runtime §7.3](../05-location-relocation/01-location-runtime.en.md#73-delivering-a-message-arriving-at-a-previous-owner-to-the-new-owner) |
 
 The table's Layer, Application payload, and Permitted flags columns reproduce
 the schema declarations. **Only application-layer commands enter an
@@ -868,6 +869,9 @@ governs validation by the transport, target, and Session owner and defines their
 - The target sends `replyRelay` only after it records the terminal result in that request's row of [Location runtime §9.3](../05-location-relocation/01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed) by a CAS (`accepted` → `pending`).
 - `replyRelay` uses the original reply route and the source lease fence that identifies that request. Its destination is the row's request source node (the original requester node). That node uses its own request registry to decide whether the result was received (`terminalReceived`) or had already ended (`alreadyTerminal`) and sends `replyRelayAck` (command 46) to the target that sent the relay. The registry holds only requests still waiting for a result: it removes a request as soon as its result arrives (by direct reply or by relay) and keeps no record of ended requests. A relay for an operation not in the registry is answered with `alreadyTerminal` and its result is dropped (that requester already has a result or is no longer waiting; a resent relay is filtered the same way). The registry therefore never holds more entries than there are requests in flight. The relay is authenticated with the existing peer authority fence (coordinator RID, generation, owner lease) without reading the Store again.
 - The source sends an authenticated `replyRelayAck` only after the original requester accepts the terminal result or it confirms the result is already terminal. A submit success on an intermediate node isn't evidence. The target moves the row to a terminal state on this ACK.
+- The node generation in a request source fence is the sending node's generation carried by the received request record
+  (the ingress source node generation). Only a record without that value (a local request created on this node) uses this
+  node's lifecycle generation.
 - A closed physical connection is not evidence of terminal delivery.
 
 ### The `Completed` Condition

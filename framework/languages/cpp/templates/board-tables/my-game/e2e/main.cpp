@@ -1,4 +1,5 @@
-#include "scenarios.hpp"
+#include "persist_scenario.hpp"
+#include "server_host.hpp"
 int main (int argc, char **argv)
 {
 #ifndef _WIN32
@@ -7,25 +8,39 @@ int main (int argc, char **argv)
     std::filesystem::path root = std::filesystem::current_path ();
     std::filesystem::path bin = std::filesystem::absolute (argv[0]).parent_path ();
     std::string selection;
-    bool check_only = false;
+    bool check_only = false, host = false, running = false, attach = false;
     std::unique_ptr<MyGame::E2E::World> world, fresh_world;
-    int exit = 0, passed = 0;
+    int exit = 0, passed = 0, failed = 0;
     std::vector<MyGame::E2E::ScenarioDefinition> selected;
-    std::string current;
     try {
         for (int i = 1; i < argc; ++i) {
             const std::string option (argv[i]);
             if (option == "--check-structure")
                 check_only = true;
+            else if (option == "--serve")
+                host = true;
+            else if (option == "--server-running")
+                running = true;
+            else if (option == "--attach")
+                attach = true;
             else if (i + 1 < argc && option == "--root")
                 root = argv[++i];
             else if (i + 1 < argc && option == "--scenario")
                 selection = argv[++i];
             else
                 throw std::invalid_argument ("Usage: my-game-e2e [--root path] [--scenario "
-                                             "table,reconnect,update] [--check-structure]");
+                                             "table,reconnect,match,match-cancel,persist,update] "
+                                             "[--attach | --check-structure]");
         }
+        MyGame::E2E::require (static_cast<int> (check_only) + host + running + attach <= 1,
+                              "Select one runner mode");
+        if (running)
+            return MyGame::E2E::server_running (root) ? 0 : 1;
         MyGame::E2E::check_structure (root);
+        if (host) {
+            MyGame::E2E::run_server (root, bin);
+            return 0;
+        }
         if (check_only) {
             std::cout << "Structure: passed" << std::endl;
             return 0;
@@ -52,35 +67,69 @@ int main (int argc, char **argv)
                 if (requested.contains (scenario.name))
                     selected.push_back (scenario);
         }
+        if (attach && std::erase_if (selected, [] (const auto &scenario) {
+                return scenario.id == MyGame::E2E::Scenario::update;
+            }))
+            std::cout << "Skipping update: requires isolated node replacement." << std::endl;
+        MyGame::E2E::require (!selected.empty (), "Select an attachable scenario");
         const auto domain_checks = MyGame::E2E::domain_checks ();
-        std::cout << "Domain checks: " << domain_checks << "/"
-                  << MyGame::E2E::domain_check_count << " passed" << std::endl;
-        world =
-          std::make_unique<MyGame::E2E::World> (root, bin, static_cast<int> (selected.size ()));
-        const auto endpoint = world->start ();
-        for (const auto &scenario : selected) {
-            current = scenario.name;
-            switch (scenario.id) {
-                case MyGame::E2E::Scenario::table:
-                    MyGame::E2E::table (endpoint);
-                    break;
-                case MyGame::E2E::Scenario::reconnect:
-                    fresh_world = std::make_unique<MyGame::E2E::World> (root, bin, 1);
-                    MyGame::E2E::reconnect (endpoint, *fresh_world);
-                    fresh_world->close ();
-                    fresh_world.reset ();
-                    break;
-                case MyGame::E2E::Scenario::update:
-                    MyGame::E2E::update (endpoint, *world);
-                    break;
+        std::cout << "Domain checks: " << domain_checks << "/" << MyGame::E2E::domain_check_count
+                  << " passed" << std::endl;
+        const auto run = [&] (const std::string &endpoint, auto &server) {
+            for (const auto &scenario : selected) {
+                std::cout << "\n=== " << scenario.name << " ===" << std::endl;
+                try {
+                    switch (scenario.id) {
+                        case MyGame::E2E::Scenario::table:
+                            MyGame::E2E::table (endpoint);
+                            break;
+                        case MyGame::E2E::Scenario::reconnect:
+                            fresh_world = std::make_unique<MyGame::E2E::World> (
+                              root, bin, 1, false, server.records_location ());
+                            MyGame::E2E::reconnect (endpoint, *fresh_world);
+                            fresh_world->close ();
+                            fresh_world.reset ();
+                            break;
+                        case MyGame::E2E::Scenario::persist:
+                            fresh_world = std::make_unique<MyGame::E2E::World> (
+                              root, bin, 1, false, server.records_location ());
+                            MyGame::E2E::persist (endpoint, *fresh_world);
+                            fresh_world->close ();
+                            fresh_world.reset ();
+                            break;
+                        case MyGame::E2E::Scenario::update:
+                            MyGame::E2E::update (endpoint, *world);
+                            break;
+                        case MyGame::E2E::Scenario::match:
+                            MyGame::E2E::play_match (endpoint);
+                            break;
+                        case MyGame::E2E::Scenario::match_cancel:
+                            MyGame::E2E::match_cancel (endpoint);
+                            break;
+                    }
+                    ++passed;
+                    std::cout << "PASS " << scenario.name << std::endl;
+                }
+                catch (const std::exception &error) {
+                    ++failed;
+                    std::cout << "FAIL " << scenario.name << " - " << error.what () << std::endl;
+                    return;
+                }
             }
-            ++passed;
-            std::cout << "✓ " << scenario.name << std::endl;
+        };
+        if (attach) {
+            MyGame::E2E::AttachedServer server (root);
+            run (server.endpoint (), server);
+        } else {
+            world =
+              std::make_unique<MyGame::E2E::World> (root, bin, static_cast<int> (selected.size ()));
+            const auto endpoint = world->start ();
+            run (endpoint, *world);
         }
+        if (failed)
+            exit = 1;
     }
     catch (const std::exception &error) {
-        if (!current.empty ())
-            std::cout << "✗ " << current << std::endl;
         std::cerr << error.what () << std::endl;
         exit = 1;
     }
@@ -95,7 +144,8 @@ int main (int argc, char **argv)
             exit = 1;
         }
     }
-    if (!check_only)
-        std::cout << "Scenarios: " << passed << "/" << selected.size () << " passed" << std::endl;
+    if (!check_only && !host && !running)
+        std::cout << "Scenarios: " << passed << "/" << selected.size () << " passed, " << failed
+                  << " failed, " << selected.size () - passed - failed << " not run" << std::endl;
     return exit;
 }

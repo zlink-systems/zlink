@@ -2,20 +2,10 @@ name: Network sync server
 
 # network-sync 서버 플러그인과 시뮬레이션 코어를 빌드하고 시험한다(#3774).
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "plugins/network-sync/server/**"
-      - "plugins/network-sync/protocol/**"
-      - ".github/workflows/network-sync-server.yml"
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "plugins/network-sync/server/**"
-      - "plugins/network-sync/protocol/**"
-      - ".github/workflows/network-sync-server.yml"
+  # 사용자 결정(11-27): Actions는 C++ 빌드 검증과 릴리스·데일리만. PR 검증은 로컬 실행.
+  schedule:
+    - cron: "37 18 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -57,6 +47,12 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "8.0.x"
+      # Restore Zlink.Framework from this checkout: the plugin depends on the repository VERSION,
+      # which is published only by the release (same source as release-dotnet.yml).
+      - name: Prepare local packages
+        run: |
+          source_dir=$(bash ../../../scripts/local-package/dotnet/build-framework-wsl.sh)
+          echo "RestoreAdditionalProjectSources=$source_dir" >> "$GITHUB_ENV"
       - name: Build server plugin
         run: dotnet build Server --nologo
       - name: Check format

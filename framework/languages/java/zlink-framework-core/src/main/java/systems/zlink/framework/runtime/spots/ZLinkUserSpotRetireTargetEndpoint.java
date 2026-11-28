@@ -1370,10 +1370,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                             ignored ->
                                                     switchSessionRoutes(
                                                             target.request(), generations))
-                                    .thenCompose(
-                                            ignored ->
-                                                    openPublishedActor(
-                                                            request, target, completions));
+                                    .thenCompose(ignored -> openPublishedActor(request, target));
                         });
     }
 
@@ -1470,9 +1467,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
             ActorTargetStage target,
             Map<String, Long> generations,
             Throwable joinedFailure) {
-        return ZLinkSerialExecutionQueue.manageCurrent(
-                        actorJoin.notifyTargetCompletion(
-                                target.directAdmission(), target.staged(), joinedFailure))
+        return actorJoin
+                .notifyTargetCompletion(target.directAdmission(), target.staged(), joinedFailure)
                 .thenCompose(
                         ignored ->
                                 joinedFailure == null
@@ -1538,9 +1534,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
     }
 
     private CompletionStage<Void> openPublishedActor(
-            ZLinkSpotRetireControl.StageRequest request,
-            ActorTargetStage target,
-            ZLinkTargetRelocationReplies completions) {
+            ZLinkSpotRetireControl.StageRequest request, ActorTargetStage target) {
         return openAndNormalize(
                 request,
                 () -> {

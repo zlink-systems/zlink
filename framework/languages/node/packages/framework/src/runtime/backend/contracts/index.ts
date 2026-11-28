@@ -387,11 +387,16 @@ export interface ZLinkBackendMeshNode {
   sealSpotMessageFollowIngress?(
     source: ServiceDirectSpotRouteFence
   ): ServiceSpotMessageFollowSeal | undefined;
+  freezeSpotRelocationIngress?(
+    seal: ServiceSpotMessageFollowSeal
+  ): Promise<
+    readonly import('../../foundation/service-stateful-wire-codec').ServiceWireFrozenRecord[]
+  >;
   abortSpotMessageFollowIngress?(seal: ServiceSpotMessageFollowSeal): boolean;
   /** A null target consumes the committed seal without installing a Follow route. */
   commitSpotMessageFollowIngress?(
     seal: ServiceSpotMessageFollowSeal,
-    target: ServiceDirectSpotRouteFence | null,
+    target: (ServiceDirectSpotRouteFence & { readonly ownerId?: string }) | null,
     durationMs: number
   ): Promise<boolean>;
   joinActorSpot(

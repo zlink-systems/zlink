@@ -1010,6 +1010,12 @@ TEMPLATE_CONFIG_FIELDS = {
     ),
 }
 
+# .NET templates that pin more Framework packages than the default four. The
+# fps-entry-lobby copy pins the opt-in network-sync server plugin package (#3774).
+TEMPLATE_DOTNET_FRAMEWORK_PINS = {
+    "framework/languages/dotnet/templates/fps-entry-lobby": 5,
+}
+
 # These .NET templates receive the binding transitively from Zlink.Framework and
 # pin no Zlink package.
 TEMPLATE_TRANSITIVE_BINDING = (
@@ -1180,6 +1186,8 @@ def synchronize_templates(sync: Synchronizer, pins: dict[str, dict[str, str]]) -
                     lambda match, version=version: replace_version_group(match, version),
                     0
                     if field.kind == "binding" and template in TEMPLATE_TRANSITIVE_BINDING
+                    else TEMPLATE_DOTNET_FRAMEWORK_PINS.get(template, field.expected)
+                    if language == "dotnet" and field.kind == "framework"
                     else field.expected,
                 )
             lock = f"{game}/package-lock.json"

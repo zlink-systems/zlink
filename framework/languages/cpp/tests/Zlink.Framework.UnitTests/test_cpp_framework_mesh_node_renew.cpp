@@ -3,6 +3,7 @@
 #include "../support/location_reclaim_clock.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/location_record_fields.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
 
 #include <gtest/gtest.h>

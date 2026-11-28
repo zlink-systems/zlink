@@ -168,7 +168,21 @@ final class ZLinkStreamConnectorTest {
     void packetNameOverrideWinsForRawAndTypedSendAndRequest() throws Exception {
         try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
             ZLinkStreamConnector connector =
-                    createConnector(server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+                    createConnector(
+                            new ZLinkStreamConnectorOptions(
+                                    server.endpoint(),
+                                    ZLinkStreamDispatchMode.IMMEDIATE,
+                                    Duration.ofSeconds(1),
+                                    1,
+                                    Duration.ofSeconds(5),
+                                    ZLinkStreamConnectorOptions.DEFAULT_MAX_PAYLOAD_SIZE,
+                                    false,
+                                    Duration.ofSeconds(1),
+                                    Duration.ofSeconds(5),
+                                    true,
+                                    Duration.ofMillis(250),
+                                    Duration.ofSeconds(5),
+                                    2.0));
             ConnectorTestAwait.await(connector.connect());
 
             CompletableFuture<TcpStreamConnectorTestServer.ReceivedFrame> rawSend =

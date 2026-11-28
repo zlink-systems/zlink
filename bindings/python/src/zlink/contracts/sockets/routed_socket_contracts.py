@@ -21,7 +21,7 @@ class RouterRoute(NamedTuple):
 
 
 @runtime_checkable
-class RouterSocket(_socket_contract._SocketContract, Protocol):
+class RouterSocket(_socket_contract._ConnectSocketContract, _socket_contract._RoutingIdContract, Protocol):
     """ROUTER socket: routes messages to peers addressed by routing id, the
     server side of asynchronous request/reply."""
 
@@ -37,6 +37,7 @@ class RouterSocket(_socket_contract._SocketContract, Protocol):
     def disconnect(self, endpoint):
         """Disconnect the connection previously established to ``endpoint``."""
         ...
+
 
     def send(self, routing_id) -> SendOp:
         """Begin a send addressed to ``routing_id``; parts are consumed on a

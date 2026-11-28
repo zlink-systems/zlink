@@ -16,6 +16,7 @@ import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
+import systems.zlink.framework.runtime.actors.ZLinkActorJoinCompletionSealedException;
 import systems.zlink.framework.runtime.actors.ZLinkActorReplyRoute;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
@@ -30,6 +31,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanner;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
@@ -915,7 +917,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                     .service
                                                                                     .ZLinkServiceM6BWireCodec
                                                                                     .InstanceRouteFence)
-                                                                            message.route());
+                                                                            message.route(),
+                                                                    message.followed());
                                                     if (rejection != null) {
                                                         received.close();
                                                         return CompletableFuture.failedFuture(
@@ -1089,7 +1092,20 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .InstanceRouteFence
                     requested) {
-        if (current.objectGeneration() < requested.objectGeneration()) {
+        return instanceApplicationAdmissionFailure(current, requested, false);
+    }
+
+    private static RuntimeException instanceApplicationAdmissionFailure(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    current,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    requested,
+            boolean followed) {
+        if (followed
+                ? !current.spotFence().equals(requested.spotFence())
+                : current.objectGeneration() < requested.objectGeneration()) {
             return ZLinkFrameworkErrorOrigin.framework(
                     ZLinkFrameworkErrorKind.INVALID_OPERATION,
                     "Instance Spot is behind the requested generation",
@@ -4673,8 +4689,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 parts.getFirst());
     }
 
-    /** Delivers a relocated Actor request's error terminal on its original reply route. */
-    private CompletionStage<Void> failRelocatedActorReply(
+    /** Delivers an Actor request's error terminal on its original reply route. */
+    private CompletionStage<Void> failActorReply(
             String actorId,
             ActorPacketFrames.Header packetHeader,
             ZLinkBackendActorRef actorRef,
@@ -7063,11 +7079,19 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     payloadCopy.close();
                     headerCopy.close();
                 };
-        CompletableFuture<Void> admission =
-                requestAdmission == null ? new CompletableFuture<>() : requestAdmission;
+        CompletableFuture<Void> admission = new CompletableFuture<>();
         admission.whenComplete(
                 (ignored, failure) -> {
                     if (failure != null) release.run();
+                    if (requestAdmission == null) return;
+                    // The receiver settles sealed ingress on the packet's own reply or drop path.
+                    if (failure == null
+                            || unwrapCompletion(failure)
+                                    instanceof ZLinkActorJoinCompletionSealedException) {
+                        requestAdmission.complete(null);
+                    } else {
+                        requestAdmission.completeExceptionally(failure);
+                    }
                 });
         CompletionStage<Void> queued =
                 enqueueLocalActorPacket(
@@ -7140,7 +7164,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                     noBindRequest,
                                                     parts),
                                     error ->
-                                            failRelocatedActorReply(
+                                            failActorReply(
                                                     actor.context().actorId(),
                                                     packetHeader,
                                                     headerCopy.actor(),
@@ -7185,7 +7209,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         ZLinkDispatchErrorReason.HANDLER_MISSING,
                                         currentDispatchLine.spotId(),
                                         actor.context().actorId(),
-                                        headerCopy.sourceNodeRid());
+                                        headerCopy.sourceNodeRid(),
+                                        null);
                                 if (request) {
                                     replyActorDispatchError(
                                             currentDispatchLine,
@@ -7224,30 +7249,75 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     () ->
                             ZLinkHandlerStages.fromStageSupplier(operation)
                                     .whenComplete((ignored, failure) -> release.run());
-            return relocationReply == null
-                    ? dispatchLine.enqueueActorDispatch(
-                            actor.context().actorId(),
-                            payloadCopy.size(),
-                            ownedOperation,
-                            release,
-                            requestAdmission,
-                            headerCopy,
-                            payloadCopy)
-                    : dispatchLine.enqueueActorDispatch(
-                            actor.context().actorId(),
-                            relocationReply::record,
-                            headerCopy.message().size() + ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES,
-                            ownedOperation,
-                            () -> {
-                                try {
-                                    registered.releaseForRelocation();
-                                } finally {
-                                    release.run();
-                                }
-                            },
-                            requestAdmission,
-                            headerCopy,
-                            payloadCopy);
+            CompletionStage<Void> queued =
+                    relocationReply == null
+                            ? dispatchLine.enqueueActorDispatch(
+                                    actor.context().actorId(),
+                                    payloadCopy.size(),
+                                    ownedOperation,
+                                    release,
+                                    requestAdmission,
+                                    headerCopy,
+                                    payloadCopy)
+                            : dispatchLine.enqueueActorDispatch(
+                                    actor.context().actorId(),
+                                    relocationReply::record,
+                                    headerCopy.message().size()
+                                            + ACTOR_JOURNAL_SIZE_HINT_OVERHEAD_BYTES,
+                                    ownedOperation,
+                                    () -> {
+                                        try {
+                                            registered.releaseForRelocation();
+                                        } finally {
+                                            release.run();
+                                        }
+                                    },
+                                    requestAdmission,
+                                    headerCopy,
+                                    payloadCopy);
+            CompletableFuture<Void> settled =
+                    queued.exceptionallyCompose(
+                                    failure -> {
+                                        if (!(unwrapCompletion(failure)
+                                                instanceof
+                                                ZLinkActorJoinCompletionSealedException sealed)) {
+                                            return CompletableFuture.failedFuture(failure);
+                                        }
+                                        if (registered != null) registered.discardLocal();
+                                        String actorId = headerCopy.actor().actorId();
+                                        try (var ignored =
+                                                flowCaptureEnabled()
+                                                        ? ZLinkFlowContext.enter(
+                                                                actorPacketHeaderFlowPair(
+                                                                        packetHeader,
+                                                                        headerCopy
+                                                                                .sourceSessionRid()))
+                                                        : ZLinkFlowContext.suppress()) {
+                                            reportSpotActorDispatchFailure(
+                                                    packetHeader,
+                                                    ZLinkDispatchErrorReason.ACTIVATION_REJECTED,
+                                                    dispatchLine.spotId(),
+                                                    actorId,
+                                                    headerCopy.sourceNodeRid(),
+                                                    sealed);
+                                        }
+                                        if (packetHeader.requestSeq().isEmpty()) {
+                                            return CompletableFuture.completedFuture(null);
+                                        }
+                                        return failActorReply(
+                                                actorId,
+                                                packetHeader,
+                                                headerCopy.actor(),
+                                                headerCopy.sourceNodeRid(),
+                                                headerCopy.sourceSessionRid(),
+                                                headerCopy.requestId(),
+                                                headerCopy.flags(),
+                                                isNoBindActorRequest(packetHeader, headerCopy),
+                                                sealed);
+                                    })
+                            .toCompletableFuture();
+            ZLinkCompletionBridge.forwardCancellation(settled, queued);
+            return settled;
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
@@ -7426,7 +7496,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkDispatchErrorReason reason,
             String spotId,
             String actorId,
-            RoutingId sourceRid) {
+            RoutingId sourceRid,
+            Throwable failure) {
         boolean request = packetHeader.requestSeq().isPresent();
         if (!request && ZLinkRuntimeMetrics.enabled()) {
             ZLinkMeshMessageMetrics.forMesh(meshNameForSpot(spotId))
@@ -7446,8 +7517,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         .spotId(spotId)
                         .actorId(actorId)
                         .sourceRid(sourceRid)
-                        .correlationId(
-                                packetHeader.requestSeq().map(Object::toString).orElse(null)));
+                        .correlationId(packetHeader.requestSeq().map(Object::toString).orElse(null))
+                        .error(failure));
     }
 
     void replySpotRouteDispatchError(
