@@ -287,10 +287,7 @@ fn validate_request(operation: &RequestOpStorage) -> Result<(), SubmitError> {
             libc::EINVAL,
         ))
     } else if operation.routed.handle().is_null() {
-        Err(SubmitError::new(
-            SubmitResult::InternalError,
-            libc::ECANCELED,
-        ))
+        Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN))
     } else {
         Ok(())
     }
@@ -311,8 +308,8 @@ fn submit_request_attempt(
     let handle = operation.routed.handle();
     if handle.is_null() {
         return Err(RequestAttemptError::without_token(SubmitError::new(
-            SubmitResult::InternalError,
-            libc::ECANCELED,
+            SubmitResult::Terminated,
+            libc::ESHUTDOWN,
         )));
     }
     let (rc, errno) = submit_shared_message(&mut operation.parts, |parts, count| unsafe {
@@ -383,12 +380,10 @@ fn submit_request_parts(
     Ok(completion_id)
 }
 
-/// Zero means no timeout; a sub-millisecond timeout rounds up to 1 ms. A
-/// timeout beyond Core's `u32` milliseconds is rejected, never clamped.
+/// Zero selects the socket request timeout. Other values must be representable
+/// in whole milliseconds within Core's `u32` range.
 fn duration_to_timeout_ms(duration: Duration) -> Result<u32, SubmitError> {
-    if duration.is_zero() {
-        return Ok(0);
-    }
-    u32::try_from(duration.as_millis().max(1))
-        .map_err(|_| SubmitError::new(SubmitResult::InvalidArgument, libc::EINVAL))
+    crate::runtime::handles::ctx::exact_millis(duration)
+        .and_then(|ms| u32::try_from(ms).ok())
+        .ok_or_else(|| SubmitError::new(SubmitResult::InvalidArgument, libc::EINVAL))
 }

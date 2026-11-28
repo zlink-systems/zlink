@@ -75,6 +75,8 @@ public interface IZlinkStreamConnector : IAsyncDisposable
 
 
     IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler);
+    IDisposable OnAdmissionQueued(Func<CancellationToken, ValueTask> handler);
+    IDisposable OnAdmissionPosition(Func<ZlinkStreamAdmissionPosition, CancellationToken, ValueTask> handler);
     IDisposable OnAdmissionWaiting(Func<ZlinkStreamAdmissionWaiting, CancellationToken, ValueTask> handler);
     IDisposable OnReplyReceived(Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler);
     IDisposable OnConnectionStateChanged(Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler);
@@ -210,6 +212,11 @@ public interface IZlinkStreamWaitCall
 The two hooks of [Common Spec §5.7](../../32-stream-connector.en.md#57-request-hooks) are projected as `OnRequestSending`/`OnReplyReceived` (§3) with the contexts below. The sending hook does not follow the dispatch mode, so it is a synchronous `Action`; the reply hook has the same shape as other receive callbacks.
 
 ```csharp
+public sealed record ZlinkStreamAdmissionPosition(
+    int Position,        // One-based position in the mesh queue
+    int EstimatedWaitMs  // Estimated wait in milliseconds
+);
+
 public sealed record ZlinkStreamAdmissionWaiting(
     string RequestPacketName,
     string? ActorId,

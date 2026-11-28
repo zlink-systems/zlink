@@ -836,11 +836,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
             ZLinkBackendReceived received,
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header requestHeader,
             Message reply) {
-        Message replyHeader =
-                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encodeHeader(
-                        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.reply(
-                                requestHeader));
-        received.reply(List.of(replyHeader, reply));
+        received.reply(List.of(ZLinkSpotRouteMessages.encodeReplyHeader(requestHeader), reply));
     }
 
     final void closeActiveRouteReceives() {

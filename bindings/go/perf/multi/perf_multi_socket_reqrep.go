@@ -187,7 +187,16 @@ func runMultiReqRepClients(cfg multiConfig, clientCtx *zlink.Context, clients []
 	if value, err := strconv.Atoi(os.Getenv("PERF_MULTI_REQREP_TIMEOUT_MS")); err == nil && value > 0 {
 		timeout = time.Duration(value) * time.Millisecond
 	}
-	result := runMultiReqRepWindow(cfg, clients, activeDeadline(cfg.duration), timeout)
+	activeSends, _, active := runMultiReqRepWindow(cfg, clients, activeDeadline(cfg.duration), timeout, nil)
+	if active.Count == 0 {
+		printMultiResult(cfg, active)
+		return
+	}
+	window := activeDeadline(settle + multiLatencyDuration(cfg.duration))
+	schedule := newMultiSchedule(window.ActiveAt, active.Count, cfg.duration)
+	_, pacedReceived, result := runMultiReqRepWindow(cfg, clients, window, timeout, schedule)
+	schedule.print(cfg, activeSends, active.Count, pacedReceived, false, -1)
+	result.Throughput, result.Bandwidth = active.Throughput, active.Bandwidth
 	if len(clients) > 0 {
 		socketType := zlink.SocketTypeDealer
 		if _, ok := clients[0].target.(*zlink.RouterSocket); ok {
@@ -204,19 +213,19 @@ func runMultiReqRepClients(cfg multiConfig, clientCtx *zlink.Context, clients []
 	waitForStopToken()
 }
 
-func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window perfcommon.BenchmarkWindow, timeout time.Duration) perfcommon.Result {
+func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window perfcommon.BenchmarkWindow, timeout time.Duration, schedule *multiSchedule) (uint64, uint64, perfcommon.Result) {
 	stats := perfcommon.NewMultiStats()
 	type counts struct{ attempts, failures, timeouts uint64 }
 	countsByClient := make([]counts, len(clients))
 	type admission struct {
-		client int
-		err    error
+		client        int
+		err           error
+		due, observed time.Time
 	}
 	type completion struct {
 		client      int
 		parts       []*zlink.Message
 		err         error
-		completedAt time.Time
 		completedNs int64
 	}
 	completed := make(chan completion, len(clients))
@@ -241,10 +250,24 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 		}
 	}
 
+	var activeSends, pacedReceived uint64
+	observeAdmission := func(due, now time.Time) {
+		if schedule != nil {
+			schedule.admit(due, now)
+		} else if now.Before(window.StopAt) {
+			activeSends++
+		}
+	}
 	submitOne := func(index int) {
 		countsByClient[index].attempts++
 		payload := perfcommon.PreparePayload(cfg.msgSize)
-		perfcommon.StampWindowPayload(payload, window.ActiveAt)
+		phase := perfcommon.PhaseActive
+		due := time.Time{}
+		if schedule != nil {
+			phase = schedule.phase(time.Now())
+			due = schedule.reserve()
+		}
+		perfcommon.StampPayloadPhase(payload, phase)
 		submit := clients[index].request().Bytes(payload)
 		if perfcommon.MeasurementPartCount() == 2 {
 			submit = submit.Bytes(nil)
@@ -259,15 +282,18 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 			parts, err := submission.Reply(context.Background())
 			completed <- completion{
 				client: index, parts: parts, err: err,
-				completedAt: time.Now(), completedNs: perfcommon.MonotonicNowNs(),
+				completedNs: perfcommon.MonotonicNowNs(),
 			}
 		}()
 		if submission.Result() == zlink.SubmitBackpressured {
 			available[index] = false
 			pendingAdmissions++
 			go func() {
-				admitted <- admission{client: index, err: submission.Admitted(context.Background())}
+				err := submission.Admitted(context.Background())
+				admitted <- admission{client: index, err: err, due: due, observed: time.Now()}
 			}()
+		} else {
+			observeAdmission(due, time.Now())
 		}
 	}
 
@@ -287,10 +313,9 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 			perfcommon.Must(done.err)
 		}
 		reply, payloadErr := perfcommon.MeasurementPayload(done.parts)
-		if payloadErr == nil && done.completedAt.Before(window.StopAt) {
-			if latency, valid := perfcommon.LatencyNsFromMessageAt(
-				reply, cfg.msgSize, perfcommon.PhaseActive, done.completedNs); valid {
-				stats.AddLatencyNs(latency / 2.0)
+		if payloadErr == nil {
+			if recordMultiReceive(stats, reply.Data(), cfg.msgSize, done.completedNs, window, schedule != nil, 2) {
+				pacedReceived++
 			}
 		}
 		zlink.MultipartClose(done.parts)
@@ -306,6 +331,7 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 					perfcommon.Must(ready.err)
 				}
 				available[ready.client] = true
+				observeAdmission(ready.due, ready.observed)
 				progressed = true
 			case done := <-completed:
 				processCompletion(done)
@@ -317,15 +343,10 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 	}
 
 	waitForProgress := func(deadline time.Time, progressed bool) {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return
-		}
+		remaining := multiWait(time.Now(), deadline)
 		if completionPoller != nil {
 			if progressed {
 				remaining = 0
-			} else if remaining > 50*time.Millisecond {
-				remaining = 50 * time.Millisecond
 			}
 			_, pollErr := completionPoller.Wait(completionEvents, remaining)
 			perfcommon.Must(pollErr)
@@ -341,26 +362,35 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 				perfcommon.Must(ready.err)
 			}
 			available[ready.client] = true
+			observeAdmission(ready.due, ready.observed)
 		case done := <-completed:
 			processCompletion(done)
 		case <-time.After(remaining):
 		}
 	}
 
+	next := 0
 	for time.Now().Before(window.StopAt) {
-		for index := range clients {
-			if !time.Now().Before(window.StopAt) {
+		submitted := false
+		for range clients {
+			now := time.Now()
+			if !now.Before(window.StopAt) || (schedule != nil && !schedule.due(now)) {
 				break
 			}
-			if !available[index] {
-				continue
+			index := next
+			next = (next + 1) % len(clients)
+			if available[index] {
+				submitOne(index)
+				submitted = true
 			}
-			submitOne(index)
 		}
 		progressed := drainReady()
-		// Even an immediately admitted round gives the public completion poller
-		// a nonblocking turn so request replies and WRITABLE retries are drained.
-		waitForProgress(window.StopAt, progressed)
+		until := window.StopAt
+		now := time.Now()
+		if schedule != nil && !schedule.due(now) && schedule.next().Before(until) {
+			until = schedule.next()
+		}
+		waitForProgress(until, progressed || submitted)
 	}
 
 	drainTimeout := max(1000*time.Millisecond, timeout*4)
@@ -386,5 +416,5 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 	}
 	fmt.Fprintf(os.Stderr, "REQREP_COUNTS,%s,%s,%d,attempts=%d,failures=%d,timeouts=%d\n",
 		cfg.pattern, cfg.transport, cfg.msgSize, total.attempts, total.failures, total.timeouts)
-	return stats.Snapshot(cfg.duration, cfg.msgSize)
+	return activeSends, pacedReceived, stats.Snapshot(cfg.duration, cfg.msgSize)
 }

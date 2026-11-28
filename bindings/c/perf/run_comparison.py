@@ -916,9 +916,10 @@ _AUTO_HWM_DETAIL_TABLE_SEEN = set()
 
 def emit_benchmark_diag_line(line):
     stripped = (line or "").strip()
-    if stripped.startswith(("MATCHED_DIAG,", "PACED_DIAG,", "BENCH_DIAG,")):
-        print(stripped, flush=True)
-    elif stripped.startswith("REFERENCE,"):
+    if stripped.startswith((
+        "MATCHED_DIAG,", "PACED_DIAG,", "BENCH_DIAG,", "REFERENCE,",
+        "PUBSUB_CATCHUP_DIAG,", "PUBSUB_CATCHUP_PROGRESS,", "PUBSUB_LATENCY_DIAG,",
+    )):
         print(stripped, flush=True)
 
 

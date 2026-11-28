@@ -4,6 +4,7 @@ use std::ops::{BitOr, BitOrAssign};
 use crate::contracts::core::context::AutoHwmRecalcReason;
 use crate::contracts::core::routing_id::RoutingId;
 use crate::internal::MonitorStorage;
+use crate::{CloseError, ConfigError, RecvError, RecvFlags};
 
 pub(crate) mod private {
     pub(crate) trait Sealed {}
@@ -28,17 +29,17 @@ impl SocketMonitorEventMask {
     /// Subscribes to every monitor event.
     pub const ALL: Self = Self(0x7FFFF);
     /// Subscribes only to the connection-ready event.
-    pub const CONNECTION_READY: Self = Self(0x1000);
+    pub const CONNECTION_READY: Self = Self(MonitorEventType::ConnectionReady.bits() as u32);
     /// Subscribes to a remote PAUSED state first applied to an affected
     /// Application pipe
     /// (core-byte-hwm-flow-control-plan.ko.md §6). No event fires for a
     /// normal data frame.
-    pub const SEND_FLOW_PAUSED: Self = Self(1 << 16);
+    pub const SEND_FLOW_PAUSED: Self = Self(MonitorEventType::SendFlowPaused.bits() as u32);
     /// Subscribes to a remote RUNNING transition removing the last
     /// remote-pause cause for a connection.
-    pub const SEND_FLOW_RESUMED: Self = Self(1 << 17);
+    pub const SEND_FLOW_RESUMED: Self = Self(MonitorEventType::SendFlowResumed.bits() as u32);
     /// Subscribes to a stale or duplicate flow-state frame being ignored.
-    pub const FLOW_STATE_STALE: Self = Self(1 << 18);
+    pub const FLOW_STATE_STALE: Self = Self(MonitorEventType::FlowStateStale.bits() as u32);
 
     /// Returns the raw mask bits.
     pub const fn bits(self) -> u32 {
@@ -106,7 +107,7 @@ pub struct MonitorEvent {
     /// A stable identifier for the underlying transport connection.
     pub connection_id: u64,
     /// The transport lane index, when the event applies to one.
-    pub transport_lane: u32,
+    pub transport_lane: TransportLane,
     /// Event-specific detail flags; see [`MonitorEventFlags`].
     pub flags: MonitorEventFlags,
 }
@@ -114,39 +115,155 @@ pub struct MonitorEvent {
 impl MonitorEvent {
     /// Returns `true` when this event is a connection-established event.
     pub fn is_connected(&self) -> bool {
-        self.event.0 & 0x0001 != 0
+        self.event == MonitorEventType::Connected
     }
 
     /// Returns `true` when this event is a peer-disconnected event.
     pub fn is_disconnected(&self) -> bool {
-        self.event.0 & 0x0200 != 0
+        self.event == MonitorEventType::Disconnected
     }
 
     /// Returns `true` when this event is a started-listening event.
     pub fn is_listening(&self) -> bool {
-        self.event.0 & 0x0008 != 0
+        self.event == MonitorEventType::Listening
     }
 
     /// Returns `true` when this event is an inbound-connection-accepted event.
     pub fn is_accepted(&self) -> bool {
-        self.event.0 & 0x0020 != 0
+        self.event == MonitorEventType::Accepted
     }
 
     /// Returns `true` when this event is a connection-closed event.
     pub fn is_closed(&self) -> bool {
-        self.event.0 & 0x0080 != 0
+        self.event == MonitorEventType::Closed
     }
 
     /// Returns `true` when this event is a handshake-complete, ready-for-traffic
     /// event.
     pub fn is_connection_ready(&self) -> bool {
-        self.event.0 & 0x1000 != 0
+        self.event == MonitorEventType::ConnectionReady
     }
 }
 
-/// The raw bitmask identifying a monitor event's kind.
+macro_rules! monitor_event_types {
+    ($($name:ident = $bit:literal),+ $(,)?) => {
+        /// Kind of a socket monitor event.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[non_exhaustive]
+        pub enum MonitorEventType {
+            $($name,)+
+            /// An event added by a newer Core.
+            Unknown(u64),
+        }
+
+        impl MonitorEventType {
+            pub(crate) const fn from_raw(raw: u64) -> Self {
+                $(if raw == 1 << $bit { return Self::$name; })+
+                Self::Unknown(raw)
+            }
+
+            /// The Core event bit corresponding to this kind.
+            pub const fn bits(self) -> u64 {
+                match self {
+                    $(Self::$name => 1 << $bit,)+
+                    Self::Unknown(raw) => raw,
+                }
+            }
+        }
+    };
+}
+
+monitor_event_types! {
+    Connected = 0,
+    ConnectDelayed = 1,
+    ConnectRetried = 2,
+    Listening = 3,
+    BindFailed = 4,
+    Accepted = 5,
+    AcceptFailed = 6,
+    Closed = 7,
+    CloseFailed = 8,
+    Disconnected = 9,
+    MonitorStopped = 10,
+    HandshakeFailedNoDetail = 11,
+    ConnectionReady = 12,
+    HandshakeFailedProtocol = 13,
+    HandshakeFailedAuth = 14,
+    PeerWeightChanged = 15,
+    SendFlowPaused = 16,
+    SendFlowResumed = 17,
+    FlowStateStale = 18,
+}
+
+/// The physical connection lane associated with a monitor event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MonitorEventType(pub u64);
+#[non_exhaustive]
+pub enum TransportLane {
+    Application,
+    Completion,
+    /// A lane value added by a newer Core.
+    Unknown(u32),
+}
+
+impl TransportLane {
+    pub(crate) const fn from_raw(raw: u32) -> Self {
+        match raw {
+            0 => Self::Application,
+            1 => Self::Completion,
+            raw => Self::Unknown(raw),
+        }
+    }
+}
+
+macro_rules! monitor_status_flags {
+    ($(#[$meta:meta])* $name:ident { $($flag:ident = $bit:literal),+ $(,)? }) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct $name(u32);
+
+        impl $name {
+            $(pub const $flag: Self = Self(1 << $bit);)+
+
+            pub(crate) const fn from_raw(raw: u32) -> Self {
+                Self(raw)
+            }
+
+            /// Returns the original Core bitmask, including unfamiliar bits.
+            pub const fn bits(self) -> u32 {
+                self.0
+            }
+
+            /// Returns whether every flag in `other` is present.
+            pub const fn contains(self, other: Self) -> bool {
+                self.0 & other.0 == other.0
+            }
+        }
+
+        impl BitOr for $name {
+            type Output = Self;
+
+            fn bitor(self, rhs: Self) -> Self {
+                Self(self.0 | rhs.0)
+            }
+        }
+    };
+}
+
+monitor_status_flags! {
+    /// Current lifecycle flags of a monitored socket.
+    MonitorStateFlags { READY = 0, BOUND_READY = 1, CLOSED = 3 }
+}
+
+monitor_status_flags! {
+    /// Flags identifying which monitor status details are populated.
+    MonitorStatusDetailFlags {
+        SND_PENDING_MSGS = 1,
+        RCV_PENDING_MSGS = 2,
+        AUTO_HWM_BUDGET = 3,
+        AUTO_HWM_BUFFERS = 4,
+        FLOW_STATE = 5,
+    }
+}
 
 /// Identifies what a monitored source is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,9 +283,9 @@ pub struct MonitorStatus {
     /// What kind of source this snapshot describes.
     pub source_kind: MonitorSourceKind,
     /// Bit flags describing the source's current state.
-    pub state_flags: u32,
+    pub state_flags: MonitorStateFlags,
     /// Bit flags carrying additional state detail.
-    pub detail_flags: u32,
+    pub detail_flags: MonitorStatusDetailFlags,
     /// The number of outbound messages currently queued.
     pub snd_pending_msgs: u64,
     /// The number of inbound messages currently queued.
@@ -294,5 +411,59 @@ impl BitOr for MonitorEventFlags {
 impl BitOrAssign for MonitorEventFlags {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
+    }
+}
+
+impl SocketMonitor {
+    /// Open a socket monitor for all events.
+    pub fn open(socket: &dyn Monitorable) -> Result<Self, ConfigError> {
+        MonitorStorage::open(socket)
+    }
+
+    /// Open a socket monitor with explicit event and byte-HWM options.
+    pub fn open_with_options(
+        socket: &dyn Monitorable,
+        options: SocketMonitorOpenOptions,
+    ) -> Result<Self, ConfigError> {
+        MonitorStorage::open_with_options(socket, options)
+    }
+
+    /// Blocking receive of a monitor event.
+    pub fn recv(&self) -> Result<MonitorEvent, RecvError> {
+        self.inner.recv()
+    }
+
+    /// Non-blocking receive of a monitor event. Returns `Ok(None)` when no event is available.
+    pub fn recv_with_flags(&self, flags: RecvFlags) -> Result<Option<MonitorEvent>, RecvError> {
+        self.inner.recv_with_flags(flags)
+    }
+
+    /// Read the current monitor status.
+    pub fn status(&self) -> Result<MonitorStatus, ConfigError> {
+        self.inner.status()
+    }
+
+    /// Closes the monitor and releases its resources.
+    pub fn close(&mut self) -> Result<(), CloseError> {
+        self.inner.close()
+    }
+}
+
+impl MonitorStatus {
+    /// Returns `true` when the monitored socket is in the ready state.
+    pub fn is_ready(&self) -> bool {
+        self.state_flags.contains(MonitorStateFlags::READY)
+    }
+
+    /// Returns `true` when the monitored socket is closed.
+    pub fn is_closed(&self) -> bool {
+        self.state_flags.contains(MonitorStateFlags::CLOSED)
+    }
+
+    /// Returns `true` when `flow_paused_connections` and the other `flow_*`
+    /// fields are populated (ABI 4+, paired DEALER/ROUTER sockets only).
+    pub fn has_flow_state_detail(&self) -> bool {
+        self.detail_flags
+            .contains(MonitorStatusDetailFlags::FLOW_STATE)
     }
 }

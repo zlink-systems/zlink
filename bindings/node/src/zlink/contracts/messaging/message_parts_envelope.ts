@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+import { constants } from 'node:os';
 import { RecvError, RecvResult } from '../errors/errors';
 import { Message } from './message';
 
@@ -16,7 +17,7 @@ function invalidMultipartError(partsLength: number): RecvError {
 }
 
 function missingPartError(): RecvError {
-  const error = new RecvError(RecvResult.NotSupported, 0);
+  const error = new RecvError(RecvResult.InvalidState, constants.errno.EINVAL);
   error.message = 'message has no parts';
   return error;
 }

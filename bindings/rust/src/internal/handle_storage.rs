@@ -51,3 +51,18 @@ pub(crate) struct SocketStorage {
 }
 
 unsafe impl Send for SocketStorage {}
+
+pub(crate) struct CoreUtilities;
+
+pub(crate) struct StopwatchStorage {
+    pub(crate) handle: *mut c_void,
+}
+
+pub(crate) struct AtomicCounterStorage {
+    pub(crate) handle: *mut c_void,
+}
+
+pub(crate) struct ThreadStorage {
+    pub(crate) handle: *mut c_void,
+    pub(crate) state: *mut c_void,
+}

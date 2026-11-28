@@ -27,6 +27,7 @@
 #include "runtime/configuration/request_defaults.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/spots/instance_spot_application.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/messaging/request_deadline.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
@@ -1226,17 +1227,26 @@ void spot_context_state_t::run_local_close_steps (
             auto creating = [&] {
                 const auto command =
                   std::static_pointer_cast<const instance_spot_retained_message_t> (original);
+                // The retained activation carries the v1 multipart envelope; the
+                // initial message is its body and the flow fields live in its header.
+                auto decoded = runtime::messaging::decode_instance_spot_application (
+                  command->original_activation->application_payload,
+                  command->original_activation->activation.request
+                    ? runtime::messaging::message_kind_t::request
+                    : runtime::messaging::message_kind_t::command,
+                  message_flow_tracer_t (owner->dispatch).flow_tracing ());
+                auto &decoded_header = decoded.value ().header;
                 auto flow = runtime::flow_context_t::enter (
-                  command->original_activation->application_payload.flow_id,
-                  command->original_activation->application_payload.flow_origin,
-                  message_flow_tracer_t (owner->dispatch).mode (), flow_origin_t::inbound,
-                  std::nullopt);
+                  decoded_header.flow_id
+                    ? std::make_optional (std::string (*decoded_header.flow_id))
+                    : std::nullopt,
+                  decoded_header.flow_origin, message_flow_tracer_t (owner->dispatch).mode (),
+                  flow_origin_t::inbound, std::nullopt);
                 return node.create_spot_context (
                   command->original_activation->activation.target.stable_type, self->spot_id,
-                  zlink::message_t::from (
-                    command->original_activation->application_payload.payload_bytes ()),
-                  next.object_generation, next.allocation.target.mesh_name, {},
-                  next.authority_owner_generation, self->serial_queue, nullptr, operation);
+                  std::move (decoded.value ().body), next.object_generation,
+                  next.allocation.target.mesh_name, {}, next.authority_owner_generation,
+                  self->serial_queue, nullptr, operation);
             }();
             try {
                 const auto created = co_await creating;
@@ -3001,8 +3011,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                                      ? current->activation_scope->provider ()
                                      : *empty_services;
                   auto replay = spot_handler_registry_t (current).invoke_erased (
-                    {}, spot_handler_kind_t::packet,
-                    original->original_activation->application_payload.packet_name (), {},
+                    {}, spot_handler_kind_t::packet, state->handlers[handler_index].packet_name, {},
                     std::type_index (typeid (void)), current->spot_instance.get (), nullptr,
                     provider, *current->channel_runtime->serializers, carrier->first,
                     carrier->second, false);

@@ -1,4 +1,7 @@
 use super::*;
+use crate::runtime::handles::ctx::duration_from_millis;
+
+const UNLIMITED_MILLIS: i32 = -1;
 
 pub(super) fn set_int_opt(
     handle: *mut c_void,
@@ -51,7 +54,28 @@ pub(super) fn get_duration_opt(
     opt: ffi::zlink_option_t,
 ) -> Result<Duration, ConfigError> {
     let millis = get_int_opt(handle, opt)?;
-    Ok(Duration::from_millis(millis as u64))
+    duration_from_millis(millis)
+}
+
+pub(super) fn set_optional_duration_opt(
+    handle: *mut c_void,
+    opt: ffi::zlink_option_t,
+    duration: Option<Duration>,
+) -> Result<(), ConfigError> {
+    match duration {
+        Some(duration) => set_duration_opt(handle, opt, duration),
+        None => set_int_opt(handle, opt, UNLIMITED_MILLIS),
+    }
+}
+
+pub(super) fn get_optional_duration_opt(
+    handle: *mut c_void,
+    opt: ffi::zlink_option_t,
+) -> Result<Option<Duration>, ConfigError> {
+    match get_int_opt(handle, opt)? {
+        UNLIMITED_MILLIS => Ok(None),
+        millis => duration_from_millis(millis).map(Some),
+    }
 }
 
 pub(super) fn set_string_opt(

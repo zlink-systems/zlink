@@ -37,7 +37,7 @@ async def main():
                 with reply:
                     if reply.to_bytes_list() != [b"pong"]:
                         raise AssertionError("unexpected dealer-router reply payload")
-                print('[dealer-router/recv] send: "ping" → recv: "pong"')
+                print('[dealer-router/recv] send: "ping" -> recv: "pong"')
 # --8<-- [end:doc]
 
 

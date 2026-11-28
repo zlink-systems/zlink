@@ -33,6 +33,7 @@ struct multi_bench_settings_t
     int sndbuf;
     int rcvbuf;
     int duration_seconds;
+    int latency_duration_seconds;
     int client_poll_timeout_ms;
     int connect_ready_timeout_ms;
     int send_drain_timeout_ms;
@@ -223,6 +224,8 @@ inline multi_bench_settings_t resolve_multi_bench_settings ()
         out.rcvbuf = -1;
     }
     out.duration_seconds = std::max (1, parse_positive_env ("PERF_MULTI_DURATION_SECONDS", 5));
+    out.latency_duration_seconds = std::max (
+      1, parse_positive_env ("PERF_MULTI_LATENCY_DURATION_SECONDS", out.duration_seconds));
     out.client_poll_timeout_ms = 0;
     out.connect_ready_timeout_ms =
       std::max (0, parse_positive_env ("PERF_MULTI_CONNECT_READY_TIMEOUT_MS", 10000));
@@ -231,8 +234,9 @@ inline multi_bench_settings_t resolve_multi_bench_settings ()
                              default_send_drain_timeout_ms));
     out.sndtimeo_ms = std::max (0, parse_positive_env ("PERF_MULTI_SNDTIMEO_MS", 200));
     out.rcvtimeo_ms = std::max (0, parse_positive_env ("PERF_MULTI_RCVTIMEO_MS", 200));
-    out.monitor_hwm =
-      parse_nonnegative_uint64_env ("PERF_MULTI_MONITOR_HWM", 4096000);
+    out.monitor_hwm = parse_nonnegative_uint64_env (
+      "PERF_MULTI_MONITOR_HWM_BYTES",
+      parse_nonnegative_uint64_env ("PERF_MONITOR_HWM_BYTES", 4096000));
     out.server_bind_port = std::max (0, parse_positive_env ("PERF_MULTI_SERVER_BIND_PORT", 0));
 
     return out;

@@ -124,7 +124,6 @@ bindings/cpp/
 |       |   +-- capability.cpp
 |       |   +-- context.cpp
 |       |   +-- utilities.cpp
-|       |   +-- operation_detail.hpp
 |       |   +-- runtime_helpers.hpp
 |       |   +-- types_impl.hpp
 |       +-- Messaging/

@@ -3,8 +3,11 @@
 import {
   Message,
   acquireMessageWrapper,
-  canShareNativeMessage
+  canShareNativeMessage,
+  isMessageOpen
 } from '../../contracts/messaging/message';
+import { SubmitResult } from '../../contracts/errors/errors';
+import { createError } from '../errors/error_mapping';
 
 export interface MessageSnapshot {
   data?: Buffer;
@@ -74,6 +77,9 @@ export function messageToSnapshot(message: Message): MessageSnapshot {
 }
 
 export function messageToNativeValue(message: Message): unknown {
+  if (!isMessageOpen(message)) {
+    throw createError('submit', 0, 'cannot submit a closed Message', SubmitResult.InvalidHandle);
+  }
   const state = message as unknown as {
     _buffer: Buffer | undefined;
     _nativeMessage?: unknown;

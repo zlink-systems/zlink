@@ -1296,10 +1296,10 @@ void stream_host_service_t::listener_t::handle_stream_connection (
                 const auto header = received_frame.header;
                 trace_stream_host ("dispatch-submit", _stream, header);
                 auto dispatched = _ingress.publish (
-                  _runtime, session, stream, header, received_frame.payload,
+                  _runtime, session, stream, _stream.name, header, received_frame.payload,
                   std::move (application_permit),
-                  [this, owner, connection, connection_state, header, stream,
-                   liveness] (const result_t<void> &result) {
+                  [this, owner, connection, connection_state, header, stream, liveness] (
+                    const result_t<void> &result, detail::stream_metadata_t metadata = {}) {
                       trace_stream_host ("dispatch-complete", _stream, header,
                                          std::string ("result=")
                                            + (result ? "success" : "failure"));
@@ -1308,7 +1308,8 @@ void stream_host_service_t::listener_t::handle_stream_connection (
                           if (header.kind () == stream_message_kind_t::request
                               && !_shutdown_cancellation.stop_requested ()) {
                               try {
-                                  write_error_frame (owner, connection, stream, header, result);
+                                  write_error_frame (owner, connection, stream, header, result,
+                                                     std::move (metadata));
                               }
                               catch (...) {
                                   report_packet_dispatch_error (
@@ -1325,7 +1326,8 @@ void stream_host_service_t::listener_t::handle_stream_connection (
                       report_packet_dispatch_error (header, error);
                       write_error_frame (owner, connection, stream, header, error,
                                          std::move (metadata));
-                  });
+                  },
+                  [this] (auto work) { schedule_admission (std::move (work)); });
                 if (!dispatched) {
                     report_packet_dispatch_error (header, dispatched);
                     if (header.kind () == stream_message_kind_t::request) {

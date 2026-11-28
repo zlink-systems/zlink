@@ -111,6 +111,10 @@ public interface ZLinkStreamConnector {
 
     AutoCloseable onAdmissionWaiting(ZLinkStreamAdmissionWaitingHandler handler);
 
+    AutoCloseable onAdmissionQueued(ZLinkStreamAdmissionQueuedHandler handler);
+
+    AutoCloseable onAdmissionPosition(ZLinkStreamAdmissionPositionHandler handler);
+
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
 
     AutoCloseable onConnectionStateChanged(ZLinkStreamConnectionStateHandler handler);

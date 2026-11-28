@@ -135,7 +135,146 @@ test("application snapshots do not require durable relocation roots", () => {
 
 
 const validators = storageValidators(schema.jsonStorageFormats);
-const storageGolden = JSON.parse(readFileSync(new URL("./golden/aggregate-storage-v1.json", import.meta.url)));
+const storageGoldenBytes = readFileSync(
+  new URL(schema.jsonStorageFormats.goldenFixture, import.meta.url), "utf8",
+);
+const storageGolden = JSON.parse(storageGoldenBytes);
+
+test("aggregate storage keys use lowercase UUIDs and unpadded decimal components", () => {
+  const { caseName, input, expected } = storageGolden.storageKeys;
+  assert.deepEqual(input, {
+    prefix: "zlink:v11:",
+    aggregateId: "01234567-89AB-CDEF-0123-456789ABCDEF",
+    aggregateGeneration: "9007199254740993",
+    level: 1,
+    pageIndex: 0,
+    participantIndex: 1024,
+  });
+  assert.deepEqual(expected, {
+    aggregate: "zlink:v11:aggregate:01234567-89ab-cdef-0123-456789abcdef:9007199254740993",
+    root: "zlink:v11:aggregate-inventory:01234567-89ab-cdef-0123-456789abcdef:9007199254740993:root",
+    page: "zlink:v11:aggregate-inventory:01234567-89ab-cdef-0123-456789abcdef:9007199254740993:page:1:0",
+    authorityPayload: "zlink:v11:aggregate-inventory:01234567-89ab-cdef-0123-456789abcdef:9007199254740993:participant:1024:authorityPayload",
+    membershipMutation: "zlink:v11:aggregate-inventory:01234567-89ab-cdef-0123-456789abcdef:9007199254740993:participant:1024:membershipMutation",
+  });
+  const inventory = storageGolden.cases.find(({ name }) => name === caseName);
+  const providerKey = (key) => key.replace(/^golden:/, input.prefix);
+  assert.equal(providerKey(inventory.aggregate.key), expected.aggregate);
+  assert.equal(providerKey(inventory.root.key), expected.root);
+  const page = inventory.pages.find(({ decoded }) =>
+    decoded.level === input.level && decoded.index === input.pageIndex);
+  assert.equal(providerKey(page.key), expected.page);
+  assert(inventory.pages.some(({ decoded }) =>
+    decoded.entries.some(({ index }) => index === input.participantIndex)));
+});
+
+test("standalone Actor commit records the target payload and a single-entry digest", () => {
+  const { input, provenance, expected } = storageGolden.standaloneActorCommit;
+  assert.match(input.relocationId, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
+  assert.match(input.actorId, /^[a-z0-9-]+$/);
+  assert.notEqual(input.target.approvedUserSpot.id, input.source.entrySpot.id);
+  for (const spot of [input.source.entrySpot, input.target.approvedUserSpot]) {
+    assert.match(spot.id, /^[a-z0-9-]+$/);
+    assert.match(spot.generation, /^[1-9][0-9]*$/);
+  }
+  assert.match(provenance.command, /exportStandaloneActorCommitGolden/);
+  const { targetAuthorityPayloadHex, digestSha256 } = expected;
+  assert.match(targetAuthorityPayloadHex, /^5a4c4155(?:[0-9a-f]{2})+$/);
+  assert.match(digestSha256, /^[0-9a-f]{64}$/);
+  const authorityPayload = Buffer.from(targetAuthorityPayloadHex, "hex");
+  const idBytes = Buffer.from(input.actorId);
+  const page = {
+    level: 0, index: 0, startIndex: 0, entryCount: 1, children: [],
+    entries: [{
+      index: 0,
+      authorityKey: `zla1:a:${idBytes.length}:${input.actorId}`,
+      expectedStoreVersion: input.expectedStoreVersion,
+      ownerTransition: "newOwner",
+      authorityPayloadSha256: sha256(authorityPayload),
+      membershipMutationSha256: sha256(Buffer.from("[]")),
+    }],
+  };
+  assert(validators.page(page), JSON.stringify(validators.page.errors));
+  const rootBody = {
+    totalCount: 1, topLevel: 0,
+    topPages: [{ level: 0, index: 0, startIndex: 0, entryCount: 1, sha256: sha256(jcsBytes(page)) }],
+  };
+  assert.equal(digestSha256, sha256(jcsBytes(rootBody)));
+  assert(validators.root({ ...rootBody, digestSha256 }), JSON.stringify(validators.root.errors));
+});
+
+test("aggregate storage generator reproduces the accepted and rejected fixture bytes", () => {
+  assert(storageGolden.rejected, "aggregate storage fixture must include rejection vectors");
+  assert.deepEqual(storageGolden.rejected.map(({ name }) => name), [
+    "missing-page", "missing-participant", "damaged-participant", "damaged-page",
+    "reordered-leaf-entries", "reordered-page-index",
+  ]);
+  assert.equal(storageGoldenBytes, `${JSON.stringify(generateAggregateStorageFixtures(schema), null, 2)}\n`);
+});
+
+// Read the storage bytes as a consumer does, including referenced participants.
+function verifyInventory(fixture, changes = {}) {
+  const records = new Map([[fixture.root.key, Buffer.from(fixture.root.jcsHex, "hex")],
+    ...fixture.pages.map((page) => [page.key, Buffer.from(page.jcsHex, "hex")])]);
+  const prefix = fixture.root.key.slice(0, -"root".length);
+  for (const page of fixture.pages) for (const entry of page.decoded.entries) {
+    for (const kind of ["authorityPayload", "membershipMutation"]) {
+      records.set(`${prefix}participant:${entry.index}:${kind}`,
+        Buffer.from(fixture.participantHashInputs[`${kind}Hex`], "hex"));
+    }
+  }
+  for (const key of changes.removeKeys ?? []) records.delete(key);
+  for (const { key, hex } of changes.replaceRecords ?? []) records.set(key, Buffer.from(hex, "hex"));
+  const read = (key) => { const value = records.get(key); assert(value, `missing ${key}`); return value; };
+  const root = JSON.parse(read(fixture.root.key));
+  const { digestSha256, ...body } = root;
+  assert.equal(sha256(jcsBytes(body)), digestSha256);
+  assert.equal(digestSha256, changes.rootDigestSha256 ?? fixture.aggregate.decoded.inventoryDigestSha256);
+  let nextEntry = 0;
+  const visit = (ref) => {
+    const bytes = read(`${prefix}page:${ref.level}:${ref.index}`);
+    assert.equal(sha256(bytes), ref.sha256);
+    const page = JSON.parse(bytes);
+    assert(validators.page(page));
+    for (const field of ["level", "index", "startIndex", "entryCount"]) assert.equal(page[field], ref[field]);
+    const items = page.level === 0 ? page.entries : page.children;
+    for (const [index, item] of items.entries()) {
+      if (page.level === 0) {
+        assert.equal(item.index, nextEntry++);
+        for (const kind of ["authorityPayload", "membershipMutation"]) {
+          assert.equal(sha256(read(`${prefix}participant:${item.index}:${kind}`)), item[`${kind}Sha256`]);
+        }
+      } else {
+        assert.equal(item.index, index);
+        visit(item);
+      }
+    }
+  };
+  for (const ref of root.topPages) visit(ref);
+  assert.equal(nextEntry, root.totalCount);
+}
+
+test("aggregate inventory accepts its original records", () => {
+  for (const fixture of storageGolden.cases) verifyInventory(fixture);
+});
+for (const vector of storageGolden.rejected) {
+  test(`aggregate inventory rejects ${vector.name}`, () => {
+    const fixture = storageGolden.cases.find(({ name }) => name === vector.base);
+    assert(fixture, vector.name);
+    assert.throws(() => verifyInventory(fixture, vector));
+  });
+}
+
+test("marker-less Direct Join inventory keys use the RelocationId and generation 1", () => {
+  const { directJoin } = storageGolden;
+  const prefix = `golden:aggregate-inventory:${directJoin.relocationId}:1:`;
+  assert.equal(directJoin.aggregateGeneration, "1");
+  assert.equal(directJoin.root.decoded.totalCount, 1);
+  for (const key of [directJoin.root.key, ...directJoin.pages.map(({ key }) => key),
+    ...directJoin.participantKeys.flatMap(({ authorityPayload, membershipMutation }) => [authorityPayload, membershipMutation])]) {
+    assert(key.startsWith(prefix), key);
+  }
+});
 
 test("JCS uses RFC 8785 number serialization and UTF-16 property ordering", () => {
   assert.equal(jcsBytes({ numbers: [333333333.33333329, 1e30, 4.50, 2e-3, 1e-27] }).toString(),

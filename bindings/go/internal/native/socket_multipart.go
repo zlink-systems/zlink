@@ -26,39 +26,27 @@ func closeMessageSlice(parts []*Message) {
 	}
 }
 
-type preparedMultipart struct {
-	native []C.zlink_msg_t
-	parts  []*Message
-}
-
 type multipartSubmitFunc func(*C.zlink_msg_t, C.size_t) error
 type multipartRecvFunc func(*C.zlink_msg_t, C.size_t, *C.size_t, C.zlink_recv_flags_t) (C.zlink_recv_result_t, error)
 
-func (p *preparedMultipart) restore() error {
-	if p == nil {
-		return nil
-	}
-	for i, part := range p.parts {
-		if part == nil {
-			continue
-		}
-		rc56, errno56 := C.zlink_msg_move(&part.msg, &p.native[i])
-		if err := configErrorFromCall(rc56, errno56); err != nil {
-			closeNativeMultipart(p.native, len(p.native))
-			return err
+func restoreMultipartPreparation(native []C.zlink_msg_t, prepared []sendBuilderPart, cause error) error {
+	for i, part := range prepared {
+		if part.move {
+			result, cerr := C.zlink_msg_move(&part.message.msg, &native[i])
+			if err := configErrorFromCall(result, cerr); err != nil {
+				closeNativeMultipart(native, len(native))
+				return err
+			}
 		}
 	}
-	closeNativeMultipart(p.native, len(p.native))
-	return nil
+	closeNativeMultipart(native, len(native))
+	return cause
 }
 
-func submitPreparedMultipart(prepared *preparedMultipart, submit multipartSubmitFunc) error {
-	if prepared == nil || len(prepared.native) == 0 {
-		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
-	}
+func submitPreparedMultipart(native []C.zlink_msg_t, submit multipartSubmitFunc) error {
 	// Whole-message submission consumes every native slot on both success and
 	// failure, so this prepared array has no ownership after the call returns.
-	return submit(&prepared.native[0], C.size_t(len(prepared.native)))
+	return submit(&native[0], C.size_t(len(native)))
 }
 
 func initNativeMessageFromBytes(native *C.zlink_msg_t, data []byte) error {
@@ -84,9 +72,9 @@ func submitMultipartFromClones(parts []*Message, consumeOriginal bool, submit mu
 	}
 	native := make([]C.zlink_msg_t, len(parts))
 	for i, part := range parts {
-		if part == nil {
+		if err := validateSubmitMessage(part); err != nil {
 			closeNativeMultipart(native, i)
-			return configInvalidArgumentError()
+			return err
 		}
 		rc58, errno58 := C.zlink_msg_init(&native[i])
 		if err := configErrorFromCall(rc58, errno58); err != nil {
@@ -99,7 +87,7 @@ func submitMultipartFromClones(parts []*Message, consumeOriginal bool, submit mu
 			return err
 		}
 	}
-	if err := submitPreparedMultipart(&preparedMultipart{native: native}, submit); err != nil {
+	if err := submitPreparedMultipart(native, submit); err != nil {
 		return err
 	}
 	if consumeOriginal {
@@ -109,11 +97,8 @@ func submitMultipartFromClones(parts []*Message, consumeOriginal bool, submit mu
 }
 
 func submitSinglePartFromCopy(part *Message, submit multipartSubmitFunc) error {
-	if part == nil {
-		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
-	}
-	if part.closed {
-		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
+	if err := validateSubmitMessage(part); err != nil {
+		return err
 	}
 	var native C.zlink_msg_t
 	rc60, errno60 := C.zlink_msg_init(&native)
@@ -142,11 +127,8 @@ func submitSinglePartFromCopy(part *Message, submit multipartSubmitFunc) error {
 }
 
 func submitSinglePartMoved(part *Message, submit multipartSubmitFunc) error {
-	if part == nil {
-		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
-	}
-	if part.closed {
-		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
+	if err := validateSubmitMessage(part); err != nil {
+		return err
 	}
 	var native C.zlink_msg_t
 	rc64, errno64 := C.zlink_msg_init(&native)
@@ -189,53 +171,34 @@ func submitMultipartFromBuilderParts(parts []sendBuilderPart, submit multipartSu
 		return submitSinglePartFromCopy(parts[0].message, submit)
 	}
 	native := make([]C.zlink_msg_t, len(parts))
-	movedParts := make([]*Message, len(parts))
-	initialized := 0
-	restorePreparation := func(err error) error {
-		prepared := &preparedMultipart{
-			native: native[:initialized],
-			parts:  movedParts[:initialized],
-		}
-		if restoreErr := prepared.restore(); restoreErr != nil {
-			return restoreErr
-		}
-		return err
-	}
 	for i, part := range parts {
 		if part.bytes {
 			if err := initNativeMessageFromBytes(&native[i], part.data); err != nil {
-				return restorePreparation(err)
+				return restoreMultipartPreparation(native[:i], parts[:i], err)
 			}
-			initialized = i + 1
 			continue
 		}
-		if part.message == nil {
-			return restorePreparation(newConfigError(ConfigInvalidArgument, int(C.EINVAL)))
-		}
-		if part.message.closed {
-			return restorePreparation(newConfigError(ConfigInvalidHandle, int(C.EFAULT)))
+		if err := validateSubmitMessage(part.message); err != nil {
+			return restoreMultipartPreparation(native[:i], parts[:i], err)
 		}
 		rc67, errno67 := C.zlink_msg_init(&native[i])
 		if err := configErrorFromCall(rc67, errno67); err != nil {
-			return restorePreparation(err)
+			return restoreMultipartPreparation(native[:i], parts[:i], err)
 		}
-		initialized = i + 1
 		if part.move {
 			rc68, errno68 := C.zlink_msg_move(&native[i], &part.message.msg)
 			if err := configErrorFromCall(rc68, errno68); err != nil {
-				return restorePreparation(err)
+				return restoreMultipartPreparation(native[:i+1], parts[:i], err)
 			}
-			movedParts[i] = part.message
 		} else {
 			rc69, errno69 := C.zlink_msg_copy(&native[i], &part.message.msg)
 			if err := configErrorFromCall(rc69, errno69); err != nil {
-				return restorePreparation(err)
+				return restoreMultipartPreparation(native[:i+1], parts[:i], err)
 			}
 		}
 	}
 
-	prepared := &preparedMultipart{native: native, parts: movedParts}
-	err := submitPreparedMultipart(prepared, submit)
+	err := submitPreparedMultipart(native, submit)
 	for _, part := range parts {
 		// Bytes parts are represented only by the temporary native message. The
 		// caller-owned Message cleanup below applies only to message-backed parts.

@@ -91,8 +91,8 @@ func TestMultiSendTurnDoesNotWaitForImmediateAdmission(t *testing.T) {
 		return immediateTestSendSubmission{admitted: &admitted}, nil
 	}
 
-	if submitted, err := coordinator.submitRound(time.Now().Add(time.Second), submit); err != nil || submitted != 1 {
-		t.Fatalf("submitRound() = (%d, %v), want (1, nil)", submitted, err)
+	if submitted, err := coordinator.submitRound(time.Now().Add(time.Second), submit); err != nil || submitted != maxBurstPerSender {
+		t.Fatalf("submitRound() = (%d, %v), want (%d, nil)", submitted, err, maxBurstPerSender)
 	}
 	if admitted {
 		t.Fatal("immediately admitted send called Admitted")

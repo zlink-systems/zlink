@@ -70,7 +70,10 @@ func TestReqRepSocketsSubmitConcurrentlyAndExcludeLateReplies(t *testing.T) {
 	cfg := multiConfig{pattern: "DEALER_ROUTER_REQREP", transport: "tcp", clients: count, msgSize: 64, duration: 100 * time.Millisecond}
 	window := activeDeadline(cfg.duration)
 	done := make(chan perfcommon.Result, 1)
-	go func() { done <- runMultiReqRepWindow(cfg, clients, window, time.Second) }()
+	go func() {
+		_, _, result := runMultiReqRepWindow(cfg, clients, window, time.Second, nil)
+		done <- result
+	}()
 	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
 	for i := 0; i < count; i++ {

@@ -87,6 +87,7 @@ EFFECTIVE_DEFAULT_STREAM_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_ST
 STREAM_NON_TCP_CLIENTS_MAX="${PERF_STREAM_NON_TCP_CLIENTS_MAX:-${PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX:-10000}}"
 EFFECTIVE_DEFAULT_IO_THREADS="${PERF_MULTI_DEFAULT_IO_THREADS:-${PERF_DEFAULT_IO_THREADS:-4}}"
 DURATION="${PERF_MULTI_DURATION_SECONDS:-5}"
+LATENCY_DURATION="${PERF_MULTI_LATENCY_DURATION_SECONDS:-}"
 PART_COUNT="${PERF_PART_COUNT:-2}"
 RUNS="${PERF_RUNS:-1}"
 READY_TIMEOUT_MS="${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-10000}}"
@@ -112,7 +113,7 @@ RCVBUF="${PERF_MULTI_RCVBUF:-${PERF_RCVBUF:-}}"
 SNDTIMEO_MS="${PERF_MULTI_SNDTIMEO_MS:-${PERF_SNDTIMEO_MS:-200}}"
 RCVTIMEO_MS="${PERF_MULTI_RCVTIMEO_MS:-${PERF_RCVTIMEO_MS:-200}}"
 CONNECT_CONCURRENCY="${PERF_MULTI_CONNECT_CONCURRENCY:-${PERF_CONNECT_CONCURRENCY:-}}"
-MONITOR_HWM="${PERF_MULTI_MONITOR_HWM:-${PERF_MONITOR_HWM:-4096000}}"
+MONITOR_HWM="${PERF_MULTI_MONITOR_HWM_BYTES:-${PERF_MONITOR_HWM_BYTES:-4096000}}"
 SERVER_BIND_PORT="${PERF_MULTI_SERVER_BIND_PORT:-${PERF_SERVER_BIND_PORT:-0}}"
 CTX_AUTO_HWM_ENABLE="${PERF_CTX_AUTO_HWM_ENABLE:-1}"
 CTX_AUTO_HWM_PROFILE="${PERF_MULTI_CTX_AUTO_HWM_PROFILE:-${PERF_CTX_AUTO_HWM_PROFILE:-balanced}}"
@@ -202,6 +203,7 @@ Options:
                         ROUTER_ROUTER_SENDSEND, ROUTER_ROUTER_REQREP, PUBSUB,
                         STREAM.
   --duration N          Active duration seconds (default: 5).
+  --latency-duration N  Latency seconds (positive integer; default: --duration).
   --part-count N        Application frame count per measured message (1 or 2; default: 2).
   --msg-sizes LIST      Message size list.
   --transports LIST     Transport list override (default: tcp,tls,ws,wss).
@@ -230,7 +232,8 @@ Options:
   --pattern-transition-ms N Pattern cooldown.
   --server-ready-timeout-ms N Server ready timeout.
   --connect-ready-timeout-ms N Client connect-ready timeout.
-  --monitor-hwm N       Monitor socket HWM.
+  --monitor-hwm-bytes BYTES
+                        Override PERF_MULTI_MONITOR_HWM_BYTES (default: 4096000).
   --server-shutdown-timeout-ms N Server shutdown timeout.
   --server-bind-port N  Fixed bind port (0=auto).
   --auto-hwm-profile NAME Auto-HWM profile: compact, low_latency, balanced, throughput (default: balanced).
@@ -695,6 +698,69 @@ raise SystemExit(1)
 PY
 }
 
+wait_for_phase_token() {
+  local log_path="$1"
+  local expected="$2"
+  local timeout_ms="$3"
+  python3 - "${log_path}" "${expected}" "${timeout_ms}" <<'PY'
+import pathlib
+import sys
+import time
+
+path = pathlib.Path(sys.argv[1])
+expected = sys.argv[2]
+deadline = time.monotonic() + max(0, int(sys.argv[3])) / 1000.0
+while time.monotonic() < deadline:
+    if path.exists():
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line == expected or line.startswith(expected + ","):
+                if expected.startswith(("PHASE_DONE,", "PHASE_CATCHUP,")) \
+                        and line != expected:
+                    continue
+                if expected.startswith(("PHASE_DRAINED,", "PHASE_COMPLETE,")):
+                    count = line[len(expected) + 1:]
+                    if (not count.isascii() or not count.isdecimal()
+                            or int(count) > (1 << 64) - 1
+                            or (expected.startswith("PHASE_DRAINED,")
+                                and int(count) == 0)):
+                        continue
+                print(line)
+                raise SystemExit(0)
+            if "multi_server_error:" in line or "multi_client_error:" in line:
+                raise SystemExit(1)
+    time.sleep(0.02)
+raise SystemExit(1)
+PY
+}
+
+forward_one_way_phases() {
+  local phase_line
+  local phase_timeout_ms=$(( CASE_TIMEOUT_SECONDS * 1000 ))
+  if [[ "${pattern}" == "PUBSUB" ]]; then
+    phase_line="$(wait_for_phase_token "${server_log}" "PHASE_DONE,${size},1" "${phase_timeout_ms}")" || return 1
+    write_control_line "${client_control_fd}" '%s\n' "${phase_line}"
+  fi
+
+  if [[ "${pattern}" == "PUBSUB" ]]; then
+    phase_line="$(wait_for_phase_token "${client_log}" "PHASE_DRAINED,${size}" "${phase_timeout_ms}")" || return 1
+    write_control_line "${server_control_fd}" 'PHASE_PACED,%s,%s\n' "${size}" "${phase_line##*,}"
+    if phase_line="$(wait_for_phase_token "${client_log}" "PHASE_CATCHUP,${size}" "$(( LATENCY_DURATION * 1000 ))")"; then
+      write_control_line "${server_control_fd}" '%s\n' "${phase_line}"
+    fi
+    phase_line="$(wait_for_phase_token "${server_log}" "PHASE_DONE,${size},3" "${phase_timeout_ms}")" || return 1
+    write_control_line "${client_control_fd}" '%s\n' "${phase_line}"
+    phase_line="$(wait_for_phase_token "${client_log}" "PHASE_COMPLETE,${size}" "${phase_timeout_ms}")" || return 1
+    write_control_line "${server_control_fd}" '%s\n' "${phase_line}"
+    wait_for_phase_token "${server_log}" "BENCH_DIAG,PUBSUB,${size}" "${phase_timeout_ms}" >/dev/null || return 1
+  else
+    phase_line="$(wait_for_phase_token "${server_log}" "PHASE_DRAINED,${size}" "${phase_timeout_ms}")" || return 1
+    write_control_line "${client_control_fd}" 'PHASE_PACED,%s,%s\n' "${size}" "${phase_line##*,}"
+    phase_line="$(wait_for_phase_token "${server_log}" "PHASE_COMPLETE,${size}" "${phase_timeout_ms}")" || return 1
+    write_control_line "${client_control_fd}" '%s\n' "${phase_line}"
+  fi
+  wait_for_client_done_line "${client_log}" "${size}" "${phase_timeout_ms}"
+}
+
 wait_for_results_from_logs() {
   local primary_log="${1:-}"
   local secondary_log="${2:-}"
@@ -843,6 +909,10 @@ if missing:
 
 values = {}
 for metric in required:
+    if (expected == "PUBSUB" and metric.startswith("latency")
+            and merged[metric][6].startswith("invalid:")):
+        values[metric] = merged[metric][6]
+        continue
     try:
         values[metric] = float(merged[metric][6])
     except ValueError as error:
@@ -852,7 +922,7 @@ for metric in required:
 if values["throughput"] <= 0 or values["bandwidth"] <= 0:
     raise SystemExit("throughput and bandwidth must be positive")
 for metric in ("latency", "latency_p95", "latency_p99"):
-    if values[metric] < 0:
+    if isinstance(values[metric], float) and values[metric] < 0:
         raise SystemExit(f"latency metric must not be negative: {metric}")
 
 for metric in required:
@@ -895,13 +965,16 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 throughput_unit = "Kops/s" if pattern in echo_patterns else "Kmsg/s"
 throughput = float(metrics["throughput"]) / 1000.0
 bandwidth = float(metrics["bandwidth"])
-latency_ms = float(metrics["latency"])
-latency_p95_ms = float(metrics["latency_p95"])
-latency_p99_ms = float(metrics["latency_p99"])
+def latency_cell(value):
+    return f"{float(value):>9.3f} ms" if not value.startswith("invalid:") else value
+
+latency_ms = latency_cell(metrics["latency"])
+latency_p95_ms = latency_cell(metrics["latency_p95"])
+latency_p99_ms = latency_cell(metrics["latency_p99"])
 throughput_text = f"{throughput:8.3f} {throughput_unit}"
 print(
     f"      | {size + 'B':<8} | {throughput_text:>16} | {bandwidth:>10.3f} MB/s |"
-    f" {latency_ms:>9.3f} ms | {latency_p95_ms:>9.3f} ms | {latency_p99_ms:>9.3f} ms |"
+    f" {latency_ms:>12} | {latency_p95_ms:>12} | {latency_p99_ms:>12} |"
 )
 PY
 }
@@ -1241,7 +1314,7 @@ while [[ $# -gt 0 ]]; do
       READY_TIMEOUT_MS="${2:-}"
       shift
       ;;
-    --monitor-hwm)
+    --monitor-hwm-bytes)
       require_arg "$1" "${2:-}"
       MONITOR_HWM="${2:-}"
       shift
@@ -1265,6 +1338,14 @@ while [[ $# -gt 0 ]]; do
       require_arg "$1" "${2:-}"
       DURATION="${2:-}"
       shift
+      ;;
+    --latency-duration)
+      require_arg "$1" "${2:-}"
+      LATENCY_DURATION="${2:-}"
+      shift
+      ;;
+    --latency-duration=*)
+      LATENCY_DURATION="${1#--latency-duration=}"
       ;;
     --part-count)
       require_arg "$1" "${2:-}"
@@ -1308,6 +1389,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 validate_uint "--duration" "${DURATION}"
+LATENCY_DURATION="${LATENCY_DURATION:-${DURATION}}"
+validate_uint "--latency-duration" "${LATENCY_DURATION}"
 validate_uint "--runs" "${RUNS}"
 if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
   echo "--part-count must be 1 or 2." >&2
@@ -1318,9 +1401,10 @@ validate_uint "PERF_MULTI_CONNECT_READY_TIMEOUT_MS" "${READY_TIMEOUT_MS}"
 validate_nonnegative_uint "PERF_MULTI_SERVER_READY_TIMEOUT_MS" "${SERVER_READY_TIMEOUT_MS}"
 validate_nonnegative_uint "PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS" "${SERVER_SHUTDOWN_TIMEOUT_MS}"
 validate_uint "PERF_MULTI_TIMEOUT_SECONDS" "${RESULT_TIMEOUT_SECONDS}"
+CASE_TIMEOUT_SECONDS=$(( RESULT_TIMEOUT_SECONDS + 2 * LATENCY_DURATION ))
 validate_nonnegative_uint "PERF_MULTI_TRANSPORT_TRANSITION_MS" "${TRANSPORT_TRANSITION_MS}"
 validate_nonnegative_uint "PERF_MULTI_PATTERN_TRANSITION_MS" "${PATTERN_TRANSITION_MS}"
-validate_nonnegative_uint "PERF_MULTI_MONITOR_HWM" "${MONITOR_HWM}"
+validate_nonnegative_uint "PERF_MULTI_MONITOR_HWM_BYTES" "${MONITOR_HWM}"
 validate_nonnegative_uint "PERF_MULTI_SERVER_BIND_PORT" "${SERVER_BIND_PORT}"
 if (( SERVER_BIND_PORT > 65535 )); then
   echo "PERF_MULTI_SERVER_BIND_PORT must be in range 0..65535." >&2
@@ -1500,13 +1584,14 @@ run_multi_process() {
     "PERF_IO_THREADS=${role_io_threads}"
     "PERF_MULTI_CLIENTS=${pattern_clients}"
     "PERF_MULTI_DURATION_SECONDS=${DURATION}"
+    "PERF_MULTI_LATENCY_DURATION_SECONDS=${LATENCY_DURATION}"
     "PERF_MULTI_CONNECT_READY_TIMEOUT_MS=${effective_ready_timeout}"
     "PERF_MULTI_SERVER_READY_TIMEOUT_MS=${SERVER_READY_TIMEOUT_MS}"
     "PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS=${SERVER_SHUTDOWN_TIMEOUT_MS}"
     "PERF_MULTI_SERVER_BIND_PORT=${SERVER_BIND_PORT}"
     "PERF_MULTI_SNDTIMEO_MS=${SNDTIMEO_MS}"
     "PERF_MULTI_RCVTIMEO_MS=${RCVTIMEO_MS}"
-    "PERF_MULTI_MONITOR_HWM=${MONITOR_HWM}"
+    "PERF_MULTI_MONITOR_HWM_BYTES=${MONITOR_HWM}"
     "PERF_CTX_AUTO_HWM_ENABLE=${CTX_AUTO_HWM_ENABLE}"
     "PERF_CTX_AUTO_HWM_PROFILE=${CTX_AUTO_HWM_PROFILE}"
     "DOTNET_TieredCompilation=1"
@@ -1559,7 +1644,7 @@ run_multi_process() {
     env "${env_prefix[@]}" bash -lc "${shell_cmd}" <&${control_fd} > "${log_path}" 2>&1
   else
     if command -v timeout >/dev/null 2>&1; then
-      env "${env_prefix[@]}" timeout "${RESULT_TIMEOUT_SECONDS}s" \
+      env "${env_prefix[@]}" timeout "${CASE_TIMEOUT_SECONDS}s" \
         bash -lc "${shell_cmd}" > "${log_path}" 2>&1
     else
       env "${env_prefix[@]}" bash -lc "${shell_cmd}" > "${log_path}" 2>&1
@@ -1576,6 +1661,7 @@ run_external_stream_client() {
   local cmd=(
     "${STREAM_CLIENT}" --transport "${transport}" --pattern STREAM
     --sizes "${size}" --runs 1 --duration "${DURATION}"
+    --latency-duration "${LATENCY_DURATION}"
     --ccu "${stream_clients}" --send-stop-token 0 --endpoint "${endpoint}"
     --completion-wait-ms "${stream_completion_wait_ms}"
     --start-gate 1
@@ -1654,6 +1740,7 @@ print_effective_options() {
   print_line "- msg_sizes: ${EFFECTIVE_MSG_SIZES_DISPLAY}"
   print_line "- routed_echo_per_socket_payload: ${ROUTED_ECHO_PER_SOCKET_PAYLOAD}"
   print_line "- duration_seconds: ${DURATION}"
+  print_line "- latency_duration_seconds: ${LATENCY_DURATION}"
   print_line "- clients: ${EFFECTIVE_CLIENTS_DISPLAY}"
   print_line "- default_clients: ${EFFECTIVE_DEFAULT_CLIENTS}"
   print_line "- default_stream_clients: ${EFFECTIVE_DEFAULT_STREAM_CLIENTS}"
@@ -2029,9 +2116,23 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
           write_control_line "${server_control_fd}" 'START,%s\n' "${size}"
           write_control_line "${client_control_fd}" 'START,%s\n' "${size}"
 
+          if ! forward_one_way_phases; then
+            cat "${server_log}" >&2 || true
+            cat "${client_log}" >&2 || true
+            write_control_line "${server_control_fd}" 'STOP\n'
+            write_control_line "${client_control_fd}" 'STOP\n'
+            terminate_pid "${client_pid}"
+            terminate_pid "${server_pid}"
+            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "phase_timeout"
+            exec {server_control_fd}>&-
+            exec {client_control_fd}>&-
+            status=1
+            continue
+          fi
+
           if ! extracted="$(wait_for_results_from_logs \
             "${client_log}" "${server_log}" "${pattern}" "${transport}" "${size}" \
-            "${RESULT_TIMEOUT_SECONDS}")"; then
+            "${CASE_TIMEOUT_SECONDS}")"; then
             if unsupported_line="$(extract_unsupported_line "${pattern}" "${transport}" "${client_log}" "${server_log}" 2>/dev/null)"; then
              print_line "${unsupported_line}"
               unsupported_count=$((unsupported_count + 1))
@@ -2146,6 +2247,21 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
           printf '%s\n' "${result_line}" >> "${RESULT_DATA_FILE}"
           result_lines=$((result_lines + 1))
         done <<< "${extracted}"
+        while IFS= read -r diagnostic_line; do
+          [[ -n "${diagnostic_line}" ]] && print_line "${diagnostic_line}"
+        done < <(python3 - "${server_log}" "${client_log}" <<'PY'
+import pathlib
+import sys
+
+for filename in sys.argv[1:]:
+    for line in pathlib.Path(filename).read_text(
+            encoding="utf-8", errors="replace").splitlines():
+        if line.startswith(("BENCH_DIAG,", "PACED_DIAG,", "REFERENCE,",
+                            "PUBSUB_CATCHUP_PROGRESS,", "PUBSUB_CATCHUP_DIAG,",
+                            "PUBSUB_LATENCY_DIAG,")):
+            print(line)
+PY
+)
         print_line "    Testing ${transport} | ${size}B:"
         while IFS= read -r table_line; do
           print_line "${table_line}"
@@ -2197,6 +2313,7 @@ import sys
 from collections import defaultdict
 
 rows = defaultdict(list)
+invalid = {}
 with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
     for row in csv.reader(fh):
         if len(row) != 7 or row[0] != "RESULT":
@@ -2206,12 +2323,19 @@ with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
         )
         try:
             size_i = int(size)
+            key = (pattern, transport, size_i, metric)
+            if value.startswith("invalid:"):
+                invalid.setdefault(key, value)
+                continue
             value_f = float(value)
         except ValueError:
             continue
-        rows[(pattern, transport, size_i, metric)].append(value_f)
-for key in sorted(rows.keys()):
+        rows[key].append(value_f)
+for key in sorted(rows.keys() | invalid.keys()):
     pattern, transport, size, metric = key
+    if key in invalid:
+        print(f"RESULT,current,{pattern},{transport},{size},{metric},{invalid[key]}")
+        continue
     precision = 6 if metric.startswith("latency") else 3
     value = statistics.median(rows[key])
     print(f"RESULT,current,{pattern},{transport},{size},{metric},{value:.{precision}f}")

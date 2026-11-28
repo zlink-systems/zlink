@@ -1,7 +1,12 @@
+using Zlink.Framework.Runtime.Backend.DotNet;
+
 namespace Zlink.Framework.Runtime.Spots;
 
 internal abstract class ZLinkSpotCall
 {
+    private readonly TimeSpan _defaultTimeout;
+    private readonly string _yieldOperation;
+    private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
     private readonly Func<
         string?,
         ZLinkMessage,
@@ -16,6 +21,8 @@ internal abstract class ZLinkSpotCall
     private int _submitted;
 
     protected ZLinkSpotCall(
+        TimeSpan defaultTimeout,
+        string yieldOperation,
         Func<
             string?,
             ZLinkMessage,
@@ -25,6 +32,8 @@ internal abstract class ZLinkSpotCall
         > submit
     )
     {
+        _defaultTimeout = defaultTimeout;
+        _yieldOperation = yieldOperation;
         _submit = submit;
     }
 
@@ -56,17 +65,24 @@ internal abstract class ZLinkSpotCall
         _timeout = value;
     }
 
-    protected ValueTask<ZLinkSpotCreateResult> SubmitAsync(
-        TimeSpan defaultTimeout,
-        CancellationToken cancellationToken
-    )
+    public ValueTask<ZLinkSpotCreateResult> Async(CancellationToken cancellationToken = default) =>
+        ZLinkCompletionDispatcher.DeliverLifecycle(SubmitAsync(cancellationToken));
+
+    public ValueTask<ZLinkSpotCreateResult> Yield(CancellationToken cancellationToken = default) =>
+        ZLinkCompletionDispatcher.DeliverLifecycle(
+            ZLinkApplicationExecutionContext
+                .RequireYieldTurn(_turn, _yieldOperation)
+                .YieldFrameworkCallAsync(SubmitAsync, cancellationToken)
+        );
+
+    private ValueTask<ZLinkSpotCreateResult> SubmitAsync(CancellationToken cancellationToken)
     {
         if (Interlocked.Exchange(ref _submitted, 1) != 0)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "The User Spot call was already submitted."
             );
-        return _submit(_meshName, _request, _timeout ?? defaultTimeout, cancellationToken);
+        return _submit(_meshName, _request, _timeout ?? _defaultTimeout, cancellationToken);
     }
 
     private static string Required(string value, string parameter)
@@ -99,10 +115,8 @@ internal sealed class ZLinkSpotCreateCall(
         CancellationToken,
         ValueTask<ZLinkSpotCreateResult>
     > submit
-) : ZLinkSpotCall(submit), IZLinkSpotCreateCall
+) : ZLinkSpotCall(defaultTimeout, "User Spot creation", submit), IZLinkSpotCreateCall
 {
-    private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
-
     public IZLinkSpotCreateCall InMesh(string meshName)
     {
         SetMesh(meshName);
@@ -126,17 +140,6 @@ internal sealed class ZLinkSpotCreateCall(
         SetTimeout(timeout);
         return this;
     }
-
-    public ValueTask<ZLinkSpotCreateResult> Async(CancellationToken cancellationToken = default) =>
-        SubmitAsync(defaultTimeout, cancellationToken);
-
-    public ValueTask<ZLinkSpotCreateResult> Yield(CancellationToken cancellationToken = default) =>
-        ZLinkApplicationExecutionContext
-            .RequireYieldTurn(_turn, "User Spot creation")
-            .YieldFrameworkCallAsync(
-                token => SubmitAsync(defaultTimeout, token),
-                cancellationToken
-            );
 }
 
 internal sealed class ZLinkSpotGetOrCreateCall(
@@ -148,10 +151,8 @@ internal sealed class ZLinkSpotGetOrCreateCall(
         CancellationToken,
         ValueTask<ZLinkSpotCreateResult>
     > submit
-) : ZLinkSpotCall(submit), IZLinkSpotGetOrCreateCall
+) : ZLinkSpotCall(defaultTimeout, "User Spot get-or-create", submit), IZLinkSpotGetOrCreateCall
 {
-    private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
-
     public IZLinkSpotGetOrCreateCall InMesh(string meshName)
     {
         SetMesh(meshName);
@@ -175,15 +176,4 @@ internal sealed class ZLinkSpotGetOrCreateCall(
         SetTimeout(timeout);
         return this;
     }
-
-    public ValueTask<ZLinkSpotCreateResult> Async(CancellationToken cancellationToken = default) =>
-        SubmitAsync(defaultTimeout, cancellationToken);
-
-    public ValueTask<ZLinkSpotCreateResult> Yield(CancellationToken cancellationToken = default) =>
-        ZLinkApplicationExecutionContext
-            .RequireYieldTurn(_turn, "User Spot get-or-create")
-            .YieldFrameworkCallAsync(
-                token => SubmitAsync(defaultTimeout, token),
-                cancellationToken
-            );
 }

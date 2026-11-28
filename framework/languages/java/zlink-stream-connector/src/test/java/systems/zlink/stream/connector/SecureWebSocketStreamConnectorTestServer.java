@@ -4,6 +4,8 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelId;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
@@ -15,12 +17,16 @@ import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerProtocolHandler;
 import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslHandshakeCompletionEvent;
 
 import java.io.Closeable;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -31,6 +37,8 @@ final class SecureWebSocketStreamConnectorTestServer implements Closeable {
     private final Queue<CompletableFuture<TcpStreamConnectorTestServer.ReceivedFrame>> waiters =
             new ArrayDeque<>();
     private final Queue<TcpStreamConnectorTestServer.ReceivedFrame> frames = new ArrayDeque<>();
+    private final List<ConnectionStage> connectionStages =
+            Collections.synchronizedList(new ArrayList<>());
     private final Channel serverChannel;
     private volatile Channel clientChannel;
 
@@ -40,6 +48,15 @@ final class SecureWebSocketStreamConnectorTestServer implements Closeable {
                 new ServerBootstrap()
                         .group(boss, worker)
                         .channel(NioServerSocketChannel.class)
+                        .handler(
+                                new ChannelInboundHandlerAdapter() {
+                                    @Override
+                                    public void channelRead(
+                                            ChannelHandlerContext context, Object accepted) {
+                                        recordStage(((Channel) accepted).id(), "tcpAccepted");
+                                        context.fireChannelRead(accepted);
+                                    }
+                                })
                         .childHandler(
                                 new ChannelInitializer<SocketChannel>() {
                                     @Override
@@ -68,6 +85,35 @@ final class SecureWebSocketStreamConnectorTestServer implements Closeable {
     URI endpoint() {
         return URI.create("wss://127.0.0.1:" + port() + "/stream");
     }
+
+    String connectTiming(long startedAt, long finishedAt) {
+        var stages =
+                List.copyOf(connectionStages).stream()
+                        .filter(stage -> stage.observedAt() - finishedAt <= 0)
+                        .map(
+                                stage ->
+                                        stage.channelId().asShortText()
+                                                + "/"
+                                                + stage.name()
+                                                + "="
+                                                + elapsedMillis(startedAt, stage.observedAt())
+                                                + "ms")
+                        .toList();
+        return "WSS connect timing elapsedMs="
+                + elapsedMillis(startedAt, finishedAt)
+                + " serverStages="
+                + stages;
+    }
+
+    private void recordStage(ChannelId channelId, String name) {
+        connectionStages.add(new ConnectionStage(channelId, name, System.nanoTime()));
+    }
+
+    private static double elapsedMillis(long startedAt, long observedAt) {
+        return TimeUnit.NANOSECONDS.toMicros(observedAt - startedAt) / 1_000.0;
+    }
+
+    private record ConnectionStage(ChannelId channelId, String name, long observedAt) {}
 
     ZLinkStreamConnectorOptions options(ZLinkStreamDispatchMode dispatchMode) {
         return new ZLinkStreamConnectorOptions(
@@ -171,6 +217,16 @@ final class SecureWebSocketStreamConnectorTestServer implements Closeable {
                     new TcpStreamConnectorTestServer.ReceivedFrame(
                             ZLinkStreamWireProtocol.decodeHeader(decoded.header()),
                             decoded.payload()));
+        }
+
+        @Override
+        public void userEventTriggered(ChannelHandlerContext context, Object event) {
+            if (event instanceof SslHandshakeCompletionEvent handshake && handshake.isSuccess()) {
+                server.recordStage(context.channel().id(), "tlsHandshakeComplete");
+            } else if (event instanceof WebSocketServerProtocolHandler.HandshakeComplete) {
+                server.recordStage(context.channel().id(), "webSocketUpgradeResponse");
+            }
+            context.fireUserEventTriggered(event);
         }
 
         @Override

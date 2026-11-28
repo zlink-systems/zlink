@@ -22,14 +22,3 @@ func newPubSocket(ctx *Context, socketType C.zlink_socket_type_t) (*PubSocket, e
 		publishSocket: &publishSocket{connectionSocket: &connectionSocket{socketCore: core}},
 	}, nil
 }
-
-func (s *PubSocket) Publish(topic string) PublishOp {
-	return newPublishBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
-		return s.withCString(topic, func(cstr *C.char) error {
-			return submitMultipartFromBuilderParts(parts, func(native *C.zlink_msg_t, count C.size_t) error {
-				nativeResult0, nativeErr0 := C.zlink_publish(s.raw(), cstr, native, count, C.zlink_send_flags_t(flags))
-				return submitErrorFromCall(nativeResult0, nativeErr0)
-			})
-		})
-	})
-}

@@ -13,11 +13,6 @@ namespace zlink
 namespace
 {
 
-inline recv_error_t invalid_single_part_error ()
-{
-    return recv_error_t (recv_result_t::not_supported, EMSGSIZE);
-}
-
 void close_parts (std::vector<message_t> &parts_)
 {
     for (std::vector<message_t>::iterator it = parts_.begin (); it != parts_.end (); ++it)
@@ -57,10 +52,10 @@ received_t::received_t (std::optional<routing_id_t> routing_id_,
 
 message_t &detail::lazy_message_parts_t::first_part ()
 {
-    if (!is_single_part ())
-        throw invalid_single_part_error ();
     if (_single_part.has_value ())
         return *_single_part;
+    if (_parts.empty ())
+        throw recv_error_t (recv_result_t::invalid_state, EINVAL);
     return _parts.front ();
 }
 
@@ -88,10 +83,8 @@ std::vector<message_t> &detail::lazy_message_parts_t::parts ()
 message_t detail::lazy_message_parts_t::single_part_or_throw ()
 {
     if (!is_single_part ())
-        throw invalid_single_part_error ();
-    if (_single_part.has_value ())
-        return *_single_part;
-    return _parts.front ();
+        throw recv_error_t (recv_result_t::not_supported, EMSGSIZE);
+    return first_part ();
 }
 
 void detail::lazy_message_parts_t::replace (std::vector<message_t> &parts_)

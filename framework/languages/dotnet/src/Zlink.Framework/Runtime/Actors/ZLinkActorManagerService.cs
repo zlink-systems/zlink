@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 using Zlink.Framework.Runtime.Locations;
@@ -38,9 +39,14 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 )
         );
 
-    public async ValueTask<ActorRef?> FindAsync(
+    public ValueTask<ActorRef?> FindAsync(
         string actorId,
         CancellationToken cancellationToken = default
+    ) => ZLinkCompletionDispatcher.DeliverLifecycle(FindCoreAsync(actorId, cancellationToken));
+
+    private async ValueTask<ActorRef?> FindCoreAsync(
+        string actorId,
+        CancellationToken cancellationToken
     )
     {
         using var operation = runtime.EnterOperationalRead();
@@ -84,9 +90,14 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         );
     }
 
-    public async ValueTask<SpotRef?> FindSpotAsync(
+    public ValueTask<SpotRef?> FindSpotAsync(
         string actorId,
         CancellationToken cancellationToken = default
+    ) => ZLinkCompletionDispatcher.DeliverLifecycle(FindSpotCoreAsync(actorId, cancellationToken));
+
+    private async ValueTask<SpotRef?> FindSpotCoreAsync(
+        string actorId,
+        CancellationToken cancellationToken
     )
     {
         using var operation = (await runtime.AdmitOperationAsync().ConfigureAwait(false)).Enter();
@@ -126,9 +137,14 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         );
     }
 
-    public async ValueTask<bool> DestroyAsync(
+    public ValueTask<bool> DestroyAsync(
         ActorRef actor,
         CancellationToken cancellationToken = default
+    ) => ZLinkCompletionDispatcher.DeliverLifecycle(DestroyCoreAsync(actor, cancellationToken));
+
+    private async ValueTask<bool> DestroyCoreAsync(
+        ActorRef actor,
+        CancellationToken cancellationToken
     )
     {
         using var operation = (await runtime.AdmitOperationAsync().ConfigureAwait(false)).Enter();
@@ -908,6 +924,9 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
 
 internal abstract class ZLinkActorCreateCallBase
 {
+    private readonly TimeSpan _defaultTimeout;
+    private readonly string _yieldOperation;
+    private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
     private readonly Func<
         string?,
         ZLinkMessage,
@@ -922,6 +941,8 @@ internal abstract class ZLinkActorCreateCallBase
     private int _submitted;
 
     protected ZLinkActorCreateCallBase(
+        TimeSpan defaultTimeout,
+        string yieldOperation,
         Func<
             string?,
             ZLinkMessage,
@@ -931,6 +952,8 @@ internal abstract class ZLinkActorCreateCallBase
         > submit
     )
     {
+        _defaultTimeout = defaultTimeout;
+        _yieldOperation = yieldOperation;
         _submit = submit;
     }
 
@@ -967,17 +990,24 @@ internal abstract class ZLinkActorCreateCallBase
         _timeout = timeout;
     }
 
-    protected ValueTask<ZLinkActorCreateResult> SubmitAsync(
-        TimeSpan defaultTimeout,
-        CancellationToken cancellationToken
-    )
+    public ValueTask<ZLinkActorCreateResult> Async(CancellationToken cancellationToken = default) =>
+        ZLinkCompletionDispatcher.DeliverLifecycle(SubmitAsync(cancellationToken));
+
+    public ValueTask<ZLinkActorCreateResult> Yield(CancellationToken cancellationToken = default) =>
+        ZLinkCompletionDispatcher.DeliverLifecycle(
+            ZLinkApplicationExecutionContext
+                .RequireYieldTurn(_turn, _yieldOperation)
+                .YieldFrameworkCallAsync(SubmitAsync, cancellationToken)
+        );
+
+    private ValueTask<ZLinkActorCreateResult> SubmitAsync(CancellationToken cancellationToken)
     {
         if (Interlocked.Exchange(ref _submitted, 1) != 0)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "The Actor create call was already submitted."
             );
-        return _submit(_meshName, _request, _timeout ?? defaultTimeout, cancellationToken);
+        return _submit(_meshName, _request, _timeout ?? _defaultTimeout, cancellationToken);
     }
 
     private static void Duplicate(string option) =>
@@ -996,10 +1026,8 @@ internal sealed class ZLinkActorCreateCall(
         CancellationToken,
         ValueTask<ZLinkActorCreateResult>
     > submit
-) : ZLinkActorCreateCallBase(submit), IZLinkActorCreateCall
+) : ZLinkActorCreateCallBase(defaultTimeout, "Actor creation", submit), IZLinkActorCreateCall
 {
-    private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
-
     public IZLinkActorCreateCall InMesh(string meshName)
     {
         SetMesh(meshName);
@@ -1023,17 +1051,6 @@ internal sealed class ZLinkActorCreateCall(
         SetTimeout(timeout);
         return this;
     }
-
-    public ValueTask<ZLinkActorCreateResult> Async(CancellationToken cancellationToken = default) =>
-        SubmitAsync(defaultTimeout, cancellationToken);
-
-    public ValueTask<ZLinkActorCreateResult> Yield(CancellationToken cancellationToken = default) =>
-        ZLinkApplicationExecutionContext
-            .RequireYieldTurn(_turn, "Actor creation")
-            .YieldFrameworkCallAsync(
-                token => SubmitAsync(defaultTimeout, token),
-                cancellationToken
-            );
 }
 
 internal sealed class ZLinkActorGetOrCreateCall(
@@ -1045,10 +1062,10 @@ internal sealed class ZLinkActorGetOrCreateCall(
         CancellationToken,
         ValueTask<ZLinkActorCreateResult>
     > submit
-) : ZLinkActorCreateCallBase(submit), IZLinkActorGetOrCreateCall
+)
+    : ZLinkActorCreateCallBase(defaultTimeout, "Actor get-or-create", submit),
+        IZLinkActorGetOrCreateCall
 {
-    private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
-
     public IZLinkActorGetOrCreateCall InMesh(string meshName)
     {
         SetMesh(meshName);
@@ -1072,15 +1089,4 @@ internal sealed class ZLinkActorGetOrCreateCall(
         SetTimeout(timeout);
         return this;
     }
-
-    public ValueTask<ZLinkActorCreateResult> Async(CancellationToken cancellationToken = default) =>
-        SubmitAsync(defaultTimeout, cancellationToken);
-
-    public ValueTask<ZLinkActorCreateResult> Yield(CancellationToken cancellationToken = default) =>
-        ZLinkApplicationExecutionContext
-            .RequireYieldTurn(_turn, "Actor get-or-create")
-            .YieldFrameworkCallAsync(
-                token => SubmitAsync(defaultTimeout, token),
-                cancellationToken
-            );
 }

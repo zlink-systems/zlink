@@ -13,12 +13,13 @@ internal static partial class ZLinkFrameworkRegistrationValidator
         ValidateDispatchOptions(registration.DispatchOptions);
 
         ValidateLocations(registration);
+        ValidateAuthenticationAdmission(registration);
+        registration.AdmissionQueue = ZLinkAdmissionQueueConfiguration.Configure(registration);
         ValidateRelocationStoreRequirement(registration);
 
         foreach (var channel in registration.Channels.Values)
             ValidateChannel(channel, registration.Locations.Enabled, handlerExposure);
 
-        ValidateAuthenticationAdmission(registration);
         ValidateUniqueStreamSessionTypes(registration);
         foreach (var streamNode in registration.StreamNodes.Values)
             ValidateStreamNode(streamNode, registration);

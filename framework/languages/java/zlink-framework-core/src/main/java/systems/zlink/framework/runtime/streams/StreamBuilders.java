@@ -98,6 +98,36 @@ public final class StreamBuilders {
         }
 
         @Override
+        public ZLinkStreamNodeBuilder admissionQueueEnabled(boolean enabled) {
+            registration.admissionQueueEnabled(enabled);
+            return this;
+        }
+
+        @Override
+        public ZLinkStreamNodeBuilder admissionQueueKey(String key) {
+            registration.admissionQueueKey(key);
+            return this;
+        }
+
+        @Override
+        public ZLinkStreamNodeBuilder admissionQueuePreviousKey(String key) {
+            registration.admissionQueuePreviousKey(key);
+            return this;
+        }
+
+        @Override
+        public ZLinkStreamNodeBuilder admissionQueueMeshName(String meshName) {
+            registration.admissionQueueMeshName(meshName);
+            return this;
+        }
+
+        @Override
+        public ZLinkStreamNodeBuilder admissionGlobalLimit(int limit) {
+            registration.admissionGlobalLimit(limit);
+            return this;
+        }
+
+        @Override
         public ZLinkStreamSocketConfig configureSocket() {
             return registration.socketConfig();
         }

@@ -24,6 +24,10 @@ from perf_multi_common import (
     wait_monitor_event,
 )
 
+from perf_multi_measurement import (
+    PHASE_ACTIVE, SETTLE_SECONDS, Schedule, latency_duration, read_phase_count,
+)
+
 
 async def _send_stop_token(sock, completion_poller, completion_events):
     await send_routed(
@@ -71,7 +75,7 @@ async def main(argv=None):
                 if command != f"START,{args.msg_size}":
                     raise SystemExit(f"unexpected command: {command}")
 
-                active_deadline = time.perf_counter() + args.duration
+                ctx.recalculate_auto_hwm()
                 with zlink.create_poller() as completion_poller:
                     completion_events = zlink.create_poll_events(
                         max(1, len(sockets))
@@ -83,35 +87,36 @@ async def main(argv=None):
                             index,
                         )
 
-                    def submit(index):
-                        nonlocal seq
-                        seq += 1
-                        return submit_routed(
-                            sockets[index],
-                            stamp_payload(
-                                payloads[index],
-                                phase=1,
-                                run_id=run_id,
-                                seq=seq,
-                            ),
-                        )
+                    async def run_and_stop(deadline, schedule=None):
+                        def submit(index):
+                            nonlocal seq
+                            seq += 1
+                            phase = PHASE_ACTIVE if schedule is None else schedule.phase(time.monotonic())
+                            return submit_routed(
+                                sockets[index],
+                                stamp_payload(payloads[index], phase=phase, run_id=run_id, seq=seq),
+                            )
 
-                    coordinator = MultiSendTurnCoordinator(
-                        completion_poller,
-                        completion_events,
-                        len(sockets),
-                    )
-                    await coordinator.run(
-                        active_deadline,
-                        submit,
-                        drain_timeout_ms=resolve_multi_send_drain_timeout_ms(),
-                    )
-                    for current_sock in sockets:
-                        await _send_stop_token(
-                            current_sock,
-                            completion_poller,
-                            completion_events,
+                        coordinator = MultiSendTurnCoordinator(
+                            completion_poller, completion_events, len(sockets)
                         )
+                        active_sends = await coordinator.run(
+                            deadline, submit, schedule=schedule,
+                            drain_timeout_ms=resolve_multi_send_drain_timeout_ms(),
+                        )
+                        for sock in sockets:
+                            await _send_stop_token(sock, completion_poller, completion_events)
+                        return active_sends
+
+                    active_deadline = time.monotonic() + args.duration
+                    active_sends = await run_and_stop(active_deadline)
+                    received = read_phase_count("PHASE_PACED", args.msg_size)
+                    schedule = Schedule(time.monotonic(), received, args.duration)
+                    await run_and_stop(
+                        schedule.epoch + SETTLE_SECONDS + latency_duration(args.duration), schedule
+                    )
+                    paced = read_phase_count("PHASE_COMPLETE", args.msg_size)
+                    schedule.print("DEALER_DEALER", args, active_sends, received, paced)
                 if sockets:
                     print_multi_auto_hwm_detail(
                         sockets[0], "endpoint", args.transport, args.msg_size, "dealer"

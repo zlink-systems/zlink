@@ -114,13 +114,19 @@ class _BaseReceived(Protocol):
         ...
 
     def first_part(self):
-        """Return the first part without transferring ownership; raise
-        :class:`RecvError` when the envelope has no parts."""
+        """Return the first part without transferring ownership.
+
+        Raises:
+            RecvError: The envelope has no parts.
+        """
         ...
 
     def single_part_or_throw(self):
-        """Return the only part; raise :class:`RecvError` unless the envelope
-        holds exactly one part."""
+        """Return the only part without transferring ownership.
+
+        Raises:
+            RecvError: The envelope does not hold exactly one part.
+        """
         ...
 
     def close(self):
@@ -163,13 +169,19 @@ class Received(ReceivedMultipart, Protocol):
         ...
 
     def send(self) -> "SendOp":
-        """Begin a send addressed to this envelope's source route; raise
-        :class:`SubmitError` when the envelope carries no send context."""
+        """Begin a send addressed to this envelope's source route.
+
+        Raises:
+            SubmitError: The envelope has no send context.
+        """
         ...
 
     def reply(self) -> "ReplyOp":
-        """Begin a reply to this request; raise :class:`SubmitError` unless the
-        envelope is replyable (has a reply token)."""
+        """Begin a reply to this request.
+
+        Raises:
+            SubmitError: The envelope has no reply token.
+        """
         ...
 
 
