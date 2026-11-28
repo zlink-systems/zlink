@@ -1190,12 +1190,6 @@ export class ZLinkActorHandoffCoordinator {
     const committedTargetOwner =
       targetOwnerFence === null ? null : requireExactTargetOwnerFence(actorId, targetOwnerFence);
     this.active.delete(actorId);
-    // Location runtime §10: a later owner has no source-local Follow route.
-    if (committedTargetOwner === null) {
-      const unavailable = actorLocationStale(actorId);
-      for (const pending of handoff.pending) this.failReleasedPending(pending, unavailable);
-      return;
-    }
     const byIndex = new Map(results.map((result) => [result.index, result]));
     for (let i = 0; i <= handoff.snapshotIndex; i++) {
       const pending = handoff.pending[i];
@@ -1214,6 +1208,15 @@ export class ZLinkActorHandoffCoordinator {
       } else {
         pending.resolve?.(result?.response);
       }
+    }
+
+    // Location runtime §10: a later owner has no source-local Follow route for the tail.
+    if (committedTargetOwner === null) {
+      const unavailable = actorLocationStale(actorId);
+      for (let i = handoff.snapshotIndex + 1; i < handoff.pending.length; i++) {
+        this.failReleasedPending(handoff.pending[i], unavailable);
+      }
+      return;
     }
 
     const followRoute = this.installMessageFollowRoute(

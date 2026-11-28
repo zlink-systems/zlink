@@ -1613,9 +1613,10 @@ test('durable request handoff returns its initial permit before capacity-one rep
   assert.equal(coordinator.isActive('actor-1'), false);
 });
 
-test('a chained relocation closes the handoff without Follow and rejects pending requests', async () => {
+test('a chained relocation closes the handoff without Follow and rejects the post-boundary request', async () => {
   const { coordinator, followed } = harness();
   coordinator.begin('actor-1', 1n);
+  coordinator.snapshot('actor-1');
   const held = frame('held-request');
   const pending = coordinator.capture('remote', 'actor-1', held, true, undefined, actorRef());
   const rejected = assert.rejects(
@@ -1623,7 +1624,6 @@ test('a chained relocation closes the handoff without Follow and rejects pending
     (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
   );
   held.forEach((part) => part.close());
-  coordinator.snapshot('actor-1');
   coordinator.complete('actor-1', target(), targetActorRef(), [], null);
   await rejected;
   assert.equal(coordinator.isActive('actor-1'), false);
