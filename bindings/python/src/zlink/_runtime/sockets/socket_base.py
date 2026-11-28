@@ -57,9 +57,9 @@ from ..messaging.message_materializer import (
 )
 from ..messaging.native_parts import _payload_parts
 from ..handles.native_support import (
-    _BytesReceivedPartsOwner,
     _ReceivedPartsOwner,
     _close_multipart,
+    _native_extension,
     _as_bytes_view,
     _copy_routing_id,
     _recv_native_parts,
@@ -71,17 +71,6 @@ from ..handles.native_support import (
     _send_buffer,
 )
 
-try:
-    from ..._native import _zlink_native as _native_extension
-except ImportError:  # pragma: no cover - exercised when extension is not built.
-    _native_extension = None
-
-
-_native_recv_owner = (
-    getattr(_native_extension, "recv_owner", None)
-    if _native_extension is not None
-    else None
-)
 _native_subscribe_owner = (
     getattr(_native_extension, "subscribe_owner", None)
     if _native_extension is not None
@@ -311,47 +300,9 @@ class _BaseSocket:
             _raise_result_error(SubmitError, SubmitResult, rc, err)
         return True
 
-    def _recv_parts_via_native_bridge(self, flags):
-        if _native_extension is None:
-            return None
-        if _native_recv_owner is not None:
-            result = _native_recv_owner(int(self._socket_handle.handle), int(flags))
-            if result is False:
-                return False
-            if result is None:
-                return None
-            rc, err, routing, owner = result
-            if int(rc) != 0:
-                _raise_result_error(RecvError, RecvResult, rc, err)
-            routing_id = RoutingId.from_(routing) if routing is not None else None
-            return routing_id, owner
-
-        result = _native_extension.recv_parts(
-            int(self._socket_handle.handle), int(flags)
-        )
-        if result is None:
-            return None
-        rc, err, routing, parts = result
-        if int(rc) != 0:
-            _raise_result_error(RecvError, RecvResult, rc, err)
-        routing_id = RoutingId.from_(routing) if routing is not None else None
-        return routing_id, _BytesReceivedPartsOwner._from_trusted_bytes_tuple(parts)
-
-    def _recv_owner_via_native_bridge(self, flags):
-        if _native_recv_owner is None:
-            return None
-        result = _native_recv_owner(int(self._socket_handle.handle), int(flags))
-        if result is False:
-            return False
-        if result is None:
-            return None
-        rc, err, _routing, owner = result
-        if int(rc) != 0:
-            _raise_result_error(RecvError, RecvResult, rc, err)
-        return owner
-
     def _set_raw_option(self, setter, option, value):
-        ptr, size, keepalive = _send_buffer(value)
+        source = value if isinstance(value, bytes) else _as_bytes_view(value)
+        ptr, size, keepalive = _send_buffer(source)
         rc = setter(
             self._handle,
             int(option),
@@ -728,13 +679,7 @@ class _MessageSocket(_Socket):
                 ReceivedMessage, RoutingId,
             )
         try:
-            bridged = self._recv_parts_via_native_bridge(flags)
-            if bridged is False:
-                return False
-            if bridged is None:
-                routing, owner = _recv_native_parts(self._handle, flags)
-            else:
-                routing, owner = bridged
+            routing, owner = _recv_native_parts(self._handle, flags)
         except RecvError as ex:
             if (int(flags) & 1) and ex.result == RecvResult.NO_DATA:
                 return False

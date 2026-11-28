@@ -2,11 +2,11 @@
 
 import ctypes
 
-from ...contracts.core.options import AutoHwmProfile, ContextOption
+from ...contracts.core.options import AutoHwmProfile
 from ...contracts.core.context import CoreHwmBudgetSnapshot
 from ...contracts.errors.codes import CloseResult, ConfigResult
 from ...contracts.errors.errors import CloseError, ConfigError
-from ..._native.ffi import ZlinkAutoHwmBudgetSnapshot, lib
+from ..._native.ffi import ContextOption, ZlinkAutoHwmBudgetSnapshot, lib
 from ..handles.native_support import (
     _raise_result_error,
     _raise_zlink_error,
