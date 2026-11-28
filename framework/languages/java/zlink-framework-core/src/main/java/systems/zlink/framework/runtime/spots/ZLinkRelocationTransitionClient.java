@@ -1,10 +1,12 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.internal.relocation.ZLinkAuthorityUnsettledAtStopException;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
 
 /** Framework-private relocation transition boundary used by source schedulers. */
 interface ZLinkRelocationTransitionClient {
@@ -47,6 +49,14 @@ interface ZLinkRelocationTransitionClient {
             RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Instant preserveAt) {
         return settle(targetNodeRid, fence, preserveAt)
                 .thenApply(outcome -> new AuthoritySettlement(outcome, null));
+    }
+
+    default CompletionStage<AuthoritySettlement> settleAuthority(
+            RoutingId targetNodeRid,
+            ZLinkSpotRetireControl.Fence fence,
+            Instant preserveAt,
+            Consumer<ZLinkAuthorityUnsettledAtStopException> onStopDeadline) {
+        return settleAuthority(targetNodeRid, fence, preserveAt);
     }
 
     record AuthoritySettlement(

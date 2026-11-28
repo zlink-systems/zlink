@@ -16,8 +16,10 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAc
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
+import systems.zlink.framework.runtime.internal.relocation.ZLinkAuthorityUnsettledAtStopException;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 
@@ -131,7 +133,8 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                                 prepared.relayCapturedIngress(lane.client(), timeout, settlement),
                         timeout,
                         restoreDeadline,
-                        prepared.metrics)
+                        prepared.metrics,
+                        failure -> reportStopDeadline(goal, prepared.stageRequest(), failure))
                 .handle(
                         (settlement, failure) -> {
                             if (failure != null) return abortSource(attempt, unwrap(failure), null);
@@ -153,6 +156,32 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                                             cleanup));
                         })
                 .thenCompose(outcome -> outcome);
+    }
+
+    private void reportStopDeadline(
+            Goal goal,
+            ZLinkSpotRetireControl.StageRequest request,
+            ZLinkAuthorityUnsettledAtStopException failure) {
+        var trace = spots.dispatchErrors.flow().beginDispatchError();
+        if (trace == null) return;
+        var fence = request.fence();
+        trace.trace(
+                ZLinkMessageFlowEvent.dispatchError(
+                        ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                        ZLinkDispatchMessageKind.ACTOR_REQUEST,
+                        "JoinSpot",
+                        null,
+                        null,
+                        fence.aggregateId() + "/attempt/" + fence.aggregateGeneration(),
+                        request.sourceNodeRid().toString(),
+                        goal.targetSpotId().toString(),
+                        goal.sourceActor().actorId(),
+                        request.meshName(),
+                        request.targetNodeRid().toString(),
+                        ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                        ZLinkDispatchErrorAction.REPLY_ERROR,
+                        failure.kind().name(),
+                        failure.getMessage()));
     }
 
     @Override

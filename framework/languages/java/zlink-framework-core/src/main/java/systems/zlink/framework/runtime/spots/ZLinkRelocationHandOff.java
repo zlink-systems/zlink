@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
+import systems.zlink.framework.runtime.internal.relocation.ZLinkAuthorityUnsettledAtStopException;
 import systems.zlink.framework.runtime.spots.ZLinkRelocationTransitionClient.AuthoritySettlement;
 
 import java.time.Duration;
@@ -12,6 +13,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -131,8 +133,27 @@ final class ZLinkRelocationHandOff {
             Duration timeout,
             Instant restoreDeadline,
             ZLinkRelocationMetricOperation metrics) {
+        return runToReady(
+                client, request, relayCapturedIngress, timeout, restoreDeadline, metrics, null);
+    }
+
+    static CompletionStage<CompletionStage<ZLinkRelocationTransitionClient.Settlement>> runToReady(
+            ZLinkRelocationTransitionClient client,
+            ZLinkSpotRetireControl.StageRequest request,
+            Function<CompletionStage<AuthoritySettlement>, CompletionStage<Void>>
+                    relayCapturedIngress,
+            Duration timeout,
+            Instant restoreDeadline,
+            ZLinkRelocationMetricOperation metrics,
+            Consumer<ZLinkAuthorityUnsettledAtStopException> onStopDeadline) {
         return runToAuthorityReady(
-                        client, request, relayCapturedIngress, timeout, restoreDeadline, metrics)
+                        client,
+                        request,
+                        relayCapturedIngress,
+                        timeout,
+                        restoreDeadline,
+                        metrics,
+                        onStopDeadline)
                 .thenApply(ready -> ready.thenApply(AuthoritySettlement::outcome));
     }
 
@@ -149,7 +170,8 @@ final class ZLinkRelocationHandOff {
                         ignored -> relayCapturedIngress.get(),
                         timeout,
                         restoreDeadline,
-                        metrics)
+                        metrics,
+                        null)
                 .thenCompose(stage -> stage);
     }
 
@@ -162,7 +184,8 @@ final class ZLinkRelocationHandOff {
                     relayCapturedIngress,
             Duration timeout,
             Instant restoreDeadline,
-            ZLinkRelocationMetricOperation metrics) {
+            ZLinkRelocationMetricOperation metrics,
+            Consumer<ZLinkAuthorityUnsettledAtStopException> onStopDeadline) {
         Objects.requireNonNull(client, "client");
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(relayCapturedIngress, "relayCapturedIngress");
@@ -189,7 +212,8 @@ final class ZLinkRelocationHandOff {
                                                             client.settleAuthority(
                                                                     targetRid,
                                                                     request.fence(),
-                                                                    restoreDeadline))
+                                                                    restoreDeadline,
+                                                                    onStopDeadline))
                                             .whenComplete(
                                                     (result, failure) -> {
                                                         if (failure == null)

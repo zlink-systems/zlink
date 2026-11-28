@@ -15,6 +15,7 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome;
@@ -32,11 +33,17 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 final class ZLinkDeferredRemoteJoinStopDeadlineTest {
     private static final String ACTOR_ID = "deadline-player";
+    private static final String TELEMETRY_FENCE_ACTOR_ID = "deadline-telemetry-fence";
     private static final RoutingId SOURCE = RoutingId.from("deadline-source");
     private static final RoutingId TARGET = RoutingId.from("deadline-target");
     private static final String MESH = "join-deadline";
@@ -58,6 +65,44 @@ final class ZLinkDeferredRemoteJoinStopDeadlineTest {
                         new ZLinkJavaBackendAdapterFactory(),
                         node -> holdSettlementAfterPrepare(node, sourceStore, evidence));
 
+        var records = new CopyOnWriteArrayList<String>();
+        var telemetryFence = new CompletableFuture<Void>();
+        var deliveryEntered = new CountDownLatch(1);
+        var releaseDelivery = new CountDownLatch(1);
+        var logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        var listener =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        String line = record.getMessage();
+                        if (line.contains("phase=completed")
+                                && line.contains("actor=" + TELEMETRY_FENCE_ACTOR_ID)) {
+                            telemetryFence.complete(null);
+                        }
+                        if (!line.contains("packet=JoinSpot")
+                                || !line.contains("actor=" + ACTOR_ID)) {
+                            return;
+                        }
+                        if (line.contains("phase=sent")) {
+                            deliveryEntered.countDown();
+                            try {
+                                releaseDelivery.await();
+                            } catch (InterruptedException failure) {
+                                Thread.currentThread().interrupt();
+                                throw new AssertionError(failure);
+                            }
+                        } else if (line.contains("event_id=zlink.dispatch_error")) {
+                            records.add(line);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(listener);
         try (var source =
                         ZLinkFrameworkRuntimeTestAccess.startHost(
                                 options(SOURCE, sourceStore, relocations), sourceBackend);
@@ -105,6 +150,7 @@ final class ZLinkDeferredRemoteJoinStopDeadlineTest {
 
             assertFalse(evidence.backlog.isDone(), "source backlog held by the relocation seal");
 
+            assertTrue(deliveryEntered.await(5, TimeUnit.SECONDS));
             var stopping = source.shutdown(STOP_BUDGET);
             Instant deadline = source.status().deadline().orElseThrow();
             sourceStore.releaseForPreserve();
@@ -112,6 +158,15 @@ final class ZLinkDeferredRemoteJoinStopDeadlineTest {
             assertTrue(preserve.isBefore(deadline), "Preserve entered before the deadline");
 
             var stopped = await(stopping);
+            releaseDelivery.countDown();
+            // A later record from the live target marks when the worker has passed the source's
+            // shutdown records in the shared FIFO.
+            var fence =
+                    target.actorClient()
+                            .requestToActor(TELEMETRY_FENCE_ACTOR_ID, new Join())
+                            .submit(String.class);
+            assertThrows(ExecutionException.class, () -> await(fence));
+            await(telemetryFence);
             assertAll(
                     () ->
                             assertEquals(
@@ -136,6 +191,18 @@ final class ZLinkDeferredRemoteJoinStopDeadlineTest {
                                 "source callback before deadline");
                         assertTrue(callback.backlogPending(), "source backlog at settlement");
                     },
+                    () -> {
+                        assertEquals(1, records.size(), "stop deadline Join diagnostics");
+                        String record = records.getFirst();
+                        assertTrue(record.contains("error_type=UNAVAILABLE"), record);
+                        assertTrue(record.contains("source_rid=" + SOURCE), record);
+                        assertTrue(
+                                record.contains("corr=") && record.contains("/attempt/"), record);
+                        assertTrue(
+                                record.contains(
+                                        "Relocation unit is unsettled at the host stop deadline"),
+                                record);
+                    },
                     () -> assertFalse(evidence.backlogRan.get(), "source backlog during shutdown"),
                     () ->
                             assertEquals(
@@ -148,6 +215,9 @@ final class ZLinkDeferredRemoteJoinStopDeadlineTest {
                             assertInstanceOf(
                                     ZLinkStoreReadMissing.class,
                                     await(locations.read(AUTHORITY, OPEN))));
+        } finally {
+            releaseDelivery.countDown();
+            logger.removeHandler(listener);
         }
     }
 

@@ -399,6 +399,14 @@ public final class ZLinkUserSpotRetireRuntime {
         stateMachines.forEach(machine -> machine.stopAt(deadline));
     }
 
+    public CompletionStage<Void> closeSourceSettlements() {
+        return CompletableFuture.allOf(
+                stateMachines.stream()
+                        .map(ZLinkCanonicalRelocationStateMachine::closeSourceSettlements)
+                        .map(CompletionStage::toCompletableFuture)
+                        .toArray(CompletableFuture[]::new));
+    }
+
     public CompletionStage<Void> sealAcceptedTargetRelocations() {
         return CompletableFuture.allOf(
                 stateMachines.stream()

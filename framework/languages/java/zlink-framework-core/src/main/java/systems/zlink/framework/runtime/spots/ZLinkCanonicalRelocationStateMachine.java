@@ -14,6 +14,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSu
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownExecutor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator.TargetIngressAuthority;
@@ -45,6 +46,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -56,12 +58,12 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.logging.Logger;
 
@@ -95,8 +97,9 @@ final class ZLinkCanonicalRelocationStateMachine
     private final AtomicInteger openSourceQuiescenceWindows = new AtomicInteger();
     private Runnable sourceQuiescenceChanged = () -> {};
     private final java.util.function.BooleanSupplier shutdownAdmissionSealed;
-    private final Set<SettleRun> settleRuns = ConcurrentHashMap.newKeySet();
+    private final Set<SettleRun> settleRuns = new HashSet<>();
     private volatile Instant stopDeadline;
+    private boolean sourceSettlementClosed;
 
     record AttemptCounts(int sources, int targets, int terminalTargets) {}
 
@@ -524,21 +527,37 @@ final class ZLinkCanonicalRelocationStateMachine
     @Override
     public CompletionStage<AuthoritySettlement> settleAuthority(
             RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Instant preserveAt) {
+        return settleAuthority(targetNodeRid, fence, preserveAt, null);
+    }
+
+    @Override
+    public CompletionStage<AuthoritySettlement> settleAuthority(
+            RoutingId targetNodeRid,
+            ZLinkSpotRetireControl.Fence fence,
+            Instant preserveAt,
+            Consumer<ZLinkAuthorityUnsettledAtStopException> onStopDeadline) {
         Objects.requireNonNull(preserveAt, "preserveAt");
         Fence key = Fence.from(fence);
         SourceAttempt attempt = requireSource(key, targetNodeRid);
         if (openSourceQuiescenceWindows.incrementAndGet() == 1) {
             sourceQuiescenceChanged.run();
         }
-        SettleRun run = new SettleRun();
-        CompletableFuture<AuthoritySettlement> result = run.result;
-        settleRuns.add(run);
-        result.whenComplete((ignored, failure) -> settleRuns.remove(run));
+        SettleRun run = new SettleRun(onStopDeadline);
+        boolean admitted = inStateLane(() -> !sourceSettlementClosed && settleRuns.add(run));
+        if (!admitted) {
+            releaseSourceQuiescenceWindow();
+            return failed(sourceSettlementClosed());
+        }
         settleSource(attempt, preserveAt, run);
-        if (stopDeadline != null && !result.isDone()) armStop(run);
-        return result.whenComplete(
+        Instant deadline = stopDeadline;
+        if (deadline != null) armStop(run, deadline);
+        return run.terminal.whenComplete(
                 (settlement, failure) -> {
-                    inStateLane(() -> sources.remove(key, attempt));
+                    inStateLane(
+                            () -> {
+                                settleRuns.remove(run);
+                                return sources.remove(key, attempt);
+                            });
                     if (settlement == null || settlement.outcome() != Settlement.TARGET_COMMITTED) {
                         releaseSourceQuiescenceWindow();
                         return;
@@ -581,35 +600,88 @@ final class ZLinkCanonicalRelocationStateMachine
      */
     void stopAt(Instant deadline) {
         stopDeadline = Objects.requireNonNull(deadline, "deadline");
-        settleRuns.forEach(this::armStop);
+        var active = inStateLane(() -> List.copyOf(settleRuns));
+        active.forEach(run -> armStop(run, deadline));
     }
 
-    private void armStop(SettleRun run) {
-        if (!run.stopArmed.compareAndSet(false, true)) return;
-        Duration remaining = Duration.between(Instant.now(), stopDeadline);
-        delayScheduler.schedule(remaining.isNegative() ? Duration.ZERO : remaining, run::stop);
+    private void armStop(SettleRun run, Instant deadline) {
+        if (run.result.isDone() || !run.stopArmed.compareAndSet(false, true)) return;
+        Duration remaining = Duration.between(Instant.now(), deadline);
+        delayScheduler.schedule(
+                remaining.isNegative() ? Duration.ZERO : remaining,
+                () -> run.stop(new ZLinkAuthorityUnsettledAtStopException()));
     }
 
-    private boolean stopReached(SettleRun run) {
+    /** Seals source settlement and waits for its diagnostics to be handed off. */
+    CompletionStage<Void> closeSourceSettlements() {
+        var active =
+                inStateLane(
+                        () -> {
+                            sourceSettlementClosed = true;
+                            return List.copyOf(settleRuns);
+                        });
+        boolean expired = stopDeadlineReached();
+        for (SettleRun run : active) {
+            if (!run.result.isDone()) {
+                ZLinkTeardownExecutor.execute(
+                        () ->
+                                run.stop(
+                                        expired
+                                                ? new ZLinkAuthorityUnsettledAtStopException()
+                                                : sourceSettlementClosed()));
+            }
+        }
+        return CompletableFuture.allOf(
+                active.stream()
+                        .map(run -> run.terminal.handle((settlement, failure) -> null))
+                        .toArray(CompletableFuture[]::new));
+    }
+
+    private static ZLinkFrameworkException sourceSettlementClosed() {
+        return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.SHUTTING_DOWN, "Relocation source settlement is closed");
+    }
+
+    private boolean stopDeadlineReached() {
         Instant deadline = stopDeadline;
-        if (deadline != null && !Instant.now().isBefore(deadline)) run.stop();
-        return run.stopped;
+        return deadline != null && !Instant.now().isBefore(deadline);
+    }
+
+    private boolean settlementStopped(SettleRun run) {
+        if (stopDeadlineReached()) {
+            run.stop(new ZLinkAuthorityUnsettledAtStopException());
+            return true;
+        }
+        return run.result.isCompletedExceptionally();
     }
 
     private static final class SettleRun {
         final CompletableFuture<AuthoritySettlement> result = new CompletableFuture<>();
+        final CompletableFuture<AuthoritySettlement> terminal;
         final AtomicBoolean stopArmed = new AtomicBoolean();
-        volatile boolean stopped;
 
-        void stop() {
-            stopped = true;
-            result.completeExceptionally(new ZLinkAuthorityUnsettledAtStopException());
+        SettleRun(Consumer<ZLinkAuthorityUnsettledAtStopException> onStopDeadline) {
+            terminal =
+                    onStopDeadline == null
+                            ? result
+                            : result.whenComplete(
+                                    (settlement, failure) -> {
+                                        if (failure
+                                                instanceof
+                                                ZLinkAuthorityUnsettledAtStopException unsettled) {
+                                            onStopDeadline.accept(unsettled);
+                                        }
+                                    });
+        }
+
+        void stop(ZLinkFrameworkException cause) {
+            result.completeExceptionally(cause);
         }
     }
 
     private void settleSource(SourceAttempt attempt, Instant preserveAt, SettleRun run) {
         CompletableFuture<AuthoritySettlement> result = run.result;
-        if (result.isDone() || stopReached(run)) return;
+        if (result.isDone() || settlementStopped(run)) return;
         var prepare = attempt.prepare();
         String key = primary(attempt.request().participants()).authorityKey();
         // Host relocation §14 starts Preserve when shutdown seals admission.
@@ -646,7 +718,7 @@ final class ZLinkCanonicalRelocationStateMachine
                         result.complete(settled.get());
                         return;
                     }
-                    if (result.isDone() || stopReached(run)) return;
+                    if (result.isDone() || settlementStopped(run)) return;
                     // Relocation §4.4: compare against the route used by any retained
                     // boundary record, including a cutover with no relay records.
                     var route = node.observePeerRoute(attempt.targetNodeRid());
@@ -676,7 +748,7 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkAuthorityReadResult read,
             boolean fence,
             SettleRun run) {
-        if (stopReached(run)) return failed(new CancellationException());
+        if (settlementStopped(run)) return failed(new CancellationException());
         var owner = attempt.prepare().coordinator();
         return leaseLive(owner.ownerId(), owner.ownerLeaseGeneration())
                 .thenCompose(
@@ -687,7 +759,7 @@ final class ZLinkCanonicalRelocationStateMachine
                                                 new AuthoritySettlement(
                                                         Settlement.SOURCE_LEASE_EXPIRED, null)));
                             }
-                            if (stopReached(run)) return failed(new CancellationException());
+                            if (settlementStopped(run)) return failed(new CancellationException());
                             if (fence && read instanceof ZLinkAuthoritySnapshot current) {
                                 var relocation = sourceRelocationOf(current, attempt.request());
                                 if (relocation != null && !relocation.hasReached("committed")) {

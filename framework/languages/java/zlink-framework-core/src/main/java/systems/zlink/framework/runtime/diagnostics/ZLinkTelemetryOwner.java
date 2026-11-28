@@ -66,7 +66,6 @@ public final class ZLinkTelemetryOwner {
     }
 
     private record Delivery(
-            Host host,
             ZLinkMessageFlowEvent event,
             Long size,
             Level level,
@@ -107,7 +106,7 @@ public final class ZLinkTelemetryOwner {
             return;
         }
         boolean empty = pending.isEmpty();
-        pending.addLast(new Delivery(host, event, size, level, observed, logger, failures));
+        pending.addLast(new Delivery(event, size, level, observed, logger, failures));
         if (empty && !executing) {
             wakes++;
             notifyAll();
@@ -115,9 +114,7 @@ public final class ZLinkTelemetryOwner {
     }
 
     private synchronized void retire(Host host) {
-        if (host.retired) return;
         host.retired = true;
-        pending.removeIf(delivery -> delivery.host() == host);
     }
 
     private void run() {

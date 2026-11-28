@@ -2365,8 +2365,18 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     CompletionStage<Void> closeAsync() {
-        telemetryHost.close();
-        return closeGate.close(this::closeCoreAsync);
+        return closeGate.close(
+                () -> {
+                    CompletionStage<Void> settlements =
+                            spotRetire == null
+                                    ? CompletableFuture.completedFuture(null)
+                                    : spotRetire.closeSourceSettlements();
+                    return settlements.thenCompose(
+                            ignored -> {
+                                telemetryHost.close();
+                                return closeCoreAsync();
+                            });
+                });
     }
 
     private void closeBackendContext() {
@@ -2559,8 +2569,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         Math.max(
                                 0L,
                                 Duration.between(Instant.now(), terminationDeadline.get())
-                                        .toMillis());
-                CompletableFuture.delayedExecutor(remaining, TimeUnit.MILLISECONDS)
+                                        .toNanos());
+                CompletableFuture.delayedExecutor(remaining, TimeUnit.NANOSECONDS)
                         .execute(() -> forceStop(InternalDrainForceReason.DEADLINE_EXCEEDED));
             } catch (RuntimeException | Error failure) {
                 forceStop(InternalDrainForceReason.TEARDOWN_FAILED, failure);
