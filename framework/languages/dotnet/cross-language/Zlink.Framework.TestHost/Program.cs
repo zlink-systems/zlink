@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
@@ -40,7 +41,9 @@ internal sealed class Program
         var builder = Host.CreateApplicationBuilder(args);
         builder.Logging.ClearProviders();
 
-        TestHostScenarioConfigurator.Configure(builder.Services, options);
+        using var events = new TestHostEventSink(options.EventFilePath);
+        builder.Services.AddSingleton(events);
+        TestHostScenarioConfigurator.Configure(builder.Services, options, events);
         builder.Services.AddHostedService(provider => new ReadySignalHostedService(
             provider.GetRequiredService<IHostApplicationLifetime>(),
             readyFilePath,
@@ -50,6 +53,7 @@ internal sealed class Program
         ));
 
         using var host = builder.Build();
+        _ = host.Services.GetService<TestHostMessageFlowListener>();
         await host.RunAsync();
     }
 }
@@ -493,15 +497,11 @@ internal sealed class UserSpotTargetHostedService(
     string meshName,
     string sourceNodeRid,
     int placementWeight,
-    SealedJoinObservation? sealedJoin,
-    TestHostMessageFlowListener? flow
+    SealedJoinObservation? sealedJoin
 ) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        // The flow listener is a lazily built singleton; taking it here makes
-        // it start listening before the first Join, and keeps it alive.
-        GC.KeepAlive(flow);
         var serving = false;
         await foreach (var observed in runtime.ObserveAsync(cancellationToken))
         {
@@ -902,22 +902,63 @@ internal sealed class EntryRelocationTargetHostedService(
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
-internal sealed class TestHostEventSink(string? path)
+internal sealed class TestHostEventSink : IDisposable
 {
-    private readonly object _gate = new();
+    private readonly string? _path;
+    private readonly BlockingCollection<Action> _writes = new();
+    private readonly Task _writer;
+
+    public TestHostEventSink(string? path)
+    {
+        _path = path;
+        _writer = Task.Factory.StartNew(
+            () =>
+            {
+                foreach (var write in _writes.GetConsumingEnumerable())
+                    write();
+            },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default
+        );
+    }
 
     public void Append(string value)
     {
-        if (string.IsNullOrWhiteSpace(path))
-            return;
+        if (!string.IsNullOrWhiteSpace(_path))
+            Append(_path, value);
+    }
 
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-
-        lock (_gate)
+    public void Append(string path, string value) =>
+        _writes.Add(() =>
         {
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
             File.AppendAllText(path, value + Environment.NewLine);
+        });
+
+    public string[] ReadLines(string path)
+    {
+        var read = new TaskCompletionSource<string[]>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        _writes.Add(() => read.SetResult(File.ReadAllLines(path)));
+        var completed = Task.WhenAny(read.Task, _writer).GetAwaiter().GetResult();
+        completed.GetAwaiter().GetResult();
+        return read.Task.GetAwaiter().GetResult();
+    }
+
+    public void Dispose()
+    {
+        _writes.CompleteAdding();
+        try
+        {
+            _writer.GetAwaiter().GetResult();
+        }
+        finally
+        {
+            _writes.Dispose();
         }
     }
 }
