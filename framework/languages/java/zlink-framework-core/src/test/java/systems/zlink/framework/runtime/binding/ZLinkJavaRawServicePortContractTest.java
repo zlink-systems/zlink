@@ -11,6 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
+
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
@@ -1198,10 +1200,6 @@ final class ZLinkJavaRawServicePortContractTest {
         } catch (Exception failure) {
             throw new AssertionError("concurrent raw multipart send failed", failure);
         }
-    }
-
-    private static void assertConsumed(Message message) {
-        assertThrows(IllegalStateException.class, message::refCount);
     }
 
     private static void awaitInbound(

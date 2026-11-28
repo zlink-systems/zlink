@@ -288,7 +288,15 @@ class provider_location_repository_t final : public location_repository_t
 
     struct stored_target_t;
 
+    struct stored_aggregate_t;
+
     struct resolved_authority_t;
+
+    static bool matches_aggregate_source_preserve (const authority_snapshot_t &snapshot,
+                                                   const stored_aggregate_t &aggregate,
+                                                   const authority_put_t *put);
+
+    static void append_aggregate_abort (store_write_request_t &write, stored_aggregate_t aggregate);
 
     static bool matches_aggregate_fence (const json_t &record, const aggregate_fence_t &fence);
 

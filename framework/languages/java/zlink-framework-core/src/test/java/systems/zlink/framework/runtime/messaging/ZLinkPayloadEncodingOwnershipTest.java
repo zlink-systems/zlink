@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
+
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.messaging.Message;
@@ -51,7 +53,7 @@ final class ZLinkPayloadEncodingOwnershipTest {
         assertThrows(
                 NullPointerException.class,
                 () -> ZLinkPayloadEncoding.encode(codec, "payload", null));
-        assertThrows(IllegalStateException.class, codec.output::refCount);
+        assertConsumed(codec.output);
     }
 
     private static final class OwnedCodec

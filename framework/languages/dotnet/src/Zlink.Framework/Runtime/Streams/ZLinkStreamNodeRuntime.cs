@@ -78,6 +78,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         _maxMessageSize = maxMessageSize;
         var runtime = services.GetRequiredService<ZLinkFrameworkRuntime>();
         _runtime = runtime;
+        runtime.Flow.PrepareDiagnostics();
         _livenessOptions =
             runtime.Registration.StreamNodes.GetValueOrDefault(nodeName)
             ?? new ZLinkStreamNodeRegistration { StreamNodeName = nodeName };
@@ -610,7 +611,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             stream,
                             decoded,
                             payload.AsReadOnlyMemory(),
-                            ZLinkMessageFlowTracer.GetLogger(_runtime.Services)
+                            _runtime.Flow
                         );
                     }
                     catch (Exception protocolError)

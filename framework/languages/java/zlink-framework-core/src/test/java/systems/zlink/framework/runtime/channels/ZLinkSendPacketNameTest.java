@@ -2,6 +2,8 @@ package systems.zlink.framework.runtime.channels;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
+
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -41,7 +43,7 @@ final class ZLinkSendPacketNameTest {
                 assertDuplicate(original.metadata("after", "submit"));
                 admission.complete(null);
                 submitted.toCompletableFuture().join();
-                assertThrows(IllegalStateException.class, payload::refCount);
+                assertConsumed(payload);
             }
         }
     }
@@ -54,7 +56,7 @@ final class ZLinkSendPacketNameTest {
                 call(fixture, payload, null).submit().toCompletableFuture().join();
                 assertEquals(1, fixture.parts.size());
                 assertSame(payload, fixture.payload);
-                assertThrows(IllegalStateException.class, payload::refCount);
+                assertConsumed(payload);
             }
         }
     }
@@ -72,7 +74,7 @@ final class ZLinkSendPacketNameTest {
                                 CompletionException.class,
                                 () -> original.submit().toCompletableFuture().join());
                 assertSame(rejection, failure.getCause());
-                assertThrows(IllegalStateException.class, payload::refCount);
+                assertConsumed(payload);
                 assertDuplicate(original);
             }
         }

@@ -2,6 +2,8 @@ package systems.zlink.framework.runtime.internal.service;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
+
 import jdk.jfr.Recording;
 import jdk.jfr.consumer.RecordingFile;
 
@@ -89,7 +91,7 @@ public final class ZLinkEnvelopePartViewAllocationTest {
         } finally {
             ZLinkFrameworkMultipartView.closeAll(parts);
         }
-        assertThrows(IllegalStateException.class, body::refCount);
+        assertConsumed(body);
     }
 
     @Test
