@@ -193,15 +193,8 @@ export interface ZLinkSpotManagerOptions {
       membershipEpoch?: bigint
     ): Promise<void>;
   };
-  readonly dispatchEntryActorPacket?: (
-    origin: ApplicationJobOrigin,
-    actorId: string,
-    parts: readonly Message[],
-    returnResponse?: boolean,
-    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    fallbackActorRef?: ActorRef,
-    requestTerminal?: (response: unknown) => Promise<void> | void,
-    messageFollowOrigin?: ZLinkMessageFollowOrigin,
+  readonly dispatchEntryActorDelivery?: (
+    delivery: ZLinkActorPacketDelivery,
     preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
   ) => Promise<unknown>;
   /**
@@ -1702,13 +1695,8 @@ export class DefaultZLinkSpotManager {
     requestTerminal?: (response: unknown) => Promise<void> | void,
     messageFollowOrigin?: ZLinkMessageFollowOrigin
   ): Promise<unknown> {
-    const activation = this.activations.resolveUnique(spotId);
-    if (activation === undefined) {
-      throw new ZLinkConfigurationException(`Spot '${spotId}' is not active.`);
-    }
-    return this.dispatchActorPacket(
+    return this.dispatchActorPacketToOwner(spotId, {
       origin,
-      activation,
       actorId,
       parts,
       returnResponse,
@@ -1716,29 +1704,24 @@ export class DefaultZLinkSpotManager {
       fallbackActorRef,
       requestTerminal,
       messageFollowOrigin
-    );
+    });
   }
 
   private dispatchActorPacketToOwner(
     spotId: RoutingId | undefined,
     delivery: ZLinkActorPacketDelivery
   ): Promise<unknown> {
-    const args = [
-      delivery.actorId,
-      delivery.parts,
-      delivery.returnResponse,
-      delivery.remoteBoundSessionTarget,
-      delivery.fallbackActorRef,
-      delivery.requestTerminal,
-      delivery.messageFollowOrigin
-    ] as const;
     if (spotId !== undefined) {
-      return this.dispatchRoutedActorPacket(delivery.origin, spotId, ...args);
+      const activation = this.activations.resolveUnique(spotId);
+      if (activation === undefined) {
+        throw new ZLinkConfigurationException(`Spot '${spotId}' is not active.`);
+      }
+      return this.activationLifecycle.dispatchActorDelivery(activation, delivery);
     }
-    if (this.options.dispatchEntryActorPacket === undefined) {
+    if (this.options.dispatchEntryActorDelivery === undefined) {
       throw new ZLinkConfigurationException('Actor ingress requires an Entry FIFO port.');
     }
-    return this.options.dispatchEntryActorPacket(delivery.origin, ...args);
+    return this.options.dispatchEntryActorDelivery(delivery);
   }
 
   /** @internal Replays a record already owned by the Actor handoff queue. */
@@ -2366,16 +2349,15 @@ export class DefaultZLinkSpotManager {
     try {
       const dispatch = async () => {
         const response = targetsEntrySpot
-          ? await this.options.dispatchEntryActorPacket?.(
+          ? await this.options.dispatchEntryActorDelivery?.({
               origin,
-              actor.actorId,
-              record.parts,
-              request,
-              undefined,
-              ownerActorRef,
+              actorId: actor.actorId,
+              parts: record.parts,
+              returnResponse: request,
+              fallbackActorRef: ownerActorRef,
               requestTerminal,
-              record.messageFollowOrigin
-            )
+              messageFollowOrigin: record.messageFollowOrigin
+            })
           : await this.dispatchMeshActorPacket(
               origin,
               meshName,
@@ -2387,7 +2369,7 @@ export class DefaultZLinkSpotManager {
               requestTerminal,
               record.messageFollowOrigin
             );
-        if (targetsEntrySpot && this.options.dispatchEntryActorPacket === undefined) {
+        if (targetsEntrySpot && this.options.dispatchEntryActorDelivery === undefined) {
           throw new ZLinkConfigurationException(
             'MeshNode Entry Spot Actor dispatch is not configured.'
           );
@@ -3125,7 +3107,7 @@ export class DefaultZLinkSpotManager {
     const spotId = admission.admission.spotId;
     const activation = this.activations.resolve(meshName, spotId);
     if (activation === undefined) {
-      if (this.options.dispatchEntryActorPacket === undefined) return;
+      if (this.options.dispatchEntryActorDelivery === undefined) return;
       const entrySpotId =
         this.options.entrySpotIdProvider?.(meshName) ??
         this.options.entryNodeRidProvider?.() ??
@@ -3275,16 +3257,18 @@ export class DefaultZLinkSpotManager {
     messageFollowOrigin?: ZLinkMessageFollowOrigin,
     preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
   ): Promise<unknown> {
-    return await this.activationLifecycle.dispatchActorPacket(
-      origin,
+    return await this.activationLifecycle.dispatchActorDelivery(
       activation,
-      actorId,
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef,
-      requestTerminal,
-      messageFollowOrigin,
+      {
+        origin,
+        actorId,
+        parts,
+        returnResponse,
+        remoteBoundSessionTarget,
+        fallbackActorRef,
+        requestTerminal,
+        messageFollowOrigin
+      },
       preparation
     );
   }
@@ -3312,19 +3296,23 @@ export class DefaultZLinkSpotManager {
         RuntimeMessage.fromOwned(arrival.payload)
       ];
       try {
-        const args = [
-          actor.context.actorId,
+        const delivery: ZLinkActorPacketDelivery = {
+          origin: arrival.origin,
+          actorId: actor.context.actorId,
           parts,
-          arrival.returnResponse,
-          arrival.remoteBoundSessionTarget,
-          arrival.fallbackActorRef,
-          arrival.requestTerminal,
-          arrival.messageFollowOrigin,
-          arrival.preparation
-        ] as const;
+          returnResponse: arrival.returnResponse,
+          remoteBoundSessionTarget: arrival.remoteBoundSessionTarget,
+          fallbackActorRef: arrival.fallbackActorRef,
+          requestTerminal: arrival.requestTerminal,
+          messageFollowOrigin: arrival.messageFollowOrigin
+        };
         const response = await (activation === undefined
-          ? this.options.dispatchEntryActorPacket!(arrival.origin, ...args)
-          : this.dispatchActorPacket(arrival.origin, activation, ...args));
+          ? this.options.dispatchEntryActorDelivery!(delivery, arrival.preparation)
+          : this.activationLifecycle.dispatchActorDelivery(
+              activation,
+              delivery,
+              arrival.preparation
+            ));
         arrival.resolve(response);
       } catch (error) {
         arrival.reject(error);
