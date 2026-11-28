@@ -47,7 +47,7 @@ internal sealed class ZLinkMessageFlowDelivery
     }
 
     private readonly object _gate = new();
-    private readonly Queue<ZLinkDiagnosticDeliveryRecord> _pending = new(Capacity);
+    private readonly Queue<ZLinkTelemetryRecord> _pending = new(Capacity);
     private readonly long[] _failures = new long[(int)ZLinkTelemetryProviderRole.Fallback + 1];
     private bool _executing;
     private long _overflow;
@@ -94,17 +94,9 @@ internal sealed class ZLinkMessageFlowDelivery
             flow,
             error
         );
-        Enqueue(record);
-    }
-
-    // Startup failures can occur before the host owns a telemetry generation.
-    internal void SubmitDiagnostic(string message) => Enqueue(new ZLinkConsoleDiagnostic(message));
-
-    private void Enqueue(ZLinkDiagnosticDeliveryRecord record)
-    {
         lock (_gate)
         {
-            if (record is ZLinkTelemetryRecord { Lease.Retired: true })
+            if (record.Lease.Retired)
                 return;
             if (_pending.Count == Capacity)
             {
@@ -129,10 +121,7 @@ internal sealed class ZLinkMessageFlowDelivery
             while (count-- != 0)
             {
                 var record = _pending.Dequeue();
-                if (
-                    record is not ZLinkTelemetryRecord telemetry
-                    || !ReferenceEquals(telemetry.Lease, lease)
-                )
+                if (!ReferenceEquals(record.Lease, lease))
                     _pending.Enqueue(record);
             }
         }
@@ -142,7 +131,7 @@ internal sealed class ZLinkMessageFlowDelivery
     {
         while (true)
         {
-            ZLinkDiagnosticDeliveryRecord record;
+            ZLinkTelemetryRecord record;
             lock (_gate)
             {
                 _executing = false;
@@ -151,10 +140,7 @@ internal sealed class ZLinkMessageFlowDelivery
                 record = _pending.Dequeue();
                 _executing = true;
             }
-            if (record is ZLinkConsoleDiagnostic diagnostic)
-                DeliverDiagnostic(diagnostic);
-            else
-                Deliver((ZLinkTelemetryRecord)record);
+            Deliver(record);
             long overflow;
             lock (_gate)
             {
@@ -172,18 +158,6 @@ internal sealed class ZLinkMessageFlowDelivery
                     Failed(ZLinkTelemetryProviderRole.Trace, error);
                 }
             }
-        }
-    }
-
-    private void DeliverDiagnostic(ZLinkConsoleDiagnostic diagnostic)
-    {
-        try
-        {
-            Console.Error.WriteLine(diagnostic.Message);
-        }
-        catch (Exception error)
-        {
-            Failed(ZLinkTelemetryProviderRole.Logger, error);
         }
     }
 
@@ -271,10 +245,6 @@ internal enum ZLinkTelemetryProviderRole
     Fallback,
 }
 
-internal abstract record ZLinkDiagnosticDeliveryRecord;
-
-internal sealed record ZLinkConsoleDiagnostic(string Message) : ZLinkDiagnosticDeliveryRecord;
-
 internal sealed record ZLinkTelemetryRecord(
     ZLinkTelemetryLease Lease,
     ILogger Logger,
@@ -282,4 +252,4 @@ internal sealed record ZLinkTelemetryRecord(
     ActivityContext Parent,
     ZLinkMessageFlowEvent? Flow = null,
     ZLinkDispatchErrorSnapshot? Error = null
-) : ZLinkDiagnosticDeliveryRecord;
+);

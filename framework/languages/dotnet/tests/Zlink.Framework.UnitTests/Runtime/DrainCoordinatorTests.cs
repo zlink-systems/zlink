@@ -295,7 +295,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             time
         );
         using var cancellation = new CancellationTokenSource();
-        using var diagnostics = new StartupClaimDiagnosticCapture();
         store.OnClaimStarted = cancellation.Cancel;
         var start = location
             .StartAsync(RoutingId.From("pending-claim"), cancellation.Token)
@@ -318,7 +317,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             Assert.Equal(0, store.OwnerSweepCalls);
             Assert.Equal(0, store.RenewCalls);
             Assert.True(hasDefaultDeadline);
-            await diagnostics.AssertSingleAsync(store.OwnerId!);
             Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
                 await store.Inner.ReadOwnerLeaseAsync(store.OwnerId!)
             );
@@ -340,7 +338,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         var store = new StartupPendingReleaseStore();
         using var cancellation = new CancellationTokenSource();
         using var stopDeadline = new CancellationTokenSource();
-        using var diagnostics = new StartupClaimDiagnosticCapture();
         using var meter = new MeterListener();
         if (beforeRead)
         {
@@ -398,7 +395,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             Assert.Equal(0, store.ReleaseCalls);
             Assert.Equal(0, store.OwnerSweepCalls);
             Assert.Equal(0, store.RenewCalls);
-            await diagnostics.AssertSingleAsync(store.OwnerId!);
         }
         finally
         {
@@ -417,7 +413,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         );
         using var host = CreateStartupClaimHost(location);
         using var cancellation = new CancellationTokenSource();
-        using var diagnostics = new StartupClaimDiagnosticCapture();
         var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
         Task<ZLinkFrameworkTerminationResult>? shutdown = null;
         store.OnClaimStarted = () =>
@@ -440,7 +435,7 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             Assert.Equal(0, store.ReleaseCalls);
             Assert.Equal(0, store.OwnerSweepCalls);
             Assert.Equal(0, store.RenewCalls);
-            await diagnostics.AssertSingleAsync(store.OwnerId!);
+            // #5996: emit location.startup_claim_cleanup_abandoned here
         }
         finally
         {
@@ -460,7 +455,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         );
         using var cancellation = new CancellationTokenSource();
         using var stopDeadline = new CancellationTokenSource();
-        using var diagnostics = new StartupClaimDiagnosticCapture();
         store.OnClaimStarted = cancellation.Cancel;
         var start = location
             .StartAsync(RoutingId.From("pending-release"), cancellation.Token)
@@ -485,7 +479,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
                 await store.Inner.ReadOwnerLeaseAsync(store.OwnerId!)
             );
-            await diagnostics.AssertSingleAsync(store.OwnerId!);
         }
         finally
         {
@@ -525,53 +518,6 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         );
         builder.Services.AddSingleton(location);
         return builder.Build();
-    }
-
-    private sealed class StartupClaimDiagnosticCapture : StringWriter
-    {
-        private readonly TextWriter _previous = Console.Error;
-        private readonly TaskCompletionSource<string> _written = new(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
-        private int _count;
-
-        internal StartupClaimDiagnosticCapture() => Console.SetError(this);
-
-        public override void WriteLine(string? value)
-        {
-            if (
-                value is not null
-                && value.StartsWith(
-                    "location.startup_claim_cleanup_abandoned ",
-                    StringComparison.Ordinal
-                )
-            )
-            {
-                Interlocked.Increment(ref _count);
-                _written.TrySetResult(value);
-            }
-            else
-            {
-                _previous.WriteLine(value);
-            }
-        }
-
-        internal async Task AssertSingleAsync(string ownerId)
-        {
-            Assert.Equal(
-                $"location.startup_claim_cleanup_abandoned owner_id={ownerId}",
-                await _written.Task.WaitAsync(StartupTestTimeout)
-            );
-            MessageFlowDeliveryTests.WaitForDelivery();
-            Assert.Equal(1, Volatile.Read(ref _count));
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-                Console.SetError(_previous);
-            base.Dispose(disposing);
-        }
     }
 
     private sealed class StartupPendingReleaseStore(bool commitBeforeResponse = true)

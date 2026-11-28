@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using Zlink.Framework.Internal.Locations;
-using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Spots;
@@ -825,10 +824,7 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
             }
             catch (Exception cleanupFailure)
             {
-                if (startupStopToken is { IsCancellationRequested: true })
-                    ZLinkMessageFlowDelivery.Shared.SubmitDiagnostic(
-                        $"location.startup_claim_cleanup_abandoned owner_id={owner.Id}"
-                    );
+                // #5996: when startupStopToken is cancelled, emit location.startup_claim_cleanup_abandoned here
                 RecordLeaseFailure(
                     $"Owner lease cancellation cleanup failed: {cleanupFailure.Message}"
                 );
