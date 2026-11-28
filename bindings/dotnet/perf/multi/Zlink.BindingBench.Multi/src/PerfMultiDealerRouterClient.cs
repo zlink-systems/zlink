@@ -10,6 +10,7 @@ internal static class PerfMultiDealerRouterClient
     {
         int size = Math.Max(1, options.Size);
         int durationSeconds = ResolveMultiDurationSeconds(options);
+        int latencySeconds = ResolveMultiLatencyDurationSeconds(options);
         int sndTimeoutMs = ResolveMultiSndTimeoutMs(options);
         int rcvTimeoutMs = ResolveMultiRcvTimeoutMs(options);
         int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
@@ -59,7 +60,7 @@ internal static class PerfMultiDealerRouterClient
 
             var slots = CreateSlots(activeClients, size);
             var result = await RunMultiDealerRouterClientLoop(pollManager,
-                slots, size, latencySampleCap, durationSeconds,
+                slots, size, latencySampleCap, durationSeconds, latencySeconds,
                 sendDrainTimeoutMs).ConfigureAwait(false);
 
             // PERF_MULTI: echo (relay) clients send NO wire stop token. C
@@ -103,12 +104,41 @@ internal static class PerfMultiDealerRouterClient
         long latencyCount)>
         RunMultiDealerRouterClientLoop(PollManager pollManager,
             DealerRouterClientSlot[] slots, int msgSize, int latencySampleCap,
-            int durationSeconds, int sendDrainTimeoutMs)
+            int durationSeconds, int latencySeconds, int sendDrainTimeoutMs)
+    {
+        var latSamples = new List<double>(latencySampleCap);
+        var activeMetrics = new DealerRouterMetrics(null, latencySampleCap);
+        long activeSends = await RunWindowAsync(pollManager, slots, msgSize,
+            PerfPhase.Active, durationSeconds, durationSeconds,
+            sendDrainTimeoutMs, activeMetrics, null).ConfigureAwait(false);
+        if (activeMetrics.MeasureCount <= 0 || activeSends <= 0)
+            return (0, 0, 0, 0, 0, 0);
+        double throughput = activeMetrics.MeasureCount / (double)durationSeconds;
+        var schedule = new MultiPacedSchedule(
+            MultiTargetRate(activeMetrics.MeasureCount, durationSeconds));
+        var latencyMetrics = new DealerRouterMetrics(latSamples, latencySampleCap);
+        _ = await RunWindowAsync(pollManager, slots, msgSize,
+            PerfPhase.Latency, durationSeconds, latencySeconds,
+            sendDrainTimeoutMs, latencyMetrics, schedule).ConfigureAwait(false);
+        PrintMultiBenchDiag("DEALER_ROUTER_SENDSEND", msgSize, activeSends,
+            durationSeconds, schedule, activeMetrics.MeasureCount,
+            latencyMetrics.PacedReceived / (double)latencySeconds);
+        var latency = ComputeMultiLatencyStats(latSamples,
+            latencyMetrics.SampleSeen, latencyMetrics.LatencySum);
+        double p95 = Math.Max(latency.p95, latency.mean);
+        return (throughput, latency.mean, p95,
+            Math.Max(latency.p99, p95), activeMetrics.MeasureCount,
+            latencyMetrics.SampleSeen);
+    }
+
+    private static async Task<long> RunWindowAsync(PollManager pollManager,
+        DealerRouterClientSlot[] slots, int msgSize, PerfPhase phase,
+        int durationSeconds, int latencySeconds, int sendDrainTimeoutMs,
+        DealerRouterMetrics metrics, MultiPacedSchedule? schedule)
     {
         const uint runId = 1;
-        var latSamples = new List<double>(latencySampleCap);
         long seq = 0;
-        var metrics = new DealerRouterMetrics(latSamples, latencySampleCap);
+        long accepted = 0;
 
         var sockets = CollectSockets(slots);
         var eventMasks = new PollEventFlags[slots.Length];
@@ -121,7 +151,9 @@ internal static class PerfMultiDealerRouterClient
 
         long benchStartTicks = Stopwatch.GetTimestamp();
         long benchDeadlineTicks = benchStartTicks
-            + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
+            + (long)((schedule == null ? durationSeconds
+                : latencySeconds + 0.5) * Stopwatch.Frequency);
+        ulong benchDeadlineNs = EpochNsFromTimestamp(benchDeadlineTicks);
         // C model (perf_multi_client_helpers.hpp drain_timeout_ms): the
         // teardown window is max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS, 3 s per
         // active second) because small-message runs can fill every per-client
@@ -131,6 +163,17 @@ internal static class PerfMultiDealerRouterClient
             Math.Max(sendDrainTimeoutMs, Math.Max(1, durationSeconds) * 3000));
         int roundStart = 0;
         var replies = new PerfMultiEchoReplyDrain();
+        void RecordAccepted(ulong dueNs)
+        {
+            long nowTicks = Stopwatch.GetTimestamp();
+            if (schedule != null)
+            {
+                lock (schedule)
+                    schedule.Accepted(EpochNsFromTimestamp(nowTicks), dueNs);
+            }
+            if (nowTicks < benchDeadlineTicks)
+                Interlocked.Increment(ref accepted);
+        }
 
         while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
         {
@@ -139,9 +182,12 @@ internal static class PerfMultiDealerRouterClient
             // socket pauses on its exact admission stage.
             bool submittedAny = false;
             int start = roundStart;
-            for (int attempts = 0; attempts < slots.Length; attempts++)
+            int attempts = 0;
+            for (; attempts < slots.Length; attempts++)
             {
                 if (Stopwatch.GetTimestamp() >= benchDeadlineTicks)
+                    break;
+                if (schedule != null && !schedule.Due(EpochNs()))
                     break;
 
                 int slotIndex = (start + attempts) % slots.Length;
@@ -151,20 +197,21 @@ internal static class PerfMultiDealerRouterClient
                     continue;
                 ulong currentSeq = unchecked((ulong)++seq);
                 StampMetricHeader(slot.Payload.AsSpan(), runId,
-                    PerfPhase.Active, msgSize, currentSeq, EpochNs());
+                    phase, msgSize, currentSeq, EpochNs());
                 submittedAny = true;
-                _ = StartAdmission(slot, replies);
+                StartAdmission(slot, replies, schedule, RecordAccepted);
             }
             if (slots.Length > 0)
                 roundStart = (start + 1) % slots.Length;
 
-            // One shared turn progresses both replies and async admissions.
-            // Only an all-backpressured round uses a bounded blocking wait.
-            int completionWaitMs = submittedAny
-                ? 0
-                : Math.Min(50,
-                    PerfMultiAdmissionSignal.RemainingTimeoutMilliseconds(
-                        benchDeadlineTicks));
+            int completionWaitMs = 0;
+            if (!submittedAny)
+            {
+                completionWaitMs = schedule != null && attempts < slots.Length
+                    ? schedule.WaitMilliseconds(EpochNs(), benchDeadlineNs)
+                    : Math.Min(50, PerfMultiAdmissionSignal
+                        .RemainingTimeoutMilliseconds(benchDeadlineTicks));
+            }
             int readyCount = PollSocketEvents(pollManager, sockets,
                 eventMasks, completionWaitMs);
             if (readyCount <= 0)
@@ -174,8 +221,8 @@ internal static class PerfMultiDealerRouterClient
                 HandleClientEvent(pollManager, slots,
                     ReadySocketIndexAt(pollManager, i),
                     ReadySocketMaskAt(pollManager, i), msgSize,
-                    runId, PerfPhase.Active, metrics,
-                    activeDeadlineTicks: benchDeadlineTicks, replies);
+                    runId, phase, metrics, benchDeadlineTicks, replies,
+                    schedule, latencySeconds);
         }
 
         // Keep receiving every admitted echo inside the configured drain
@@ -190,33 +237,18 @@ internal static class PerfMultiDealerRouterClient
                     HandleClientEvent(pollManager, slots,
                         ReadySocketIndexAt(pollManager, i),
                         ReadySocketMaskAt(pollManager, i), msgSize,
-                        runId, PerfPhase.Active, metrics,
-                        benchDeadlineTicks, replies);
+                        runId, phase, metrics, benchDeadlineTicks, replies,
+                        schedule, latencySeconds);
             }).ConfigureAwait(false);
         for (int i = 0; i < slots.Length; i++)
             slots[i].ThrowAdmissionError();
 
-        long benchEndTicks = Stopwatch.GetTimestamp();
-
-        double elapsedSeconds = (benchEndTicks - benchStartTicks)
-            / (double)Stopwatch.Frequency;
-        double configuredSeconds = Math.Max(1.0, durationSeconds);
-        double throughput = metrics.MeasureCount / configuredSeconds;
-        // PERF_POLICY: report measured latency only. C
-        // normalize_latency_stats reports zeros when no samples and never
-        // fabricates a duration-derived latency.
-        var latency = ComputeMultiLatencyStats(latSamples,
-            metrics.SampleSeen, metrics.LatencySum);
-        double latencyNs = latency.mean;
-        double latencyP95Ns = Math.Max(latency.p95, latencyNs);
-        double latencyP99Ns = Math.Max(latency.p99, latencyP95Ns);
-
-        return (throughput, latencyNs, latencyP95Ns, latencyP99Ns,
-            metrics.MeasureCount, metrics.SampleSeen);
+        return Volatile.Read(ref accepted);
     }
 
-    private static bool StartAdmission(DealerRouterClientSlot slot,
-        PerfMultiEchoReplyDrain replies)
+    private static void StartAdmission(DealerRouterClientSlot slot,
+        PerfMultiEchoReplyDrain replies, MultiPacedSchedule? schedule,
+        Action<ulong> onAccepted)
     {
         Message message = Message.Allocate(slot.Payload.Length);
         slot.Payload.AsSpan().CopyTo(message.AsSpan());
@@ -225,16 +257,17 @@ internal static class PerfMultiDealerRouterClient
         {
             SendSubmission submission = PerfSocketIo.SendMeasurementAsync(
                 (IDealerSocket)slot.Socket, message, SendFlags.None);
+            ulong dueNs = schedule?.Submitted() ?? 0;
             if (submission.Result == SubmitResult.Ok)
             {
+                onAccepted(dueNs);
                 message.Dispose();
-                return false;
+                return;
             }
 
             slot.BeginAdmission();
             _ = AwaitAdmissionAndDisposeAsync(submission.Admitted,
-                message, replies, slot);
-            return true;
+                message, replies, slot, onAccepted, dueNs);
         }
         catch
         {
@@ -254,12 +287,13 @@ internal static class PerfMultiDealerRouterClient
 
     private static async Task AwaitAdmissionAndDisposeAsync(Task admission,
         Message message, PerfMultiEchoReplyDrain replies,
-        DealerRouterClientSlot slot)
+        DealerRouterClientSlot slot, Action<ulong> onAccepted, ulong dueNs)
     {
         Exception? failure = null;
         try
         {
             await admission.ConfigureAwait(false);
+            onAccepted(dueNs);
         }
         catch (Exception exception)
         {
@@ -278,7 +312,8 @@ internal static class PerfMultiDealerRouterClient
         DealerRouterClientSlot[] slots,
         int slotIndex, PollEventFlags readyMask, int msgSize, uint runId,
         PerfPhase phase, DealerRouterMetrics metrics, long activeDeadlineTicks,
-        PerfMultiEchoReplyDrain replies)
+        PerfMultiEchoReplyDrain replies, MultiPacedSchedule? schedule,
+        int latencySeconds)
     {
         _ = pollManager;
         DealerRouterClientSlot slot = slots[slotIndex];
@@ -294,10 +329,10 @@ internal static class PerfMultiDealerRouterClient
                 break;
 
             long recvTicks = Stopwatch.GetTimestamp();
-            if (phase == PerfPhase.Active)
+            if (phase == PerfPhase.Active || phase == PerfPhase.Latency)
             {
-                // Every valid echo retires teardown work, while recvTicks keeps
-                // post-window replies out of both throughput and latency.
+                // Every valid echo retires teardown work. Active replies use
+                // the receive deadline; paced samples use the send stamp.
                 if (PerfSocketIo.TryMeasurementPayload(receivedMessage.Parts,
                         out Message payloadPart)
                     && payloadPart.AsReadOnlySpan().Length
@@ -310,12 +345,23 @@ internal static class PerfMultiDealerRouterClient
                     && header.Phase == (uint)phase)
                 {
                     replies.Received();
-                    if (recvTicks >= activeDeadlineTicks)
+                    ulong nowNs = EpochNsFromTimestamp(recvTicks);
+                    if (phase == PerfPhase.Active)
+                    {
+                        if (recvTicks < activeDeadlineTicks)
+                            metrics.MeasureCount++;
                         continue;
-                    metrics.MeasureCount++;
+                    }
+                    if (schedule == null)
+                        continue;
+                    if (MultiLatencySample(nowNs, schedule.EpochNs,
+                            latencySeconds))
+                        metrics.PacedReceived++;
+                    if (!MultiLatencySample(header.SentTsNs,
+                            schedule.EpochNs, latencySeconds))
+                        continue;
                     if (metrics.LatencySamples != null && header.SentTsNs > 0)
                     {
-                        ulong nowNs = EpochNsFromTimestamp(recvTicks);
                         if (nowNs >= header.SentTsNs)
                         {
                             double sampleLatencyNs = (nowNs - header.SentTsNs)
@@ -401,6 +447,7 @@ internal static class PerfMultiDealerRouterClient
         }
 
         internal long MeasureCount { get; set; }
+        internal long PacedReceived { get; set; }
         internal List<double>? LatencySamples { get; }
         internal int LatencySampleCap { get; }
         internal long SampleSeen { get; set; }

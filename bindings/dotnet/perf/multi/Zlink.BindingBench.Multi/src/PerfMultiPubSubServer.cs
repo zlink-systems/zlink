@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Threading;
 using Systems.Zlink;
 using static PerfRunner;
 
@@ -10,10 +11,9 @@ internal static class PerfMultiPubSubServer
     internal static int Run(PerfOptions options)
     {
         int size = Math.Max(1, options.Size);
-        int sndTimeoutMs = ResolveMultiSndTimeoutMs(options);
         int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
-        int clientCount = ResolveMultiClients(options);
         int durationSeconds = ResolveMultiDurationSeconds(options);
+        int latencyDurationSeconds = ResolveMultiLatencyDurationSeconds(options);
         string endpoint = MultiEndpointFor(options.Transport, "multi-pubsub",
             options);
 
@@ -42,15 +42,76 @@ internal static class PerfMultiPubSubServer
         const uint runId = 1;
         ulong seq = 1;
         int payloadSize = Math.Max(size, PerfMetricHeaderSize);
+        long activeSends = 0;
 
         if (!RunPublishPhase(server, payloadSize,
                 runId, size, ref seq, PerfPhase.Active, durationSeconds,
-                controlState)
-            || !PublishStopToken(server, controlState))
+                controlState, ref activeSends)
+            || !PublishStopToken(server, size, runId,
+                PerfPhase.Active, controlState))
         {
             return 2;
         }
 
+        WriteStdoutLine($"PHASE_DONE,{size},1");
+        if (!controlState.WaitForPhase("PHASE_PACED", readyTimeoutMs,
+                out long activeReceived) || activeReceived <= 0)
+            return 2;
+
+        var schedule = new MultiPacedSchedule(
+            MultiTargetRate(activeReceived, durationSeconds));
+        ulong catchupDeadlineNs = schedule.EpochNs
+            + (ulong)latencyDurationSeconds * 1_000_000_000UL;
+        ulong phaseDeadlineNs = catchupDeadlineNs
+            + (ulong)latencyDurationSeconds * 1_000_000_000UL;
+        ulong caughtUpNs = 0;
+        while (!controlState.StopRequested && EpochNs() < phaseDeadlineNs)
+        {
+            ulong nowNs = EpochNs();
+            if (caughtUpNs == 0
+                && controlState.TryGetPhase("PHASE_CATCHUP",
+                    out ulong receiptNs)
+                && receiptNs <= catchupDeadlineNs)
+                caughtUpNs = receiptNs;
+            ulong endNs = caughtUpNs != 0
+                ? caughtUpNs + (ulong)latencyDurationSeconds
+                    * 1_000_000_000UL : phaseDeadlineNs;
+            if (nowNs >= endNs)
+                break;
+            if (!schedule.Due(nowNs))
+            {
+                int waitMs = schedule.WaitMilliseconds(nowNs, endNs);
+                if (waitMs > 0)
+                    Thread.Sleep(waitMs);
+                continue;
+            }
+            using Message message = Message.Allocate(payloadSize);
+            StampMetricHeader(message.AsSpan(), runId,
+                caughtUpNs != 0 && nowNs >= caughtUpNs
+                    ? PerfPhase.Latency : PerfPhase.Warmup,
+                size, seq++, nowNs);
+            if (!Publish(server, message))
+                return 2;
+            schedule.Accepted(EpochNs(), schedule.Submitted());
+        }
+        if (!PublishStopToken(server, size, runId,
+                PerfPhase.Latency, controlState))
+            return 2;
+        WriteStdoutLine($"PHASE_DONE,{size},3");
+        if (!controlState.WaitForPhase("PHASE_COMPLETE",
+                Math.Max(readyTimeoutMs,
+                    2 * latencyDurationSeconds * 1000 + 10_000),
+                out long pacedReceived))
+            return 2;
+        PrintMultiBenchDiag("PUBSUB", size, activeSends, durationSeconds,
+            schedule, activeReceived,
+            pacedReceived / (double)latencyDurationSeconds,
+            caughtUpNs != 0,
+            caughtUpNs != 0
+                ? (caughtUpNs - schedule.EpochNs) / 1_000_000_000.0
+                : -1.0);
+        if (schedule.LateCount > 0)
+            WriteStdoutLine($"REFERENCE,dotnet,PUBSUB,{options.Transport},{size},sender_late,{schedule.LateCount}");
         return 0;
     }
 
@@ -71,20 +132,19 @@ internal static class PerfMultiPubSubServer
         }
     }
 
-    private static bool PublishStopToken(IPubSocket server,
+    private static bool PublishStopToken(IPubSocket server, int size,
+        uint runId, PerfPhase phase,
         RunnerControlState controlState)
     {
-        // The active phase uses the same lossy PUB path as C. After the
-        // measured window, publish one blocking stop token and finish the
-        // server lifecycle. This matches the C runner's single successful
-        // stop-token send instead of extending the measured process lifetime.
         while (!controlState.StopRequested)
         {
             try
             {
-                using Message message = new(MultiStopToken.AsSpan());
-                if (server.TryPublish(Topic).Message(message)
-                        .Flags(SendFlags.None).Submit())
+                using Message message = Message.Allocate(
+                    PerfMetricHeaderSize);
+                StampMetricHeader(message.AsSpan(), runId, phase,
+                    size, 0, 0);
+                if (Publish(server, message))
                     return true;
             }
             catch (ZlinkException ex) when (IsTransientStopPublishErrno(
@@ -104,7 +164,7 @@ internal static class PerfMultiPubSubServer
     private static bool RunPublishPhase(IPubSocket server, int payloadSize,
         uint runId, int size,
         ref ulong seq, PerfPhase phase, int durationSeconds,
-        RunnerControlState controlState)
+        RunnerControlState controlState, ref long sendCount)
     {
         long deadlineTicks = Stopwatch.GetTimestamp()
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
@@ -116,6 +176,8 @@ internal static class PerfMultiPubSubServer
                 EpochNs());
             if (!Publish(server, message))
                 return false;
+            if (Stopwatch.GetTimestamp() < deadlineTicks)
+                sendCount++;
         }
 
         return true;

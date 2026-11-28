@@ -17,6 +17,7 @@ internal static partial class PerfRunner
         Warmup = 0,
         Active = 1,
         Cooldown = 2,
+        Latency = 3,
     }
 
     internal static string NormalizePerfPattern(string pattern)
@@ -32,6 +33,90 @@ internal static partial class PerfRunner
     internal static int ResolveMultiDurationSeconds(PerfOptions options)
     {
         return options.DurationSeconds;
+    }
+
+    internal static int ResolveMultiLatencyDurationSeconds(PerfOptions options)
+    {
+        return PerfEnv.ReadPositive("PERF_MULTI_LATENCY_DURATION_SECONDS",
+            options.DurationSeconds);
+    }
+
+    internal static double MultiTargetRate(long activeReceived,
+        int activeSeconds)
+    {
+        return activeSeconds > 0
+            ? activeReceived / (double)activeSeconds * 0.8
+            : 0.0;
+    }
+
+    internal static bool MultiLatencySample(ulong sentNs, ulong epochNs,
+        int latencySeconds)
+    {
+        ulong start = epochNs + 500_000_000UL;
+        return sentNs >= start
+            && sentNs < start + (ulong)latencySeconds * 1_000_000_000UL;
+    }
+
+    internal sealed class MultiPacedSchedule
+    {
+        private const ulong RecheckBelowMs = 1;
+        private const ulong MaxWaitMs = 50;
+        private const ulong NsPerMs = 1_000_000UL;
+
+        internal readonly double Rate;
+        internal readonly ulong EpochNs;
+        private long _submittedCount;
+
+        internal long AcceptedCount { get; private set; }
+        internal long LateCount { get; private set; }
+
+        internal MultiPacedSchedule(double rate)
+        {
+            Rate = rate;
+            EpochNs = PerfShared.EpochNs();
+        }
+
+        private ulong NextNs => EpochNs + (Rate > 0.0
+            ? (ulong)(_submittedCount * 1_000_000_000.0 / Rate) : 0);
+
+        internal bool Due(ulong nowNs) => Rate > 0.0 && nowNs >= NextNs;
+
+        internal int WaitMilliseconds(ulong nowNs, ulong endNs)
+            => MillisecondsUntil(nowNs, Math.Min(endNs, NextNs));
+
+        internal static int MillisecondsUntil(ulong nowNs, ulong deadlineNs)
+        {
+            if (nowNs >= deadlineNs)
+                return 0;
+
+            // Floor to ms and cap at 50 ms. Under 1 ms, recheck now.
+            ulong ms = (deadlineNs - nowNs) / NsPerMs;
+            return ms < RecheckBelowMs ? 0 : (int)Math.Min(ms, MaxWaitMs);
+        }
+
+        // The submit loop owns the sequence. Completion order can differ
+        // from submission order, so each admission keeps its own due time.
+        internal ulong Submitted()
+        {
+            ulong dueNs = NextNs;
+            _submittedCount++;
+            return dueNs;
+        }
+
+        internal void Accepted(ulong nowNs, ulong dueNs)
+        {
+            if (nowNs > dueNs && nowNs - dueNs > 1_000_000UL)
+                LateCount++;
+            AcceptedCount++;
+        }
+    }
+
+    internal static void PrintMultiBenchDiag(string pattern, int msgSize,
+        long activeSends, int activeSeconds, MultiPacedSchedule schedule,
+        long activeReceived, double pacedReceivedRate, bool caughtUp = false,
+        double catchUpSeconds = -1.0)
+    {
+        WriteStdoutLine(FormattableString.Invariant($"BENCH_DIAG,{pattern},{msgSize},active_sender_rate,{activeSends / (double)activeSeconds:G12},target_sender_rate,{schedule.Rate:G12},latency_sends,{schedule.AcceptedCount},late_sends_gt_1ms,{schedule.LateCount},received_rate,{activeReceived / (double)activeSeconds:G12},paced_received_rate,{pacedReceivedRate:G12},caught_up,{(caughtUp ? "yes" : "no")},catch_up_seconds,{catchUpSeconds:G12}"));
     }
 
     internal static int ResolveMultiSndTimeoutMs(PerfOptions options)
@@ -56,8 +141,8 @@ internal static partial class PerfRunner
 
     internal static ulong ResolveMultiMonitorHwmBytes()
     {
-        return PerfEnv.ReadUInt64("PERF_MULTI_MONITOR_HWM",
-            PerfEnv.ReadUInt64("PERF_MONITOR_HWM", 4_096_000UL));
+        return PerfEnv.ReadUInt64("PERF_MULTI_MONITOR_HWM_BYTES",
+            PerfEnv.ReadUInt64("PERF_MONITOR_HWM_BYTES", 4_096_000UL));
     }
 
     // PERF_MULTI_TEST_POLICY § 1.3.1: signal-driven receive/relay loops use
@@ -560,11 +645,6 @@ internal static partial class PerfRunner
             double fraction = pos - lo;
             return sorted[lo] + (sorted[hi] - sorted[lo]) * fraction;
         }
-    }
-
-    internal static int ResolveMultiOnewayLatencySampleStride()
-    {
-        return PerfEnv.ReadPositive("PERF_MULTI_ONEWAY_LATENCY_SAMPLE_STRIDE", 32);
     }
 
     internal static bool IsCoreStreamServerTransport(string transport)
