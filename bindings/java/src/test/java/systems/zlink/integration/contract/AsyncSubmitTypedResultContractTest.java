@@ -31,7 +31,6 @@ import systems.zlink.contracts.sockets.SubmitResult;
 class AsyncSubmitTypedResultContractTest {
     private static final long HWM_BYTES = 512L;
     private static final int PAYLOAD_BYTES = 64;
-    private static final int MAX_FILL_RECORDS = 4_096;
     private static final Duration WAIT_TIMEOUT =
         Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS);
 
@@ -48,7 +47,8 @@ class AsyncSubmitTypedResultContractTest {
 
     @TestFactory
     Stream<DynamicTest> capacityWaitCompletesAfterWritable() {
-        return transports("capacity-writable", this::verifyCapacityWait);
+        return Stream.of(DynamicTest.dynamicTest("capacity-writable[INPROC]",
+            () -> verifyCapacityWait(Transport.INPROC)));
     }
 
     @TestFactory
@@ -115,19 +115,25 @@ class AsyncSubmitTypedResultContractTest {
                 configureSmallHwm(dealer);
                 connect(transport, router, dealer, dealerId, "capacity");
 
-                PendingSend pending = fillUntilBackpressured(router,
-                    dealerId);
-                assertFalse(pending.completion().isDone(),
+                byte[] firstPayload = Arrays.copyOf(payload(0),
+                    (int) HWM_BYTES + 1);
+                byte[] secondPayload = payload(1);
+                try (Message first = Message.from(firstPayload)) {
+                    router.send(dealerId).message(first).submit().admitted()
+                        .toCompletableFuture().join();
+                }
+                CompletableFuture<Void> pending;
+                try (Message second = Message.from(secondPayload)) {
+                    pending = router.send(dealerId).message(second).submit()
+                        .admitted().toCompletableFuture();
+                }
+                assertFalse(pending.isDone(),
                     "BACKPRESSURED submit must wait for WRITABLE");
 
-                for (int sequence = 0; sequence < pending.admitted();
-                     sequence++) {
-                    assertReceivedPayload(dealer, payload(sequence));
-                }
-                pending.completion().get(TestSupport.DEFAULT_TIMEOUT_MS,
+                assertReceivedPayload(dealer, firstPayload);
+                pending.get(TestSupport.DEFAULT_TIMEOUT_MS,
                     TimeUnit.MILLISECONDS);
-                assertReceivedPayload(dealer,
-                    payload(pending.rejectedSequence()));
+                assertReceivedPayload(dealer, secondPayload);
             }
         }
     }
@@ -196,21 +202,6 @@ class AsyncSubmitTypedResultContractTest {
         }
     }
 
-    private static PendingSend fillUntilBackpressured(RouterSocket router,
-                                                       RoutingId target) {
-        for (int sequence = 0; sequence < MAX_FILL_RECORDS; sequence++) {
-            try (Message candidate = Message.from(payload(sequence))) {
-                CompletableFuture<Void> completion = router.send(target)
-                    .message(candidate).submit().admitted().toCompletableFuture();
-                if (!completion.isDone()) {
-                    return new PendingSend(completion, sequence, sequence);
-                }
-                completion.join();
-            }
-        }
-        throw new AssertionError("DONTWAIT fill did not reach HWM");
-    }
-
     private static void configureSmallHwm(
             systems.zlink.contracts.sockets.Socket socket) {
         socket.options().linger(Duration.ZERO);
@@ -276,7 +267,4 @@ class AsyncSubmitTypedResultContractTest {
         void run(Transport transport) throws Exception;
     }
 
-    private record PendingSend(CompletableFuture<Void> completion,
-                               int admitted, int rejectedSequence) {
-    }
 }

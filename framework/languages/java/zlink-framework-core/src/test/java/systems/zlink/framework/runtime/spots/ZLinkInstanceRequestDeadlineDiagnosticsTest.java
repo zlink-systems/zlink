@@ -48,6 +48,8 @@ class ZLinkInstanceRequestDeadlineDiagnosticsTest {
     private static final String CALLER_MARKER = "deadline callerFutureCompletedNanos: ";
     private static final int COMPLETION_WORKERS = 2;
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(2);
+    // Covers thread wake-up and clock-read jitter after the measured occupation ends; it is not
+    // a spec deadline (01-submit-and-completion.ko.md §10.1 allows the late visit itself).
     private static final long SCHEDULING_SLACK_NANOS = TimeUnit.MILLISECONDS.toNanos(250);
     private static final long HOLD_PAST_DEADLINE_NANOS = 2 * SCHEDULING_SLACK_NANOS;
     private static final Duration POLL_INTERVAL = Duration.ofMillis(1);

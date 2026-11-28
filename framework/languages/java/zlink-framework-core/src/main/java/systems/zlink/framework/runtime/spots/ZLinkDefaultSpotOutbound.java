@@ -702,7 +702,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
                     .thenApply(
                             parts -> {
                                 try {
-                                    return routeMessages.decodeReply(parts, replyType);
+                                    return routeMessages.decodeReply(parts, replyType, packetName);
                                 } finally {
                                     parts.forEach(Message::close);
                                 }

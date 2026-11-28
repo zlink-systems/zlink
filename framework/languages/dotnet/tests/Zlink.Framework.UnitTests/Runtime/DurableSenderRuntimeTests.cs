@@ -1,6 +1,6 @@
-using System.Diagnostics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -206,18 +206,52 @@ public sealed partial class StatefulServiceRuntimeTests
 
     [Theory]
     [MemberData(nameof(DurableSenderCases))]
-    public async Task DurableSenderPreservesExhaustionCauseAndOriginalOperation(
+    public Task DurableSenderPreservesExhaustionCauseAndOriginalOperation(
         int operationKind,
         string scenario
-    )
+    ) => RunDurableSenderCaseAsync((MeshOperationKind)operationKind, scenario);
+
+    [Fact]
+    public async Task DurableSenderActorJoinExpiresBeforeRouteWithoutPhysicalSubmission()
     {
-        var kind = (MeshOperationKind)operationKind;
-        await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var source = NewNode(context, "matrix-source");
+        if (
+            await IsolatedTestProcess.RunIsolatedAsync(
+                typeof(StatefulServiceRuntimeTests),
+                nameof(DurableSenderActorJoinExpiresBeforeRouteWithoutPhysicalSubmission)
+            )
+        )
+            return;
+
+        await RunDurableSenderCaseAsync(MeshOperationKind.ActorJoin, "expired-before-route");
+    }
+
+    private static async Task RunDurableSenderCaseAsync(MeshOperationKind kind, string scenario)
+    {
+        var expiresBeforeRoute = scenario == "expired-before-route";
+        var connectsAfterSubmit = scenario == "ready-after-submit";
+        var clock =
+            expiresBeforeRoute || connectsAfterSubmit ? new ControllableTimeProvider() : null;
+        await using var native = Systems.Zlink.Zlink.CreateContext();
+        var countedContext = expiresBeforeRoute
+            ? new MeshNodeShutdownSealTests.CanonicalRequestContext(native)
+            : null;
+        await using var source = new ZLinkManagedMeshNode(
+            (IContext?)countedContext ?? native,
+            "mesh",
+            deadlineTimeProvider: clock,
+            receivePollerFactory: expiresBeforeRoute
+                ? () =>
+                    new MeshNodeShutdownSealTests.CanonicalRequestPoller(
+                        Systems.Zlink.Zlink.CreatePoller()
+                    )
+                : null
+        );
+        source.SetRoutingId(RoutingId.From("matrix-source"));
         var terminalCount = 0;
         await using var target = new ZLinkManagedMeshNode(
-            context,
+            native,
             "mesh",
+            deadlineTimeProvider: clock,
             nativeTerminalReplySubmitOverride: reply =>
             {
                 Interlocked.Increment(ref terminalCount);
@@ -244,19 +278,27 @@ public sealed partial class StatefulServiceRuntimeTests
             spot.AuthorityOwnerGeneration,
             7
         );
-        target.Start();
         source.Start();
+        target.Start();
+        var timeout = TimeSpan.FromSeconds(2);
+        var observationBound = TimeSpan.FromSeconds(5);
         if (scenario == "withheld")
         {
             source.ConnectPeer(targetEndpoint, target.RoutingId);
-            await WaitUntilAsync(() =>
-                source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
-            );
+            using var admissionBound = new CancellationTokenSource(observationBound);
+            var route = source.ObservePeerRoute(target.RoutingId);
+            while (route.ReadyGeneration == 0)
+            {
+                await route.Changed.WaitAsync(admissionBound.Token);
+                route = source.ObservePeerRoute(target.RoutingId);
+            }
         }
 
-        var timeout = TimeSpan.FromSeconds(2);
-        var deadline = checked((ulong)DateTimeOffset.UtcNow.Add(timeout).ToUnixTimeMilliseconds());
-        var started = Stopwatch.GetTimestamp();
+        var timeProvider = clock ?? TimeProvider.System;
+        var deadline = checked(
+            (ulong)timeProvider.GetUtcNow().Add(timeout).ToUnixTimeMilliseconds()
+        );
+        var started = timeProvider.GetTimestamp();
         var reservation = new ObjectReservationFence(
             "matrix-reservation",
             "matrix-store",
@@ -269,6 +311,30 @@ public sealed partial class StatefulServiceRuntimeTests
             1
         );
         var operation = source.AllocateOperationId();
+        var completed = new TaskCompletionSource<MeshReceiveRecord>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var targetReadyOrTerminal = new TaskCompletionSource<MeshReceiveRecord?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var sourceTerminals = 0;
+        source.SetCompletionHandlerCore(
+            (record, parts) =>
+            {
+                if (record.OperationId != operation)
+                    return false;
+                targetReadyOrTerminal.TrySetResult(record);
+                Interlocked.Increment(ref sourceTerminals);
+                ZLinkMessageParts.DisposeAll(parts);
+                completed.TrySetResult(record);
+                return true;
+            }
+        );
+        target.SetReadyHandler(domains =>
+        {
+            targetReadyOrTerminal.TrySetResult(null);
+            return domains;
+        });
         var submit = kind switch
         {
             MeshOperationKind.ActorJoin => source.TryRequestCanonicalActorJoin(
@@ -332,43 +398,51 @@ public sealed partial class StatefulServiceRuntimeTests
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
         Assert.Equal(SubmitResult.Ok, submit);
-        if (scenario == "ready-after-submit")
+        if (clock is not null)
         {
-            // The durable operation already exists while no logical route can
-            // submit. Connect the target inside that operation's same budget.
-            await Task.Delay(50);
-            source.ConnectPeer(targetEndpoint, target.RoutingId);
+            // The pending operation owns its deadline before the target route is ready.
+            Assert.Equal(0UL, source.ObservePeerRoute(target.RoutingId).ReadyGeneration);
+            Assert.Equal(1, source.PendingOperationCount);
+            if (expiresBeforeRoute)
+            {
+                clock.AdvanceMonotonic(timeout + TimeSpan.FromMilliseconds(1));
+                source.SignalReceiveOwner();
+            }
+            else
+            {
+                // The operation keeps its full budget while the route becomes ready.
+                source.ConnectPeer(targetEndpoint, target.RoutingId);
+            }
         }
 
         var joins = 0;
-        if (kind == MeshOperationKind.ActorJoin && scenario != "absent")
+        if (kind == MeshOperationKind.ActorJoin && (scenario == "withheld" || connectsAfterSubmit))
         {
-            await WaitUntilAsync(() =>
-            {
-                foreach (var record in DrainRecords(target))
-                {
-                    if (record.OperationKind != MeshOperationKind.ActorJoin)
-                        continue;
-                    // Command 28 carries the correlation; the source lifecycle
-                    // remains a separate fence in that command's header.
-                    Assert.Equal(new MeshOperationId(0, operation.Low), record.OperationId);
-                    joins++;
-                    Assert.Equal(
-                        SubmitResult.Ok,
-                        record.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
-                    );
-                }
-                return joins != 0;
-            });
+            if (await targetReadyOrTerminal.Task.WaitAsync(observationBound) is { } terminal)
+                Assert.Fail(
+                    $"Operation {terminal.OperationId} completed with "
+                        + $"{(RequestResult)terminal.TerminalResult} before target receipt."
+                );
+            var record = Assert.Single(
+                DrainRecords(target),
+                record => record.OperationKind == MeshOperationKind.ActorJoin
+            );
+            // Command 28 carries the correlation; the source lifecycle
+            // remains a separate fence in that command's header.
+            Assert.Equal(new MeshOperationId(0, operation.Low), record.OperationId);
+            joins++;
+            Assert.Equal(
+                SubmitResult.Ok,
+                record.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+            );
         }
-        var (completion, parts) = DrainCompletion(source, operation);
-        ZLinkMessageParts.DisposeAll(parts);
+        var completion = await completed.Task.WaitAsync(observationBound);
         Assert.Equal(operation, completion.OperationId);
         Assert.Equal(kind, completion.OperationKind);
         var expected = scenario switch
         {
             // §9: deadline before binding starts is still DeadlineExceeded.
-            "absent" => RequestResult.TimedOut,
+            "absent" or "expired-before-route" => RequestResult.TimedOut,
             "withheld" => RequestResult.TimedOut,
             _ => RequestResult.Ok,
         };
@@ -381,7 +455,7 @@ public sealed partial class StatefulServiceRuntimeTests
             Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
         }
         else
-            Assert.True(Stopwatch.GetElapsedTime(started) < timeout);
+            Assert.True(timeProvider.GetElapsedTime(started) < timeout);
 
         var executions = kind switch
         {
@@ -390,7 +464,18 @@ public sealed partial class StatefulServiceRuntimeTests
             MeshOperationKind.UserSpotCreate => spotTarget.CreateCount,
             _ => spotTarget.CloseCount,
         };
-        Assert.Equal(scenario == "absent" ? 0 : 1, executions);
-        Assert.Equal(scenario == "absent" ? 0 : 1, Volatile.Read(ref terminalCount));
+        var expectedExecutions = scenario == "absent" || expiresBeforeRoute ? 0 : 1;
+        Assert.Equal(expectedExecutions, executions);
+        Assert.Equal(expectedExecutions, Volatile.Read(ref terminalCount));
+        Assert.Equal(1, Volatile.Read(ref sourceTerminals));
+        if (countedContext is not null)
+        {
+            Assert.DoesNotContain(
+                DrainRecords(target),
+                record => record.OperationKind == MeshOperationKind.ActorJoin
+            );
+            Assert.Equal(0, Volatile.Read(ref countedContext.NativeRequests));
+            Assert.Equal(0, source.PendingOperationCount);
+        }
     }
 }

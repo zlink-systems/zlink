@@ -296,6 +296,7 @@ public final class ZLinkFrameworkRegistration {
                                 + "ownerLeaseTtl - ownerLeaseFencingMargin.");
             }
         }
+        StreamNodeRegistration.registerAdmissionQueueSpots(streamNodes, meshNodes);
         dispatchOptions.validate();
         workers.validate();
         inboundDispatch.applicationJobQueue(handlerExecutor);
@@ -384,7 +385,7 @@ public final class ZLinkFrameworkRegistration {
             throw new ZLinkConfigurationException(
                     "Relocatable factories or Instance Spot factories require a Relocation Store");
         }
-        StreamNodeRegistration.validateAuthenticationAdmission(streamNodes);
+        StreamNodeRegistration.validateAuthenticationAdmission(streamNodes, meshNodes);
         Set<String> streamSessionTypeNames = new LinkedHashSet<>();
         for (StreamNodeRegistration streamNode : streamNodes) {
             streamNode.validate(meshNodes);

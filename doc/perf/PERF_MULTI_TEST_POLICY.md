@@ -1044,7 +1044,7 @@ run_benchmarks_multi.sh / .ps1                         # 공식 multi entrypoint
 | `--pattern-transition-ms N` | pattern 전환 cooldown(ms) | 3000 |
 | `--server-ready-timeout-ms N` | server READY 대기 타임아웃(ms) | 10000 |
 | `--connect-ready-timeout-ms N` | 연결 준비 대기 타임아웃(ms) | 10000 |
-| `--monitor-hwm-bytes BYTES` | 모니터 큐 HWM(byte). C 기준 이름이며 C·C++·.NET·Rust·Go·Python이 쓴다. Java·Node runner는 아직 `--monitor-hwm N`이다 | 4,096,000 |
+| `--monitor-hwm-bytes BYTES` | 모니터 큐 HWM(byte) | 4,096,000 |
 | `--server-shutdown-timeout-ms N` | server 종료 대기 타임아웃(ms) | 5000 |
 | `--server-bind-port N` | server 바인드 포트 (0=자동 할당) | 0 |
 | `--auto-hwm-profile NAME` | context auto-HWM profile (`compact`, `low_latency`, `balanced`, `throughput`) | `balanced` |
@@ -1322,7 +1322,7 @@ bindings/c/perf/run_benchmarks_multi.sh --pattern STREAM --transports tcp --msg-
 | `PERF_MULTI_SNDBUF` | debug 전용 송신 OS buffer override. allow flag가 켜진 경우에만 사용 | 비활성 |
 | `PERF_MULTI_RCVBUF` | debug 전용 수신 OS buffer override. allow flag가 켜진 경우에만 사용 | 비활성 |
 | `PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES` | 수동 HWM/SNDBUF/RCVBUF override 허용 플래그 | 0 |
-| `PERF_MULTI_MONITOR_HWM_BYTES` | 모니터 큐 HWM(byte). C 기준 이름이며 C·C++·.NET·Rust·Go·Python이 쓴다. Java·Node는 아직 `PERF_MULTI_MONITOR_HWM`이다 | 4,096,000 |
+| `PERF_MULTI_MONITOR_HWM_BYTES` | 모니터 큐 HWM(byte) | 4,096,000 |
 | `PERF_MULTI_PUBSUB_XPUB_NODROP` | PUBSUB 서버의 `ZLINK_XPUB_NODROP` 진단 override | 0 |
 | `PERF_MULTI_PRINT_AUTO_HWM_DETAIL` | auto-HWM detail 출력 여부. `0`이면 출력하지 않는다 | 1 |
 
@@ -1411,7 +1411,7 @@ pattern별 공식 start contract 를 사용한다.
 | `STREAM` server start gate | runner의 `START` 뒤 target `CONNECTION_READY` 수 확인, context auto-HWM 재계산, connected snapshot 수집, `SERVER_START_READY` 출력 |
 | 대기 방식 | app thread에서 타임아웃 기반 bounded wait — busy-wait/sleep 금지 |
 | 타임아웃 | `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` (기본 10000ms) 초과 시 run 실패 처리 |
-| Monitor HWM | raw monitor 사용 시 4,096,000 byte. C·C++·.NET·Rust·Go·Python은 `PERF_MULTI_MONITOR_HWM_BYTES`, Java·Node는 아직 `PERF_MULTI_MONITOR_HWM`을 사용한다 |
+| Monitor HWM | raw monitor 사용 시 4,096,000 byte. `PERF_MULTI_MONITOR_HWM_BYTES`로 설정한다 |
 
 - raw socket client pattern이 monitor lifecycle을 소유한다. configured open은 공용
   helper로 감쌀 수 있으며, ready gate는 expected client 수 `CONNECTION_READY`

@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -251,6 +252,7 @@ final class ZLinkMeshApplicationDispatcherTest {
     }
 
     @RepeatedTest(100)
+    @Timeout(10)
     void inlineExecutorDoesNotBlockMeshReceiveThread() throws Exception {
         var targetStarted = new CountDownLatch(1);
         var targetRelease = new CountDownLatch(1);
@@ -260,43 +262,46 @@ final class ZLinkMeshApplicationDispatcherTest {
         BlockingMeshHandler.targetStarted = targetStarted;
         BlockingMeshHandler.targetRelease = targetRelease;
         BlockingMeshHandler.targetThread = targetThread;
-        assertMeshReceiveReturnsWhileHandlerIsBlocked(
-                Runnable::run, targetStarted, targetRelease, targetThread);
-    }
-
-    private static void assertMeshReceiveReturnsWhileHandlerIsBlocked(
-            Executor executor,
-            CountDownLatch targetStarted,
-            CountDownLatch targetRelease,
-            AtomicReference<String> targetThread)
-            throws Exception {
-        var dispatcher = blockingMeshDispatcher(executor);
-        var receiveReturned = new CountDownLatch(1);
+        var startHandler = new CountDownLatch(1);
+        var receiveReturned = new CompletableFuture<Boolean>();
         var receiveFailure = new AtomicReference<Throwable>();
+        Runnable receive =
+                () -> {
+                    Thread receiver = Thread.currentThread();
+                    Executor inline =
+                            command -> {
+                                // Inline submission on ingress would wait on its own return.
+                                if (Thread.currentThread() == receiver) {
+                                    receiveReturned.complete(false);
+                                }
+                                BlockingMeshHandler.awaitLatch(startHandler);
+                                command.run();
+                            };
+                    try {
+                        blockingMeshDispatcher(inline)
+                                .accept(record(RecordKind.CHANNEL_SEND, "target", "target"));
+                    } catch (Throwable failure) {
+                        receiveFailure.set(failure);
+                    } finally {
+                        receiveReturned.complete(true);
+                    }
+                };
         var ingress =
-                new Thread(
-                        () -> {
-                            try {
-                                dispatcher.accept(
-                                        record(RecordKind.CHANNEL_SEND, "target", "target"));
-                            } catch (Throwable failure) {
-                                receiveFailure.set(failure);
-                            } finally {
-                                receiveReturned.countDown();
-                            }
-                        },
-                        "mesh-ingress-inline-test");
+                Thread.ofPlatform().daemon().name("mesh-ingress-inline-test").unstarted(receive);
         try {
-            ingress.start();
-            assertTrue(targetStarted.await(2, TimeUnit.SECONDS));
-            assertTrue(
-                    receiveReturned.await(2, TimeUnit.SECONDS),
-                    "Mesh receive must return while the handler is blocked");
-            assertNull(receiveFailure.get());
+            try {
+                ingress.start();
+                assertTrue(
+                        receiveReturned.get(),
+                        "Mesh receive must return while the handler is blocked");
+                assertNull(receiveFailure.get());
+            } finally {
+                startHandler.countDown();
+            }
+            targetStarted.await();
             assertNotEquals(ingress.getName(), targetThread.get());
         } finally {
             targetRelease.countDown();
-            if (ingress.isAlive()) ingress.join(TimeUnit.SECONDS.toMillis(2));
         }
     }
 

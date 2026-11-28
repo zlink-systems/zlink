@@ -787,6 +787,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 .thenCompose(
                         written -> {
                             if (written instanceof ZLinkAuthorityStored) {
+                                // CAS proves same owner and relocation; no read or lease check.
                                 return sourceSettlementOf(current, request, true);
                             }
                             return written instanceof ZLinkAuthorityConflict conflict
@@ -804,6 +805,7 @@ final class ZLinkCanonicalRelocationStateMachine
             return CompletableFuture.completedFuture(ownerSettlement);
         }
         var relocation = sourceRelocationOf(snapshot, request);
+        // A different relocation with the same owner is reobserved until settlement or stop.
         if (relocation == null || (!preserveStored && !relocation.aborted())) {
             return CompletableFuture.completedFuture(Optional.empty());
         }

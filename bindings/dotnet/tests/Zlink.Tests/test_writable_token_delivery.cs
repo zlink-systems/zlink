@@ -15,17 +15,15 @@ public sealed class test_writable_token_delivery
             BindingFlags.NonPublic)!;
         int wouldBlock = CompletionOwnerTestAccess.Errno("EAgain");
 
-        // Core returned the typed BACKPRESSURED result; the errno is diagnostic
-        // only and never reclassifies it.
-        Assert.True(IsWritableWait(73UL, SubmitResult.Backpressured, 0));
+        Assert.False(IsWritableWait(73UL, SubmitResult.Backpressured, 0));
         Assert.False(IsWritableWait(73UL, SubmitResult.NotFound, wouldBlock));
         Assert.True(IsWritableWait(73UL, SubmitResult.Backpressured, wouldBlock));
         Assert.False(IsWritableWait(0UL, SubmitResult.Backpressured, wouldBlock));
 
         bool IsWritableWait(ulong id, SubmitResult result, int errno)
         {
-            object attempt = CompletionOwnerTestAccess.Create(
-                attemptType, id, result, errno, null);
+            object attempt = CompletionOwnerTestAccess.InvokeStatic(
+                attemptType, "FromNative", id, result, errno)!;
             return (bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
                 "IsWritableWait", attempt)!;
         }

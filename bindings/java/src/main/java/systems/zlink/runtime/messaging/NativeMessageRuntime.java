@@ -114,17 +114,10 @@ final class NativeMessageRuntime {
             }
 
             @Override
-            public void closeVector(Object parts, long count) {
-                NativeMessageRuntime.closeVector((MemorySegment) parts,
-                    count);
-            }
-
-            @Override
             public Message[] materializeVector(Object parts, long count,
-                                               Message[] reusable,
-                                               boolean closeSourceVector) {
+                                               Message[] reusable) {
                 return NativeMessageRuntime.materializeVector(
-                    (MemorySegment) parts, count, reusable, closeSourceVector);
+                    (MemorySegment) parts, count, reusable);
             }
 
             @Override
@@ -324,14 +317,9 @@ final class NativeMessageRuntime {
         return NativeMessage.messageRefCount(msg);
     }
 
-    static void closeVector(MemorySegment parts, long count) {
-        NativeMessage.messageVectorClose(parts, count);
-    }
-
     static Message[] materializeVector(MemorySegment partsAddr,
                                        long count,
-                                       Message[] reusable,
-                                       boolean closeSourceVector) {
+                                       Message[] reusable) {
         if (partsAddr == null || partsAddr.address() == 0 || count <= 0)
             return new Message[0];
         if (count > Integer.MAX_VALUE)
@@ -372,12 +360,7 @@ final class NativeMessageRuntime {
             success = true;
             return out;
         } finally {
-            if (closeSourceVector) {
-                closeVector(partsAddr, count);
-                if (!success) {
-                    resetBuilt(out, built);
-                }
-            } else if (!success) {
+            if (!success) {
                 closeRemaining(parts, built, count, messageSize);
                 Message.closeAll(out);
             }
@@ -386,7 +369,7 @@ final class NativeMessageRuntime {
 
     static Message[] materializeVectorShared(MemorySegment partsAddr,
                                              long count) {
-        return materializeVector(partsAddr, count, null, false);
+        return materializeVector(partsAddr, count, null);
     }
 
     static Message materializeSingleVectorShared(MemorySegment partsAddr) {
@@ -414,17 +397,6 @@ final class NativeMessageRuntime {
             if (!moved) {
                 try {
                     message.close();
-                } catch (RuntimeException ignored) {
-                }
-            }
-        }
-    }
-
-    private static void resetBuilt(Message[] out, int built) {
-        for (int i = 0; i < built; i++) {
-            if (out[i] != null && ContractAccess.messageIsReusable(out[i])) {
-                try {
-                    ContractAccess.messageResetReusable(out[i]);
                 } catch (RuntimeException ignored) {
                 }
             }
