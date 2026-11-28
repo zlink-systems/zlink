@@ -15,8 +15,8 @@ category에서 다룬다. 정확한 signature는
 [`subscription_event.go`](../../../../bindings/go/internal/native/subscription_event.go),
 [`operations.go`](../../../../bindings/go/internal/native/operations.go)가
 소유하며,
-[`contracts/messaging.go`](../../../../bindings/go/contracts/messaging.go)를
-통해 alias로 re-export된다.
+root package의 [`root_projection.go`](../../../../bindings/go/root_projection.go)가
+alias로 re-export한다.
 
 ---
 
