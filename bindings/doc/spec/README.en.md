@@ -2027,7 +2027,7 @@ as a per-language multipart object. Public Spot subscribe results follow [Framew
 | `topic` | **`string` (UTF-8)** | The matched topic. **Not bytes.** |
 | `parts` | `List<Message>` / `Vec<Message>` | The multipart payload |
 | `is_single_part()` | `bool` | `parts.size() == 1` |
-| `first_part()` | `Message` | `parts[0]`; error/exception if empty |
+| `first_part()` | `Message` | `parts[0]`; if empty, an `INVALID_STATE` (`EINVAL`) error/exception — not `NO_DATA` (no receive to retry) or `NOT_SUPPORTED` (socket type not supported) |
 | `single_part_or_throw()` | `Message` | Returns the part if `is_single_part()`, else error/exception |
 | `close()` / `Dispose()` / `Drop` | — | Cleans up held parts, per each language's lifecycle idiom |
 
