@@ -531,6 +531,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
             var confirmation = ingress.confirmation(participant);
             // Resolve the original sender without waiting. The gate holds this queue position
             // until both the sender and the committed target have been confirmed.
+            // Follow record bytes are built only after ingress confirmation succeeds, which
+            // requires a completed, non-empty sender authority result, so getNow cannot be empty.
             var source = sourceAuthority.get().toCompletableFuture();
             if (!staging.acceptSpotIngress(
                     target.staged(),
