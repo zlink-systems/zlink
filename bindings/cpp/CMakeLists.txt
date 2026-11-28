@@ -550,6 +550,12 @@ if(ZLINK_CPP_BUILD_TESTS)
   )
 
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_cpp_contract_test(test_cpp_contract_consumed_message
+      "tests/contract/test_cpp_contract_consumed_message.cpp")
+    target_link_options(test_cpp_contract_consumed_message PRIVATE
+      "LINKER:--wrap=zlink_send" "LINKER:--wrap=zlink_send_rid"
+      "LINKER:--wrap=zlink_request" "LINKER:--wrap=zlink_reply"
+      "LINKER:--wrap=zlink_publish")
     add_cpp_contract_test(test_cpp_contract_subscription_at
       "tests/contract/test_cpp_contract_subscription_at.cpp")
     target_link_options(test_cpp_contract_subscription_at PRIVATE

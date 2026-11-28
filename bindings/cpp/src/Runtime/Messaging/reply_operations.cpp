@@ -47,8 +47,9 @@ void submit_raw_reply (detail::operation_state_t &state_)
 
     const submit_result_t result = static_cast<submit_result_t> (rc);
     if (result != submit_result_t::ok) {
+        const int submit_errno = zlink_errno ();
         detail::restore_send_parts_to_sources (state_, state_.message.parts);
-        throw submit_error_t (result, zlink_errno ());
+        throw submit_error_t (result, submit_errno);
     }
 }
 
