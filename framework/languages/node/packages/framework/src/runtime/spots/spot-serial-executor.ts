@@ -188,12 +188,7 @@ export class ZLinkSpotSerialExecutor {
             try {
               return await operation();
             } catch (error) {
-              // A failed Join completion seals application work in this Actor's mailbox.
-              const sealed = new ActorJoinCompletionSealedError();
-              executor.scheduler.setExecutionPolicy(() => ({
-                executionDecision: () => 'lost',
-                executionFailure: () => sealed
-              }));
+              this.sealActorAfterFailedJoinCompletion(actorId, executor);
               return onFailure(error);
             }
           },
@@ -201,6 +196,17 @@ export class ZLinkSpotSerialExecutor {
         ),
       { lane: 'lifecycle' }
     );
+  }
+
+  sealActorAfterFailedJoinCompletion(
+    actorId: string,
+    executor = this.actorExecutor(actorId)
+  ): void {
+    const sealed = new ActorJoinCompletionSealedError();
+    executor.scheduler.setExecutionPolicy(() => ({
+      executionDecision: () => 'lost',
+      executionFailure: () => sealed
+    }));
   }
 
   /** Admits held packets through the same Actor FIFO as ordinary ingress. */

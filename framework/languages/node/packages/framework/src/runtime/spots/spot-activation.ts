@@ -87,7 +87,6 @@ import { ZLinkSpotActivation } from './spot-activation-state';
 import type { ZLinkSpotLocationClaim } from './spot-location-claim';
 import type {
   ZLinkSpotActorHandoffRuntime,
-  ZLinkSpotActorTransferRuntime,
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
 import type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contracts';
@@ -134,7 +133,6 @@ export interface ZLinkSpotActivationLifecycleOptions {
   readonly nativeSpotNodeProvider?: (meshName: string) => ZLinkBackendSpotNode | undefined;
   readonly actorResolver?: (actorId: string) => ZLinkActor | undefined;
   readonly actorIngressMembership?: ZLinkActorIngressMembership;
-  readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
   readonly detachedTaskRunner: ZLinkDetachedTaskRunner;

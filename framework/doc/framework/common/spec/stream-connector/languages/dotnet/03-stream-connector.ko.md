@@ -66,6 +66,8 @@ public interface IZlinkStreamConnector : IAsyncDisposable
 
 
     IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler);
+    IDisposable OnAdmissionQueued(Func<CancellationToken, ValueTask> handler);
+    IDisposable OnAdmissionPosition(Func<ZlinkStreamAdmissionPosition, CancellationToken, ValueTask> handler);
     IDisposable OnAdmissionWaiting(Func<ZlinkStreamAdmissionWaiting, CancellationToken, ValueTask> handler);
     IDisposable OnReplyReceived(Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler);
     IDisposable OnConnectionStateChanged(Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler);
@@ -187,6 +189,11 @@ public interface IZlinkStreamWaitCall
 [공통 스펙 §5.7](../../32-stream-connector.ko.md#57-요청-hook)의 두 hook을 `OnRequestSending`·`OnReplyReceived`(§3)와 다음 context로 투영한다. 송신 hook은 dispatch mode를 따르지 않으므로 동기 `Action`이고, 응답 hook은 다른 수신 callback과 같은 형태다.
 
 ```csharp
+public sealed record ZlinkStreamAdmissionPosition(
+    int Position,        // 1부터 시작하는 mesh 전체 순번
+    int EstimatedWaitMs  // 예상 대기 시간(ms)
+);
+
 public sealed record ZlinkStreamAdmissionWaiting(
     string RequestPacketName,
     string? ActorId,

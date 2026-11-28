@@ -24,23 +24,10 @@ public sealed class SpotRouteDispatcherTests
         var probe = new DispatchProbe();
         using var services = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
         await using var handlerInstances = new ZLinkScopedHandlerInstanceOwner(services);
-        var spot = new TestSpot();
-        var packets = new ZLinkSpotPacketRegistry();
-        packets.Add(typeof(TestHandler));
-        packets.Bind(spot);
-        var codecs = new ZLinkCodecRegistryBuilder();
-        var invoker = new ZLinkSpotHandlerInvoker(handlerInstances, spot, codecs, null);
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
         _ = new ZLinkDiagnosticsRuntimeService(options.Diagnostics);
-        var dispatcher = new ZLinkSpotRouteDispatcher(
-            "route",
-            "target-spot",
-            packets,
-            () => invoker,
-            codecs,
-            new ZLinkDispatchErrorReporter(options)
-        );
+        var dispatcher = CreateDispatcher(handlerInstances, options);
 
         var malformed = Encode(new TestMessage("ignored"));
         malformed[1].Dispose();
@@ -73,22 +60,90 @@ public sealed class SpotRouteDispatcherTests
         );
     }
 
-    private static IReadOnlyList<Message> Encode(TestMessage message)
+    [Theory]
+    [InlineData("", false)]
+    [InlineData("unrelated-channel", false)]
+    [InlineData("", true)]
+    [InlineData("unrelated-channel", true)]
+    public async Task SpotIdDispatch_IgnoresEnvelopeChannelName(string channelName, bool request)
+    {
+        var probe = new DispatchProbe();
+        using var services = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        await using var handlerInstances = new ZLinkScopedHandlerInstanceOwner(services);
+        var dispatcher = CreateDispatcher(handlerInstances, new ZLinkDispatchOptionsModel());
+        var parts = Encode(
+            request ? new TestRequest("delivered") : new TestMessage("delivered"),
+            channelName,
+            request ? ZLinkMessageKind.Request : ZLinkMessageKind.Command
+        );
+        ZLinkEnvelopeHeader? replyHeader = null;
+        var received = new ZLinkBackendRouteReceived(
+            parts,
+            sourceNodeRid: RoutingId.From("route-source"),
+            spotId: "target-spot",
+            requestSeq: request ? 1UL : null,
+            reply: request
+                ? replyParts =>
+                {
+                    replyHeader = ZLinkEnvelopeCodec.DecodeHeader(replyParts);
+                    return SubmitResult.Ok;
+                }
+                : null
+        );
+
+        await dispatcher.DispatchAsync(received, CancellationToken.None);
+
+        Assert.Equal(["delivered"], probe.Values);
+        if (request)
+        {
+            Assert.NotNull(replyHeader);
+            Assert.Equal(ZLinkMessageKind.Response, replyHeader.Kind);
+            Assert.Equal("request-correlation", replyHeader.CorrelationId);
+        }
+    }
+
+    private static ZLinkSpotRouteDispatcher CreateDispatcher(
+        ZLinkScopedHandlerInstanceOwner handlerInstances,
+        ZLinkDispatchOptionsModel options
+    )
+    {
+        var spot = new TestSpot();
+        var packets = new ZLinkSpotPacketRegistry();
+        packets.Add(typeof(TestHandler));
+        packets.Add(typeof(TestRequestHandler));
+        packets.Bind(spot);
+        var codecs = new ZLinkCodecRegistryBuilder();
+        var invoker = new ZLinkSpotHandlerInvoker(handlerInstances, spot, codecs, null);
+        return new ZLinkSpotRouteDispatcher(
+            "route",
+            "target-spot",
+            packets,
+            () => invoker,
+            codecs,
+            new ZLinkDispatchErrorReporter(options)
+        );
+    }
+
+    private static IReadOnlyList<Message> Encode(
+        object message,
+        string channelName = "route",
+        ZLinkMessageKind kind = ZLinkMessageKind.Command
+    )
     {
         return ZLinkEnvelopeCodec.EncodeParts(
             new ZLinkEnvelopeHeader(
-                ZLinkMessageKind.Command,
-                "route",
-                nameof(TestMessage),
+                kind,
+                channelName,
+                message.GetType().Name,
                 ZLinkEnvelopeCodec.DefaultContentType,
-                null,
+                kind == ZLinkMessageKind.Request ? "request-correlation" : null,
                 null,
                 null,
                 null,
                 null
             ),
             message,
-            typeof(TestMessage),
+            message.GetType(),
             null
         );
     }
@@ -110,6 +165,24 @@ public sealed class SpotRouteDispatcherTests
     }
 
     private sealed record TestMessage(string Value);
+
+    private sealed record TestRequest(string Value);
+
+    private sealed class TestRequestHandler(DispatchProbe probe)
+        : IZLinkSpotRequestHandler<TestSpot, TestRequest, TestMessage>
+    {
+        public ValueTask<TestMessage> HandleAsync(
+            TestSpot spot,
+            IZLinkMessageContext context,
+            TestRequest request,
+            CancellationToken cancellationToken
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            probe.Values.Add(request.Value);
+            return ValueTask.FromResult(new TestMessage(request.Value));
+        }
+    }
 
     private sealed class DispatchProbe
     {
