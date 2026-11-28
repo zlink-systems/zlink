@@ -1046,20 +1046,13 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime r
 {
     public IZLinkActor? ResolveActor(ZLinkActorRuntimeState state) => state.Actor;
 
-    public async ValueTask NotifyDisconnectedAsync(
-        string actorId,
-        CancellationToken cancellationToken
-    )
-    {
-        if (
-            !await runtime
-                .TryNotifyJoinedSpotActorDisconnectedAsync(actorId, cancellationToken)
-                .ConfigureAwait(false)
-        )
-            await runtime
-                .NotifyActorDisconnectedByIdAsync(actorId, cancellationToken)
-                .ConfigureAwait(false);
-    }
+    public ValueTask NotifyDisconnectedAsync(string actorId, CancellationToken cancellationToken) =>
+        // The session notification follows accepted SENDs in the Actor FIFO.
+        runtime.NotifyActorDisconnectedByIdAsync(
+            actorId,
+            cancellationToken,
+            lane: ZLinkSerialWorkLane.Application
+        );
 
     public ValueTask DispatchAsync(
         IZLinkActor actor,

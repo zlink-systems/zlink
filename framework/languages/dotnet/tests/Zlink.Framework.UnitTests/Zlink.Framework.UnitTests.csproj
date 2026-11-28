@@ -65,6 +65,7 @@
         <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
         <Compile Include="Runtime/SameNodeDuplicateBindTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.SessionBound.cs"/>
+        <Compile Include="Runtime/EntrySpotActorDispatchTests.SessionSendAdmission.cs"/>
         <Compile Include="AssemblyInfo.cs"/>
         <Compile Include="Support/PerCallAllocation.cs"/>
         <Compile Include="Support/MessageFinalizerProbe.cs"/>

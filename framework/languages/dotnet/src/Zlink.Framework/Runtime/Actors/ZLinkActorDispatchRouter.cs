@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Actors;
@@ -20,7 +21,8 @@ internal sealed class ZLinkActorDispatchRouter(
         string actorId,
         ZlinkStreamHeader header,
         Message payload,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken,
+        Action? releaseIngress
     )
     {
         var state = await actorSessions
@@ -33,8 +35,51 @@ internal sealed class ZLinkActorDispatchRouter(
                 $"Actor '{actorId}' is not active."
             );
 
-        await Async(actor, header, payload, relocationReplay: false, cancellationToken)
-            .ConfigureAwait(false);
+        if (releaseIngress is null)
+        {
+            await Async(actor, state, header, payload, false, cancellationToken, null)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        ensureActorContext(actor, state);
+        var retained = payload.Copy();
+        try
+        {
+            await state
+                .AdmitDispatchAsync(
+                    async _ =>
+                    {
+                        using var flow = EnterFlow(header);
+                        var shouldPrune = await SubmitByCurrentLocationAsync(
+                                actor,
+                                state,
+                                header,
+                                retained,
+                                relocationReplay: false,
+                                replayAdmission: null,
+                                runtime.ShutdownToken,
+                                sourceSessionRid: null,
+                                mailboxTurn: ZLinkSerialTurn.Current
+                            )
+                            .ConfigureAwait(false);
+                        if (shouldPrune)
+                            runtime.RunDetached("prune-session-actor", _ => PruneAsync(state));
+                    },
+                    () =>
+                    {
+                        retained.Dispose();
+                        releaseIngress();
+                    },
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            retained.Dispose();
+            throw;
+        }
     }
 
     public async ValueTask<ZLinkActorReply> SubmitForReplyAsync(
@@ -95,14 +140,7 @@ internal sealed class ZLinkActorDispatchRouter(
         RoutingId? sourceSessionRid
     )
     {
-        using var flow = ZLinkFlowContext.Enter(
-            header.FlowId,
-            header.FlowOrigin is { } streamOrigin
-                ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(streamOrigin)
-                : null,
-            _dispatchErrors.Flow.CaptureEnabled,
-            ZLinkFlowOrigin.Inbound
-        );
+        using var flow = EnterFlow(header);
         var shouldPrune = false;
         var replayAdmission = relocationReplay ? ZLinkSpotRelocationReplayScope.Current : null;
         ensureActorContext(actor, state);
@@ -131,15 +169,31 @@ internal sealed class ZLinkActorDispatchRouter(
         }
         finally
         {
-            if (shouldPrune && actorSessions.TryRemove(state.RuntimeActorId, state))
-                await state.InvalidateRuntimeGenerationAfterDispatchesAsync().ConfigureAwait(false);
+            if (shouldPrune)
+                await PruneAsync(state).ConfigureAwait(false);
         }
     }
+
+    private ValueTask PruneAsync(ZLinkActorRuntimeState state) =>
+        actorSessions.TryRemove(state.RuntimeActorId, state)
+            ? state.InvalidateRuntimeGenerationAfterDispatchesAsync()
+            : ValueTask.CompletedTask;
+
+    private ZLinkFlowContext.Scope EnterFlow(ZlinkStreamHeader header) =>
+        ZLinkFlowContext.Enter(
+            header.FlowId,
+            header.FlowOrigin is { } streamOrigin
+                ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(streamOrigin)
+                : null,
+            _dispatchErrors.Flow.CaptureEnabled,
+            ZLinkFlowOrigin.Inbound
+        );
 
     public async ValueTask NotifyDisconnectedByIdAsync(
         string actorId,
         CancellationToken cancellationToken = default,
-        bool callerOwnsDispatchTurn = false
+        bool callerOwnsDispatchTurn = false,
+        ZLinkSerialWorkLane lane = ZLinkSerialWorkLane.Lifecycle
     )
     {
         using var flow = ZLinkFlowContext.Enter(
@@ -172,7 +226,8 @@ internal sealed class ZLinkActorDispatchRouter(
         await state
             .ExecuteLifecycleAsync(
                 ct => NotifyDisconnectedByCurrentLocationAsync(actor, state, ct),
-                cancellationToken: cancellationToken
+                cancellationToken,
+                lane
             )
             .ConfigureAwait(false);
     }
@@ -246,7 +301,8 @@ internal sealed class ZLinkActorDispatchRouter(
         bool relocationReplay,
         ZLinkSpotRelocationReplayAdmission? replayAdmission,
         CancellationToken cancellationToken,
-        RoutingId? sourceSessionRid
+        RoutingId? sourceSessionRid,
+        ZLinkSerialTurn? mailboxTurn = null
     )
     {
         var placement = await state
@@ -283,17 +339,28 @@ internal sealed class ZLinkActorDispatchRouter(
             throw new InvalidOperationException(
                 "SPOT Actor relocation replay has no target admission."
             );
-        await placement
-            .Activation.SubmitActorAsync(
+        ValueTask SubmitAsync(CancellationToken ct) =>
+            placement.Activation.SubmitActorAsync(
                 actor,
                 state,
                 header,
                 payload,
                 replayAdmission,
-                cancellationToken,
+                ct,
                 sourceSessionRid
-            )
-            .ConfigureAwait(false);
+            );
+
+        // In SpotWide mode the Actor FIFO and the placement share a gate.
+        // Yield that gate while the placement runs its handler turn.
+        if (
+            mailboxTurn?.ExecutionGate is { } gate
+            && ReferenceEquals(gate, placement.Activation._serial.ActorIngressOwner)
+        )
+            await mailboxTurn
+                .YieldFrameworkCallAsync(SubmitAsync, cancellationToken)
+                .ConfigureAwait(false);
+        else
+            await SubmitAsync(cancellationToken).ConfigureAwait(false);
         return placement.Prune;
     }
 

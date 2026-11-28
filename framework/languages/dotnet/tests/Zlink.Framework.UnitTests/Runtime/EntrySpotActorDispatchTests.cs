@@ -14501,6 +14501,8 @@ public sealed partial class EntrySpotActorDispatchTests
 
     private sealed class DispatchProbe
     {
+        public Exception? SecondSendFailure { get; init; }
+
         public ConcurrentQueue<string> Events { get; } = new();
 
         public TaskCompletionSource ActorAFirstStarted { get; } =
@@ -14514,6 +14516,33 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public TaskCompletionSource ReleaseActorAFirst { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask HandleSendAsync(
+            ProbeActor actor,
+            string message,
+            CancellationToken cancellationToken
+        )
+        {
+            Events.Enqueue($"{actor.ActorId}:{message}:start");
+
+            if (actor.ActorId == "actor-a" && message == "first")
+            {
+                ActorAFirstStarted.SetResult();
+                await ReleaseActorAFirst.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                Events.Enqueue($"{actor.ActorId}:{message}:end");
+                return;
+            }
+
+            if (actor.ActorId == "actor-a" && message == "second")
+            {
+                ActorASecondStarted.SetResult();
+                if (SecondSendFailure is { } failure)
+                    throw failure;
+            }
+
+            if (actor.ActorId == "actor-b")
+                ActorBStarted.SetResult();
+        }
     }
 
     internal class ProbeActor(string actorId, IZLinkActorContext? context = null) : IZLinkActor
@@ -15591,34 +15620,13 @@ public sealed partial class EntrySpotActorDispatchTests
     private sealed class ProbeActorSendHandler(DispatchProbe probe)
         : IZLinkEntrySpotActorSendHandler<ProbeEntrySpot, ProbeActor, string>
     {
-        public async ValueTask HandleAsync(
+        public ValueTask HandleAsync(
             ProbeEntrySpot entrySpot,
             ProbeActor actor,
             IZLinkMessageContext context,
             string message,
             CancellationToken cancellationToken
-        )
-        {
-            _ = entrySpot;
-            _ = context;
-            probe.Events.Enqueue($"{actor.ActorId}:{message}:start");
-
-            if (actor.ActorId == "actor-a" && message == "first")
-            {
-                probe.ActorAFirstStarted.SetResult();
-                await probe
-                    .ReleaseActorAFirst.Task.WaitAsync(cancellationToken)
-                    .ConfigureAwait(false);
-                probe.Events.Enqueue($"{actor.ActorId}:{message}:end");
-                return;
-            }
-
-            if (actor.ActorId == "actor-a" && message == "second")
-                probe.ActorASecondStarted.SetResult();
-
-            if (actor.ActorId == "actor-b")
-                probe.ActorBStarted.SetResult();
-        }
+        ) => probe.HandleSendAsync(actor, message, cancellationToken);
     }
 
     private sealed class ProbeActorRequestHandler
