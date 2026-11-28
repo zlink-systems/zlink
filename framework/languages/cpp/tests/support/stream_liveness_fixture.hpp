@@ -109,6 +109,8 @@ struct peer_observation_t
 class ping_only_client_t
 {
   public:
+    static constexpr std::size_t prefix_size = 6;
+
     ping_only_client_t (const std::string &endpoint, const detail::stream_runtime_t &runtime) :
         _runtime (runtime), _is_websocket (endpoint.starts_with ("ws:"))
     {
@@ -137,6 +139,7 @@ class ping_only_client_t
 
     const peer_observation_t &observation () const { return _observed; }
     bool write_pending () const { return _write_pending; }
+    std::size_t ping_size () const { return _ping.size (); }
 
     void advance ()
     {
@@ -147,6 +150,11 @@ class ping_only_client_t
     }
 
     void send_ping (bool partial = false)
+    {
+        send_ping_bytes (0, partial ? 1 : _ping.size (), !partial);
+    }
+
+    void send_ping_bytes (std::size_t offset, std::size_t size, bool final = true)
     {
         if (_write_pending || _observed.closing || _observed.closed || _observed.write_error)
             return;
@@ -160,9 +168,9 @@ class ping_only_client_t
             ++_observed.writes;
             _observed.last_write = steady_clock::now ();
         };
-        const auto bytes = asio::buffer (_ping.data (), partial ? 1 : _ping.size ());
+        const auto bytes = asio::buffer (_ping.data () + offset, size);
         if (_is_websocket)
-            _socket.async_write_some (!partial, bytes, sent);
+            _socket.async_write_some (final, bytes, sent);
         else
             asio::async_write (_socket.next_layer (), bytes, sent);
     }
@@ -175,8 +183,6 @@ class ping_only_client_t
             size = (size << 8) | byte;
         return size;
     }
-
-    static constexpr std::size_t prefix_size = 6;
 
     asio::awaitable<std::vector<std::uint8_t>> read_packet ()
     {

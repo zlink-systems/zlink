@@ -3647,7 +3647,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     target_link_libraries(test_cpp_framework_stream_liveness_reader_expiry PRIVATE
       zlink::framework opentelemetry-cpp::metrics)
     foreach(_reader_transport IN ITEMS tcp websocket core)
-      foreach(_reader_frame IN ITEMS complete partial)
+      set(_reader_frames complete partial)
+      if(_reader_transport STREQUAL "tcp")
+        list(APPEND _reader_frames complete-slow-read partial-slow-read)
+      endif()
+      foreach(_reader_frame IN LISTS _reader_frames)
         zlink_framework_cpp_add_test(
           NAME test_cpp_framework_stream_liveness_reader_expiry_${_reader_transport}_${_reader_frame}
           COMMAND test_cpp_framework_stream_liveness_reader_expiry ${_reader_transport} ${_reader_frame}

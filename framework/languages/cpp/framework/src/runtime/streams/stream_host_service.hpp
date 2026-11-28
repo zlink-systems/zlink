@@ -14,6 +14,10 @@
 
 #include <boost/asio/io_context.hpp>
 
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+#include <boost/asio/ip/tcp.hpp>
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -167,10 +171,27 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
 };
 
 #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+struct stream_host_test_connection_t
+{
+    template <typename Connection>
+    stream_host_test_connection_t (const std::shared_ptr<Connection> &connection) :
+        owner (connection)
+    {
+        if constexpr (requires { connection->socket; }) {
+            socket =
+              std::shared_ptr<boost::asio::ip::tcp::socket> (connection, &connection->socket);
+        }
+    }
+
+    std::weak_ptr<void> owner;
+    std::weak_ptr<boost::asio::ip::tcp::socket> socket;
+};
+
 struct stream_host_shutdown_test_hooks_t
 {
-    std::function<void (std::weak_ptr<void>, std::weak_ptr<void>)> registered;
+    std::function<void (std::weak_ptr<void>, stream_host_test_connection_t)> registered;
     std::function<void (bool)> before_terminate;
+    std::function<void (std::size_t)> before_tcp_read_expiry_check = {};
 };
 #endif
 

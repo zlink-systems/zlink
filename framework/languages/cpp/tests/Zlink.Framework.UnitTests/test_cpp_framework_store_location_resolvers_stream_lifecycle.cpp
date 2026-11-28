@@ -386,12 +386,13 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ForcedStreamCloseCannotOutliveReader
     std::promise<void> resume;
     auto resumed = resume.get_future ().share ();
     auto force_close = fw::runtime::stream_host_service_test_access_t::observe_shutdown (
-      host,
-      {[&] (auto listener, auto connection) { registered.set_value ({listener, connection}); },
-       [&] (bool in_lane) {
-           paused.set_value (in_lane);
-           resumed.wait ();
-       }});
+      host, {[&] (auto listener, auto connection) {
+                 registered.set_value ({listener, connection.owner});
+             },
+             [&] (bool in_lane) {
+                 paused.set_value (in_lane);
+                 resumed.wait ();
+             }});
     boost::asio::io_context io;
     boost::asio::ip::tcp::socket client (io);
     const auto endpoint = statuses->find (fw::listener_kind_t::stream, "shutdown-race")->endpoint;
