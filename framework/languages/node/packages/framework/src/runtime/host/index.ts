@@ -209,7 +209,6 @@ import {
 } from '../streams';
 import { ZLinkActorPlacementCoordinator } from './actor-placement-coordinator';
 import { ZLinkActorRuntimeOptionsFactory } from './actor-runtime-options-factory';
-import { ZLinkActorTransferAuthorityRuntime } from './actor-transfer-authority-runtime';
 import { ZLinkActorTransferRuntime } from './actor-transfer-runtime';
 import {
   ApplicationJobQueue,
@@ -317,7 +316,6 @@ export class ZLinkFrameworkRuntimeHost
   private readonly actorHandoff: ZLinkActorHandoffCoordinator;
   private readonly actorTransferRegistry: ZLinkActorTransferRegistry;
   private readonly actorTransferRuntime: ZLinkActorTransferRuntime;
-  private readonly actorTransferAuthorityRuntime: ZLinkActorTransferAuthorityRuntime;
   readonly serviceRelocation: ZLinkHostServiceRelocationRuntime;
   readonly entryActorRuntime: ZLinkEntryActorRuntimeService;
   private actorManager?: DefaultZLinkActorManager;
@@ -922,14 +920,6 @@ export class ZLinkFrameworkRuntimeHost
       runtimeEventPublisher: this.runtimeEventPublisher,
       metrics: this.metrics,
       activationAdmission: this.activationAdmission
-    });
-    this.actorTransferAuthorityRuntime = new ZLinkActorTransferAuthorityRuntime({
-      store: () => this.locationOwner.actorTransferStore() as never,
-      recoveryOwnerId: () => this.locationOwner.currentRuntime?.ownerId,
-      recoveryLeaseTtlMs: {
-        ...zlinkDefaultLocationOptions,
-        ...options.registration.locations.options
-      }.ownerLeaseTtlMs
     });
     this.routeMeshCoordinator = (
       factories?.createRouteMeshCoordinator ??
@@ -3184,13 +3174,6 @@ export class ZLinkFrameworkRuntimeHost
     if (record.kind === ReceiveKind.ActorBinding)
       return this.dispatchMeshActorBinding(meshName, record, signal);
     switch (record.kind) {
-      case ReceiveKind.TransferControl:
-        if (record.kindData?.kind !== 'transferControl') {
-          throw new ZLinkConfigurationException(
-            'MeshNode transfer control record has no typed control payload.'
-          );
-        }
-        return this.actorTransferAuthorityRuntime.handle(meshName, record.kindData, signal);
       case ReceiveKind.ChannelSend:
       case ReceiveKind.ChannelRequest: {
         const channelRuntime = this.channelRuntime;
@@ -3925,10 +3908,6 @@ export function hasExactPeerReadiness(
   );
 }
 
-export {
-  ZLinkActorTransferAuthorityRuntime,
-  transferIdString
-} from './actor-transfer-authority-runtime';
 export {
   ZLinkDrainingStatePublishError,
   ZLinkRetiringRollbackError,

@@ -1,6 +1,5 @@
 import type { RoutingId } from '../../contracts';
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
-import type { ZLinkActorTransferStore } from '../../contracts/Locations/ActorTransfer';
 import type { ZLinkFrameworkRegistration } from '../configuration';
 import type { ZLinkChannelRuntimeManager } from '../channels';
 import {
@@ -71,11 +70,6 @@ export class ZLinkLocationRuntimeOwner {
 
   setSpotRouteInvalidator(invalidator?: (spotId: RoutingId) => void): void {
     this.spotRouteInvalidator = invalidator;
-  }
-
-  actorTransferStore(): ZLinkActorTransferStore | undefined {
-    const store = this.stores?.locationStore ?? this.createAndRememberStores()?.locationStore;
-    return isActorTransferStore(store) ? store : undefined;
   }
 
   locationStore(): ZLinkDomainLocationStore | undefined {
@@ -323,26 +317,4 @@ export class ZLinkLocationRuntimeOwner {
   private ensureEvents(): ZLinkLocationEventSink | undefined {
     return this.events;
   }
-}
-
-function isActorTransferStore(value: unknown): value is ZLinkActorTransferStore {
-  const store = value as Partial<
-    Record<
-      | 'prepareActorTransfer'
-      | 'commitActorTransfer'
-      | 'activateActorTransfer'
-      | 'abortActorTransfer'
-      | 'takeOverActorTransfer'
-      | 'resolveActorTransfer',
-      unknown
-    >
-  >;
-  return (
-    typeof store.prepareActorTransfer === 'function' &&
-    typeof store.commitActorTransfer === 'function' &&
-    typeof store.activateActorTransfer === 'function' &&
-    typeof store.abortActorTransfer === 'function' &&
-    typeof store.takeOverActorTransfer === 'function' &&
-    typeof store.resolveActorTransfer === 'function'
-  );
 }

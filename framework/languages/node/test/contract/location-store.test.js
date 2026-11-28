@@ -359,8 +359,8 @@ test('in-memory location store matches the formal operation trace for core write
   ]);
 });
 
-test('in-memory exact MeshNode descriptor and Actor transfer stores enforce their fences', async () => {
-  let nowMs = Date.UTC(2026, 6, 3, 0, 0, 0);
+test('in-memory exact MeshNode descriptor store enforces its fences', async () => {
+  const nowMs = Date.UTC(2026, 6, 3, 0, 0, 0);
   let monotonicMs = 0;
   const store = new internal.ZLinkInMemoryLocationStore(
     () => new Date(nowMs),
@@ -531,67 +531,6 @@ test('in-memory exact MeshNode descriptor and Actor transfer stores enforce thei
     locationWrites.ZLinkLocationWriteIntent.Takeover
   );
   assert.equal(reclaimedDescriptor.status, locationWrites.ZLinkLocationWriteStatus.Stored);
-
-  const request = actorTransferRequest();
-  const prepared = await store.prepareActorTransfer(request);
-  assert.equal(prepared.status, 'stored');
-  assert.equal((await store.prepareActorTransfer(request)).status, 'stored');
-  assert.equal(
-    (
-      await store.prepareActorTransfer({
-        ...request,
-        transferId: '11111111-1111-1111-1111-111111111111'
-      })
-    ).status,
-    'rejectedConflict'
-  );
-  assert.equal(
-    (
-      await store.commitActorTransfer(
-        request.meshName,
-        request.actorId,
-        request.transferId,
-        'wrong-owner'
-      )
-    ).status,
-    'rejectedConflict'
-  );
-  assert.equal(
-    (
-      await store.commitActorTransfer(
-        request.meshName,
-        request.actorId,
-        request.transferId,
-        request.recoveryOwnerId
-      )
-    ).record.state,
-    'committed'
-  );
-  nowMs += 30_001;
-  assert.equal(
-    (
-      await store.takeOverActorTransfer(
-        request.meshName,
-        request.actorId,
-        request.transferId,
-        'recovery-b',
-        30_000
-      )
-    ).record.recoveryOwnerId,
-    'recovery-b'
-  );
-  assert.equal(
-    (
-      await store.activateActorTransfer(
-        request.meshName,
-        request.actorId,
-        request.transferId,
-        'recovery-b'
-      )
-    ).record.state,
-    'activated'
-  );
-  assert.equal(await store.resolveActorTransfer(request.meshName, request.actorId), undefined);
 });
 
 test('Framework-issued Entry Spot IDs are lowercase UUID v4 identities', () => {
@@ -770,21 +709,6 @@ function actor(ownerId, _generation) {
     membershipEpoch: 1n,
     ownerId,
     updatedAt: new Date(0)
-  };
-}
-
-function actorTransferRequest() {
-  return {
-    meshName: 'game',
-    actorId: 'actor-1',
-    transferId: '01234567-89ab-cdef-0123-456789abcdef',
-    source: { nodeRid: rid('game-a'), actorId: 'actor-1', generation: 11n },
-    target: { nodeRid: rid('game-b'), actorId: 'actor-1', generation: 11n },
-    expectedActorGeneration: 11n,
-    expectedMembershipEpoch: 4n,
-    participants: new Set([rid('game-a'), rid('game-b')]),
-    recoveryOwnerId: 'recovery-a',
-    recoveryLeaseTtlMs: 30_000
   };
 }
 

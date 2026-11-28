@@ -8,12 +8,6 @@ import {
   isValidPublicWeight,
   ZLINK_MAX_PUBLIC_WEIGHT
 } from '../../contracts/Configuration/RegistrationBuilderPolicy';
-import type {
-  ZLinkActorTransferPrepareRequest,
-  ZLinkActorTransferRecord,
-  ZLinkActorTransferState,
-  ZLinkActorTransferWriteResult
-} from '../../contracts/Locations/ActorTransfer';
 import {
   matchesActorLocation,
   matchesPeerLocation,
@@ -107,7 +101,6 @@ export class ZLinkInMemoryLocationStore
   private readonly actors = new RowTable<ZLinkActorLocation>();
   private readonly routes = new RowTable<ZLinkRouteLocation>();
   private readonly stamps = new Map<string, bigint>();
-  private readonly actorTransfers = new Map<string, InMemoryActorTransferSlot>();
   private ownerLeaseGeneration = 0n;
   private readonly authority: ZLinkInMemoryAuthorityStore;
   protected readonly aggregateInventory: ZLinkAggregateInventoryStore =
@@ -925,146 +918,6 @@ export class ZLinkInMemoryLocationStore
     return pageRows(this.routes, (row) => matchesRouteLocation(row, filter), page);
   }
 
-  async prepareActorTransfer(
-    request: ZLinkActorTransferPrepareRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkActorTransferWriteResult> {
-    signal?.throwIfAborted();
-    validateTransferRequest(request);
-    const key = actorTransferKey(request.meshName, request.actorId);
-    let slot = this.actorTransfers.get(key);
-    if (slot === undefined) {
-      slot = { records: new Map() };
-      this.actorTransfers.set(key, slot);
-    }
-    if (slot.activeTransferId !== undefined) {
-      const existing = slot.records.get(slot.activeTransferId);
-      if (slot.activeTransferId === request.transferId && existing?.state === 'prepared') {
-        return transferStored(existing);
-      }
-      return transferResult('rejectedConflict');
-    }
-    const updatedAt = this.now();
-    const record: ZLinkActorTransferRecord = {
-      meshName: request.meshName,
-      actorId: request.actorId,
-      transferId: request.transferId,
-      source: request.source,
-      target: request.target,
-      expectedActorGeneration: request.expectedActorGeneration,
-      expectedMembershipEpoch: request.expectedMembershipEpoch,
-      participants: new Set(request.participants),
-      state: 'prepared',
-      recoveryOwnerId: request.recoveryOwnerId,
-      recoveryLeaseExpiresAt: new Date(updatedAt.getTime() + request.recoveryLeaseTtlMs),
-      updatedAt
-    };
-    slot.records.set(request.transferId, record);
-    slot.activeTransferId = request.transferId;
-    return transferStored(record);
-  }
-
-  async commitActorTransfer(
-    meshName: string,
-    actorId: string,
-    transferId: string,
-    recoveryOwnerId: string,
-    signal?: AbortSignal
-  ): Promise<ZLinkActorTransferWriteResult> {
-    signal?.throwIfAborted();
-    return this.transitionActorTransfer(
-      meshName,
-      actorId,
-      transferId,
-      recoveryOwnerId,
-      'prepared',
-      'committed',
-      false
-    );
-  }
-
-  async activateActorTransfer(
-    meshName: string,
-    actorId: string,
-    transferId: string,
-    recoveryOwnerId: string,
-    signal?: AbortSignal
-  ): Promise<ZLinkActorTransferWriteResult> {
-    signal?.throwIfAborted();
-    return this.transitionActorTransfer(
-      meshName,
-      actorId,
-      transferId,
-      recoveryOwnerId,
-      'committed',
-      'activated',
-      true
-    );
-  }
-
-  async abortActorTransfer(
-    meshName: string,
-    actorId: string,
-    transferId: string,
-    recoveryOwnerId: string,
-    signal?: AbortSignal
-  ): Promise<ZLinkActorTransferWriteResult> {
-    signal?.throwIfAborted();
-    return this.transitionActorTransfer(
-      meshName,
-      actorId,
-      transferId,
-      recoveryOwnerId,
-      'prepared',
-      'aborted',
-      true
-    );
-  }
-
-  async takeOverActorTransfer(
-    meshName: string,
-    actorId: string,
-    transferId: string,
-    successorOwnerId: string,
-    recoveryLeaseTtlMs: number,
-    signal?: AbortSignal
-  ): Promise<ZLinkActorTransferWriteResult> {
-    signal?.throwIfAborted();
-    validateTransferIdentity(meshName, actorId, transferId);
-    validateTransferLease(successorOwnerId, recoveryLeaseTtlMs);
-    const record = this.actorTransfers
-      .get(actorTransferKey(meshName, actorId))
-      ?.records.get(transferId);
-    if (record === undefined) return transferResult('notFound');
-    if (record.state !== 'prepared' && record.state !== 'committed') {
-      return transferResult('invalidState');
-    }
-    const updatedAt = this.now();
-    if (record.recoveryLeaseExpiresAt.getTime() > updatedAt.getTime()) {
-      return transferResult('rejectedConflict');
-    }
-    const updated: ZLinkActorTransferRecord = {
-      ...record,
-      recoveryOwnerId: successorOwnerId,
-      recoveryLeaseExpiresAt: new Date(updatedAt.getTime() + recoveryLeaseTtlMs),
-      updatedAt
-    };
-    this.actorTransfers.get(actorTransferKey(meshName, actorId))?.records.set(transferId, updated);
-    return transferStored(updated);
-  }
-
-  async resolveActorTransfer(
-    meshName: string,
-    actorId: string,
-    signal?: AbortSignal
-  ): Promise<ZLinkActorTransferRecord | undefined> {
-    signal?.throwIfAborted();
-    const slot = this.actorTransfers.get(actorTransferKey(meshName, actorId));
-    return slot?.activeTransferId === undefined
-      ? undefined
-      : slot.records.get(slot.activeTransferId);
-  }
-
   async claimOwnerLease(
     ownerId: string,
     leaseTtlMs: number,
@@ -1200,33 +1053,6 @@ export class ZLinkInMemoryLocationStore
     }
 
     return ignoredStale();
-  }
-
-  private transitionActorTransfer(
-    meshName: string,
-    actorId: string,
-    transferId: string,
-    recoveryOwnerId: string,
-    requiredState: ZLinkActorTransferState,
-    nextState: ZLinkActorTransferState,
-    clearActive: boolean
-  ): ZLinkActorTransferWriteResult {
-    validateTransferIdentity(meshName, actorId, transferId);
-    const slot = this.actorTransfers.get(actorTransferKey(meshName, actorId));
-    const record = slot?.records.get(transferId);
-    if (record === undefined || slot?.activeTransferId !== transferId) {
-      return transferResult('notFound');
-    }
-    if (record.state !== requiredState) return transferResult('invalidState');
-    if (record.recoveryOwnerId !== recoveryOwnerId) return transferResult('rejectedConflict');
-    const updated: ZLinkActorTransferRecord = {
-      ...record,
-      state: nextState,
-      updatedAt: this.now()
-    };
-    slot.records.set(transferId, updated);
-    if (clearActive) slot.activeTransferId = undefined;
-    return transferStored(updated);
   }
 
   private remove<TRow>(
@@ -1395,17 +1221,10 @@ function meshNodeDescriptorFingerprint(descriptor: ZLinkMeshNodeDescriptor): str
   });
 }
 
-interface InMemoryActorTransferSlot {
-  readonly records: Map<string, ZLinkActorTransferRecord>;
-  activeTransferId?: string;
-}
-
 interface InMemoryOwnerLease {
   readonly token: ZLinkLocationOwnerToken;
   readonly leaseExpiresAt: Date;
 }
-
-const TRANSFER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function meshNodeKey(meshName: string, rid: RoutingId): string {
   const value = typeof rid === 'string' ? rid : (rid as unknown as { toHex(): string }).toHex();
@@ -1518,46 +1337,6 @@ function fanoutPublisherDescriptorFingerprint(descriptor: ZLinkFanoutPublisherDe
     descriptorRevision: descriptor.descriptorRevision.toString(),
     state: descriptor.state
   });
-}
-
-function actorTransferKey(meshName: string, actorId: string): string {
-  return `${meshName.length}:${meshName}${actorId.length}:${actorId}`;
-}
-
-function validateTransferRequest(request: ZLinkActorTransferPrepareRequest): void {
-  validateTransferIdentity(request.meshName, request.actorId, request.transferId);
-  validateTransferLease(request.recoveryOwnerId, request.recoveryLeaseTtlMs);
-  if (request.expectedActorGeneration < 1n || request.expectedMembershipEpoch < 1n) {
-    throw new RangeError('Actor transfer generation and membership epoch must be positive.');
-  }
-  if (request.participants.size === 0) {
-    throw new TypeError('Actor transfer requires at least one participant.');
-  }
-}
-
-function validateTransferIdentity(meshName: string, actorId: string, transferId: string): void {
-  if (meshName.trim().length === 0 || actorId.trim().length === 0) {
-    throw new TypeError('Actor transfer meshName and actorId are required.');
-  }
-  if (!TRANSFER_ID_PATTERN.test(transferId)) {
-    throw new TypeError('Actor transferId must be a lowercase canonical UUID.');
-  }
-}
-
-function validateTransferLease(ownerId: string, ttlMs: number): void {
-  if (ownerId.trim().length === 0 || !Number.isFinite(ttlMs) || ttlMs <= 0) {
-    throw new TypeError('Actor transfer recovery owner and positive lease TTL are required.');
-  }
-}
-
-function transferStored(record: ZLinkActorTransferRecord): ZLinkActorTransferWriteResult {
-  return { status: 'stored', record };
-}
-
-function transferResult(
-  status: ZLinkActorTransferWriteResult['status']
-): ZLinkActorTransferWriteResult {
-  return { status };
 }
 
 function validateOwnerLeaseInput(ownerId: string, leaseTtlMs: number): void {

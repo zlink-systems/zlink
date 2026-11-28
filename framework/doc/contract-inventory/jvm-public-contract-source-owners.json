@@ -39,8 +39,6 @@
           "zlink.framework.testkit"
         ],
         "languageLevelNonPublicDeclarations": [
-          "ActorTransferControl",
-          "ActorTransferPhase",
           "FrameworkReadyBatch",
           "FrameworkReceiveBatch",
           "MeshMonitorEventMask",

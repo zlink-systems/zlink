@@ -16,7 +16,7 @@ public enum RecordKind {
     ACTOR_REQUEST(10),
     COMPLETION(11),
     SEND_READY(12),
-    TRANSFER_CONTROL(13);
+    TRANSFER_CONTROL(13); // Reserved receive kind.
 
     private final int value;
 

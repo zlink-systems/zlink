@@ -41,11 +41,6 @@ export interface MeshOperationId {
   readonly low: bigint;
 }
 
-export interface ActorTransferId {
-  readonly high: bigint;
-  readonly low: bigint;
-}
-
 export const ReadyDomain = Object.freeze({
   None: 0,
   Application: 1,
@@ -68,7 +63,7 @@ export const ReceiveKind = Object.freeze({
   ActorRequest: 10,
   Completion: 11,
   SendReady: 12,
-  TransferControl: 13,
+  TransferControl: 13, // Reserved receive kind.
   InstanceSpotActivation: 14,
   ActorBinding: 15
 } as const);
@@ -106,16 +101,6 @@ export const ActorLifecycleKind = Object.freeze({
   Left: 3,
   Disconnected: 4,
   Destroyed: 5
-} as const);
-
-export const ActorTransferRole = Object.freeze({ Source: 1, Target: 2 } as const);
-
-export const ActorTransferPhase = Object.freeze({
-  Preparing: 1,
-  Fenced: 2,
-  Committed: 3,
-  Activated: 4,
-  Aborted: 5
 } as const);
 
 export interface ActorLocation {
@@ -179,20 +164,6 @@ export interface SendReadyPayload {
   readonly channelName: string | null;
 }
 
-export interface ActorTransferControlPayload {
-  readonly kind: 'transferControl';
-  readonly phase: number;
-  readonly role: number;
-  readonly transferId: ActorTransferId;
-  readonly actor: ServiceActorRef | null;
-  /** Source owner tenure required by target Preparing and Fenced controls. */
-  readonly sourceAuthorityOwnerGeneration?: bigint;
-  readonly membershipEpoch: bigint;
-  readonly finalSequence: bigint;
-  readonly resultCode: number;
-  readonly failureErrno: number;
-}
-
 /** The Session owner's registry view of one Session binding (Session–Actor binding §5-2). */
 export interface ServiceStreamSessionBinding {
   readonly sessionRid: RoutingId;
@@ -225,7 +196,6 @@ export type ReceiveKindData =
   | ActorJoinCompletionPayload
   | ActorLookupCompletionPayload
   | SendReadyPayload
-  | ActorTransferControlPayload
   | ActorBindingControlPayload;
 
 export interface ReadyRecord {

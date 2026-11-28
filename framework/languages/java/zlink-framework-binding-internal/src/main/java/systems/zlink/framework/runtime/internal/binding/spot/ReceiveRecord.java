@@ -178,10 +178,6 @@ public record ReceiveRecord(
     }
 
     /** Returns the transfer control payload when this is a transfer-control record. */
-    public ActorTransferControl transferControl() {
-        return kindData instanceof ActorTransferControl value ? value : null;
-    }
-
     /** Returns the destination-specific capacity signal for a send-ready record. */
     public MeshSendReadyData sendReady() {
         return kindData instanceof MeshSendReadyData value ? value : null;

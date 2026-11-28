@@ -1548,8 +1548,7 @@ test('backend mesh record dispatcher routes node, spot, actor, and infrastructur
     spot: (owner, record) => routed.push(['spot', owner.ownerKind, record.kind]),
     actor: (owner, record) => routed.push(['actor', owner.ownerKind, record.kind]),
     completion: (record) => routed.push(['completion', record.kind]),
-    sendReady: (record) => routed.push(['sendReady', record.kind]),
-    transferControl: (record) => routed.push(['transferControl', record.kind])
+    sendReady: (record) => routed.push(['sendReady', record.kind])
   });
   const owner = (ownerKind) => ({ ownerKind });
   const record = (kind) => ({ kind });
@@ -1561,7 +1560,6 @@ test('backend mesh record dispatcher routes node, spot, actor, and infrastructur
   await framework.runZLinkExecutionArea('infrastructure', async () => {
     await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.Completion));
     await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.SendReady));
-    await dispatcher.dispatch(owner(framework.ReadyOwnerKind.Node), record(framework.ReceiveKind.TransferControl));
   });
 
   assert.deepEqual(routed, [
@@ -1570,8 +1568,7 @@ test('backend mesh record dispatcher routes node, spot, actor, and infrastructur
     ['actor', framework.ReadyOwnerKind.Actor, framework.ReceiveKind.ActorSend],
     ['actor', framework.ReadyOwnerKind.Actor, framework.ReceiveKind.ActorBinding],
     ['completion', framework.ReceiveKind.Completion],
-    ['sendReady', framework.ReceiveKind.SendReady],
-    ['transferControl', framework.ReceiveKind.TransferControl]
+    ['sendReady', framework.ReceiveKind.SendReady]
   ]);
   assert.throws(
     () => dispatcher.dispatch(owner(framework.ReadyOwnerKind.Spot), record(framework.ReceiveKind.ChannelSend)),

@@ -12,7 +12,6 @@ export interface ZLinkMeshRecordDispatchPorts {
   readonly actor: (owner: ReadyRecord, record: ReceiveRecord) => void | Promise<void>;
   readonly completion: (record: ReceiveRecord) => void | Promise<void>;
   readonly sendReady: (record: ReceiveRecord) => void | Promise<void>;
-  readonly transferControl: (record: ReceiveRecord) => void | Promise<void>;
 }
 
 /**
@@ -47,9 +46,6 @@ export class ZLinkMeshRecordDispatcher {
       case ReceiveKind.SendReady:
         requireZLinkInfrastructureExecutionArea();
         return this.ports.sendReady(record);
-      case ReceiveKind.TransferControl:
-        requireZLinkInfrastructureExecutionArea();
-        return this.ports.transferControl(record);
       default:
         throw new Error(`Unsupported MeshNode receive kind '${record.kind}'.`);
     }

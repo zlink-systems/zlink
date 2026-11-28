@@ -284,14 +284,17 @@ final class JavaTargetContractGapTest {
         assertInternalRuntimeSpi(
                 "systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter");
 
+        assertClassAbsent(
+                "systems.zlink.framework.runtime.internal.binding.spot.ActorTransferControl");
+        assertClassAbsent(
+                "systems.zlink.framework.runtime.internal.binding.spot.ActorTransferPhase");
+
         assertNotPublic(
                 "systems.zlink.framework.runtime.internal.service.ZLinkCanonicalRelocationControlCodec");
         assertNotPublic(
                 "systems.zlink.framework.runtime.internal.service.ZLinkInMemoryLocationAuthority");
         for (String type :
                 new String[] {
-                    "ActorTransferControl",
-                    "ActorTransferPhase",
                     "FrameworkReadyBatch",
                     "FrameworkReceiveBatch",
                     "MeshRecordPayload",
