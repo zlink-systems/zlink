@@ -122,6 +122,9 @@ struct admission_waiting_context_t {
 };
 subscription_t on_admission_waiting(
     std::function<void(const admission_waiting_context_t&)> handler);
+subscription_t on_admission_queued(std::function<void()> handler);
+subscription_t on_admission_position(
+    std::function<void(std::int32_t position, std::chrono::milliseconds estimated_wait)> handler);
 subscription_t on_request_sending(
     std::function<void(request_sending_context_t&)> callback);
 subscription_t on_reply_received(
@@ -450,3 +453,7 @@ C++ connector의 공개 동작은 `test_cpp_stream_connector`가 검증한다. �
 테스트 helper 인터페이스는 `test_cpp_framework_target_contract`의 `TH-CP-01` 게이트가 검증한다.
 
 입장 대기와 기본 마감은 [공통 스펙 §5.8](../../32-stream-connector.ko.md#58-입장-대기와-자동-재시도)이 정한다.
+
+`on_admission_queued`는 인자 없이 호출합니다. `on_admission_position`은 순번을 `std::int32_t`로,
+예상 대기를 `std::chrono::milliseconds`로 전달합니다. 등록과 호출 순서는
+[인증 입장 제한 §3.5.7](../../../server/04-session/03-authentication-admission.ko.md#357-connector-callback-순서)을 따릅니다.

@@ -17,6 +17,7 @@
 #include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/messaging/request_deadline.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
+#include "runtime/spots/instance_spot_application.hpp"
 #include "runtime/stateful/accepted_actor_record.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 
@@ -236,6 +237,33 @@ public_fence (const protocol::user_spot_reservation_fence_t &wire,
        spot_type_capacity_delta_t{placement_object_kind_t::user_spot, stable_type,
                                   wire.pending_capacity_delta}}};
 }
+
+// The retained activation carries the Instance Spot v1 envelope, so the message
+// name and flow fields for diagnostics come from its header (#4546).
+struct activation_application_identity_t
+{
+    std::string packet_name;
+    std::optional<std::string> flow_id;
+    std::optional<flow_origin_t> flow_origin;
+};
+
+activation_application_identity_t
+activation_application_identity (const protocol::instance_activation_recovery_t &command)
+{
+    const auto decoded = messaging::decode_instance_spot_application (
+      command.application_payload,
+      command.activation.request ? messaging::message_kind_t::request
+                                 : messaging::message_kind_t::command,
+      true);
+    if (!decoded)
+        return {command.application_payload.packet_name (), command.application_payload.flow_id,
+                command.application_payload.flow_origin};
+    const auto &header = decoded.value ().header;
+    return {std::string (header.message_name),
+            header.flow_id ? std::make_optional (std::string (*header.flow_id)) : std::nullopt,
+            header.flow_origin};
+}
+
 } // namespace
 
 bool bound_session_bind_actor_matches (const protocol::actor_route_fence_t &requested,
@@ -1614,6 +1642,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                   result.exception ? result.exception : std::make_exception_ptr (error);
                 reporter.report_lazy ([&] {
                     const auto terminal_error = detail::framework_error (result.exception);
+                    const auto identity = activation_application_identity (*owned_command);
                     message_dispatch_error_event_t event{
                       .surface = dispatch_error_surface_t::instance_spot,
                       .message_kind = activation->request ? dispatch_message_kind_t::request
@@ -1625,7 +1654,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                                   : detail::dispatch_reason_from_error (&error),
                       .action = activation->request ? dispatch_error_action_t::reply_error
                                                     : dispatch_error_action_t::drop,
-                      .packet_name = owned_command->application_payload.packet_name (),
+                      .packet_name = identity.packet_name,
                       .spot_id = activation->target.spot_id,
                       .source_rid =
                         zlink::routing_id_t::from (activation->source_node_routing_id).to_string (),
@@ -1635,8 +1664,8 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                         event.flow_id = result.terminal_flow->flow_id;
                         event.flow_origin = result.terminal_flow->origin;
                     } else {
-                        event.flow_id = owned_command->application_payload.flow_id;
-                        event.flow_origin = owned_command->application_payload.flow_origin;
+                        event.flow_id = identity.flow_id;
+                        event.flow_origin = identity.flow_origin;
                     }
                     return event;
                 });
@@ -1708,19 +1737,20 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                       started, activation->target.stable_type, outcome);
                 if (!activation->request && !result.accepted_turn_terminal) {
                     tracer.trace (message_flow_outcome_t::dropped, [&] {
+                        const auto identity = activation_application_identity (*owned_command);
                         message_flow_event_t event{
                           .outcome = message_flow_outcome_t::dropped,
                           .surface = dispatch_error_surface_t::instance_spot,
                           .message_kind = dispatch_message_kind_t::send,
-                          .packet_name = owned_command->application_payload.packet_name (),
+                          .packet_name = identity.packet_name,
                           .source_rid =
                             zlink::routing_id_t::from (activation->source_node_routing_id)
                               .to_string (),
                           .spot_id = activation->target.spot_id,
                           .error_action = dispatch_error_action_t::drop,
                           .exception = exception,
-                          .flow_id = owned_command->application_payload.flow_id,
-                          .flow_origin = owned_command->application_payload.flow_origin,
+                          .flow_id = identity.flow_id,
+                          .flow_origin = identity.flow_origin,
                           .mesh_name = lifetime->_options.mesh.descriptor.mesh_name,
                           .instance_spot_type = activation->target.stable_type,
                           .result = message_flow_result_t::dropped,

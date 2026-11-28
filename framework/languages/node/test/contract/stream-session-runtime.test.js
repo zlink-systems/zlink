@@ -552,10 +552,12 @@ test('stream session dispatch resolves only current Actor slots for sends and re
 
 test('Actor binding replacement callback can send before close and does not block another session lane', async () => {
   const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
   const events = [];
   const errors = [];
   const runtime = createStreamRuntime({
     socket,
+    livenessClock: clock,
     onError(error) {
       errors.push(error);
     },
@@ -610,13 +612,11 @@ test('Actor binding replacement callback can send before close and does not bloc
   assert.equal(socket.sent.some((entry) => entry.routingId === 'session-a'), true);
   assert.deepEqual(socket.disconnects, []);
 
-  await new Promise((resolve) => setTimeout(resolve, 40));
+  await clock.flush();
+  await clock.advance(99);
   assert.deepEqual(socket.disconnects, []);
-  await waitForCondition(
-    () => socket.disconnects.includes('session-a'),
-    'fixed replacement close timer',
-    500
-  );
+  await clock.advance(1);
+  assert.deepEqual(socket.disconnects, ['session-a']);
   assert.equal(errors.some((error) => /closing after its Actor binding was replaced/i.test(String(error))), true);
   await runtime.dispose();
 });

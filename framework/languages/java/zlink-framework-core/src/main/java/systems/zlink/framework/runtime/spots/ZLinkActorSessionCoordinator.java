@@ -274,15 +274,6 @@ final class ZLinkActorSessionCoordinator {
                 .isPresent();
     }
 
-    CompletionStage<Optional<LocalActorReply>> dispatchLocalSession(
-            ZLinkBackendActorRef actorRef,
-            ZLinkStreamHeader header,
-            Message payload,
-            Predicate<String> isLocalSpot,
-            Function<LocalDispatch, CompletionStage<Optional<LocalActorReply>>> localDispatch) {
-        return dispatchLocalSession(actorRef, null, header, payload, isLocalSpot, localDispatch);
-    }
-
     CompletionStage<Optional<Message>> dispatchTransferBacklog(
             ZLinkBackendActorRef actorRef,
             ZLinkStreamHeader header,
@@ -393,6 +384,7 @@ final class ZLinkActorSessionCoordinator {
             byte[] acceptedRecord,
             ZLinkStreamHeader header,
             Message payload,
+            CompletableFuture<Void> admission,
             Predicate<String> isLocalSpot,
             Function<LocalDispatch, CompletionStage<Optional<LocalActorReply>>> localDispatch) {
         ZLinkActorRuntime runtime = requireActors();
@@ -420,6 +412,7 @@ final class ZLinkActorSessionCoordinator {
                                             acceptedRecord,
                                             header,
                                             payload,
+                                            admission,
                                             isLocalSpot,
                                             localDispatch));
         }
@@ -450,7 +443,6 @@ final class ZLinkActorSessionCoordinator {
                             acceptedRecord == null ? new byte[0] : acceptedRecord)
                     .thenApply(reply -> decodeRoutedReply(header, reply));
         }
-        CompletableFuture<Optional<LocalActorReply>> result = new CompletableFuture<>();
         byte[] journalRecord =
                 acceptedRecord == null
                         ? runtime.encodeLocalActorAccepted(actor, header, payload)
@@ -460,15 +452,21 @@ final class ZLinkActorSessionCoordinator {
                     new ZLinkConfigurationException(
                             "canonical local Session Actor journal context is unavailable"));
         }
+        String actorId = actor.context().actorId();
+        byte[] record = ZLinkActorAcceptedJournal.encode(actorId, header, payload, journalRecord);
+        LocalDispatch dispatch = new LocalDispatch(actor, joinedSpotId);
+        if (admission != null) {
+            return runtime.submitActorDispatch(
+                            actorId,
+                            record,
+                            () -> localDispatch.apply(dispatch).thenAccept(ignored -> {}),
+                            () -> {},
+                            admission)
+                    .thenApply(ignored -> Optional.empty());
+        }
+        CompletableFuture<Optional<LocalActorReply>> result = new CompletableFuture<>();
         return runtime.submitActorDispatch(
-                        actor.context().actorId(),
-                        ZLinkActorAcceptedJournal.encode(
-                                actor.context().actorId(), header, payload, journalRecord),
-                        () ->
-                                invokeLocalDispatch(
-                                        localDispatch,
-                                        new LocalDispatch(actor, joinedSpotId),
-                                        result))
+                        actorId, record, () -> invokeLocalDispatch(localDispatch, dispatch, result))
                 .thenCompose(ignored -> result);
     }
 

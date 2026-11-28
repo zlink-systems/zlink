@@ -6,14 +6,19 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceSpotFollow;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.SpotRouteFence;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
 import java.util.List;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BooleanSupplier;
 
-/** Test-only access to MeshNode admission state. */
+/** Test-only access to MeshNode state. */
 public final class ZLinkJavaRawMeshNodeTestAccess {
     private ZLinkJavaRawMeshNodeTestAccess() {}
+
+    public static ZLinkServiceOperationRegistry operationRegistry(ZLinkInternalMeshNode node) {
+        return ((ZLinkJavaRawMeshNode) node).operationRegistry();
+    }
 
     public static List<byte[]> instanceSpotFollowFrames(
             InstanceSpotFollow original, SpotRouteFence target, List<Message> parts) {

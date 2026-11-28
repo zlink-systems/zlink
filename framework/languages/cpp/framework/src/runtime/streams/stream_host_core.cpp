@@ -826,9 +826,10 @@ bool stream_host_service_t::listener_t::dispatch_core_packet (
         if (current->connected && !current->closing) {
             trace_stream_host ("core-dispatch-submit", _stream, header, "rid=" + rid.to_hex ());
             auto dispatched = _ingress.publish (
-              _runtime, *current->session, current->stream, header, payload,
+              _runtime, *current->session, current->stream, _stream.name, header, payload,
               std::move (application_permit),
-              [this, current, rid, header] (const result_t<void> &result) {
+              [this, self = shared_from_this (), current, rid,
+               header] (const result_t<void> &result, detail::stream_metadata_t metadata = {}) {
                   trace_stream_host (
                     "core-dispatch-complete", _stream, header,
                     std::string ("result=") + (result ? "success" : "failure")
@@ -839,14 +840,16 @@ bool stream_host_service_t::listener_t::dispatch_core_packet (
                                + (result.error () ? result.error ()->what () : "unknown")));
                   if (!result) {
                       report_packet_dispatch_error (header, result);
-                      send_core_error_frame (rid, current->stream, header, result);
+                      send_core_error_frame (rid, current->stream, header, result, {},
+                                             std::move (metadata));
                   }
               },
               [this] { return _stop->load (std::memory_order_acquire); },
               [&] (const result_t<void> &error, detail::stream_metadata_t metadata) {
                   rejected.emplace (error);
                   admission_metadata = std::move (metadata);
-              });
+              },
+              [this] (auto work) { schedule_admission (std::move (work)); });
             if (!dispatched) {
                 /* Session-gate invariant (cpp-internals): no task may be
                  * completed and no close may be entered while
