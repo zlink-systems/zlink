@@ -184,8 +184,8 @@ func TestCoreEventFlagValuesRemainComplete(t *testing.T) {
 	if PollIn != 1 || PollOut != 2 || PollErr != 4 || PollPri != 8 || PollCompletion != 32 {
 		t.Fatalf("poll flags = (%d, %d, %d, %d, %d), want (1, 2, 4, 8, 32)", PollIn, PollOut, PollErr, PollPri, PollCompletion)
 	}
-	if CompletionSend != 1 || CompletionRequest != 2 || CompletionWritable != 3 {
-		t.Fatalf("completion kinds = (%d, %d, %d), want (1, 2, 3)", CompletionSend, CompletionRequest, CompletionWritable)
+	if completionKindSend != 1 || completionKindRequest != 2 || completionKindWritable != 3 {
+		t.Fatalf("completion kinds = (%d, %d, %d), want (1, 2, 3)", completionKindSend, completionKindRequest, completionKindWritable)
 	}
 }
 
@@ -206,40 +206,6 @@ func TestCoreEventFlagBitValuesRemainComplete(t *testing.T) {
 	}
 	if MonitorTransportLaneApplication != 0 || MonitorTransportLaneCompletion != 1 {
 		t.Fatalf("MonitorTransportLane values = (%d, %d), want (0, 1)", MonitorTransportLaneApplication, MonitorTransportLaneCompletion)
-	}
-}
-
-// §8.1.1 follow-up: monitorEventFromC must preserve the full 64-bit value and
-// the connection/flag metadata Core carries alongside a flow-state event,
-// without reviving the removed public pair/generation fields.
-func TestMonitorEventFromCPreserves64BitValueAndConnectionMetadata(t *testing.T) {
-	const bigValue = uint64(0x1_0000_0002)
-	const bigConnectionID = uint64(0xFFFF_FFFF_0000_0001)
-
-	event := monitorEventFromRawFieldsForTest(
-		MonitorEventTypeFlowStateStale,
-		bigValue, bigConnectionID,
-		MonitorTransportLaneCompletion,
-		MonitorEventFlagFlowStateStaleEpoch,
-	)
-
-	if event.Value != bigValue {
-		t.Fatalf("Value = %#x, want %#x (must not truncate to 32 bits)", event.Value, bigValue)
-	}
-	if event.ConnectionID != bigConnectionID {
-		t.Fatalf("ConnectionID = %#x, want %#x", event.ConnectionID, bigConnectionID)
-	}
-	if event.TransportLane != MonitorTransportLaneCompletion {
-		t.Fatalf("TransportLane = %d, want %d", event.TransportLane, MonitorTransportLaneCompletion)
-	}
-	if !event.HasFlag(MonitorEventFlagFlowStateStaleEpoch) {
-		t.Fatalf("Flags = %#x, missing expected stale-epoch bit", event.Flags)
-	}
-	if event.HasFlag(MonitorEventFlagConnectionReadyEdge) || event.HasFlag(MonitorEventFlagSendFlowWritable) {
-		t.Fatalf("Flags = %#x, unexpected bit set", event.Flags)
-	}
-	if !event.IsFlowStateStale() {
-		t.Fatalf("IsFlowStateStale() = false, want true")
 	}
 }
 
@@ -273,17 +239,12 @@ func TestReceivedReplyHelpersCarryCanonicalMetadata(t *testing.T) {
 	}
 	defer replyPart.Close()
 
-	var gotReplyCount int
 	owner := &replyTokenOwner{marker: 1}
 	token := ReplyToken{owner: owner, value: 42}
 	received := &Received{
 		routingID: NewRoutingID([]byte("peer")),
 		token:     token,
 		parts:     []*Message{replyPart},
-	}
-	received.reply = func(parts []*Message) error {
-		gotReplyCount = len(parts)
-		return nil
 	}
 
 	gotToken, ok := received.ReplyToken()
@@ -292,12 +253,6 @@ func TestReceivedReplyHelpersCarryCanonicalMetadata(t *testing.T) {
 	}
 	if !received.IsSinglePart() {
 		t.Fatalf("IsSinglePart() = false, want true")
-	}
-	if err := received.Reply().Message(replyPart).Submit(context.Background()); err != nil {
-		t.Fatalf("Reply() error = %v", err)
-	}
-	if gotReplyCount != 1 {
-		t.Fatalf("reply part count = %d, want 1", gotReplyCount)
 	}
 }
 

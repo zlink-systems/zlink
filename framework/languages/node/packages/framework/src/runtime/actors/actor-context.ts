@@ -26,8 +26,9 @@ import {
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import { ZLinkConfigurationException } from '../configuration';
 import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
-import { captureZLinkSpotSerialTurn } from '../execution';
+import { captureZLinkSpotSerialTurn, type ZLinkSpotSerialTurn } from '../execution';
 import { createRandomOperationIdentity } from '../foundation/operation-identity';
+import { ServiceRelocationAuthorityUnsettledAtStopError } from '../foundation/service-relocation-coordinator';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -299,13 +300,14 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
             requestMessage.close();
           }
           if (result.sourceCleanup !== undefined) {
-            // Infrastructure cleanup has its own terminal, outside the public Failed conversion.
             try {
-              const cleanup = result.sourceCleanup();
-              await (this.turn === undefined ? cleanup : this.turn.yieldFrameworkPromise(cleanup));
-            } catch (error) {
-              traceJoinError(this.actor, error, this.coordinator, ZLinkDispatchErrorAction.Drop);
-              throw error;
+              await completeRelayedJoin(
+                result.sourceCleanup,
+                this.turn,
+                this.actor,
+                operationId,
+                this.coordinator
+              );
             } finally {
               this.state.endDeferredJoin();
             }
@@ -449,13 +451,14 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
             requestMessage.close();
           }
           if (result.sourceCleanup !== undefined) {
-            // Infrastructure cleanup has its own terminal, outside the public Failed conversion.
             try {
-              const cleanup = result.sourceCleanup();
-              await (this.turn === undefined ? cleanup : this.turn.yieldFrameworkPromise(cleanup));
-            } catch (error) {
-              traceJoinError(this.actor, error, this.coordinator, ZLinkDispatchErrorAction.Drop);
-              throw error;
+              await completeRelayedJoin(
+                result.sourceCleanup,
+                this.turn,
+                this.actor,
+                operationId,
+                this.coordinator
+              );
             } finally {
               this.state.endDeferredJoin();
             }
@@ -624,6 +627,26 @@ async function notifyJoinCompletion(
     )
       throw error;
     coordinator.onAcceptedJoinCompletionFailure(actor, error);
+  }
+}
+
+async function completeRelayedJoin(
+  sourceCleanup: () => Promise<void>,
+  turn: ZLinkSpotSerialTurn | undefined,
+  actor: ZLinkActor,
+  operationId: { readonly high: bigint; readonly low: bigint },
+  coordinator: ZLinkActorJoinCoordinator
+): Promise<void> {
+  try {
+    const cleanup = sourceCleanup();
+    await (turn === undefined ? cleanup : turn.yieldFrameworkPromise(cleanup));
+  } catch (error) {
+    if (error instanceof ServiceRelocationAuthorityUnsettledAtStopError) {
+      await notifyJoinFailure(actor, operationId, error, coordinator);
+      return;
+    }
+    traceJoinError(actor, error, coordinator, ZLinkDispatchErrorAction.Drop);
+    throw error;
   }
 }
 

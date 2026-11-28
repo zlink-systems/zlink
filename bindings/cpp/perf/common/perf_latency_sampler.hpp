@@ -12,9 +12,10 @@ namespace perf
 
 struct latency_sampler_stats_t
 {
-    latency_sampler_stats_t () : mean_ns (0.0), p95_ns (0.0), p99_ns (0.0) {}
+    latency_sampler_stats_t () : mean_ns (0.0), p50_ns (0.0), p95_ns (0.0), p99_ns (0.0) {}
 
     double mean_ns;
+    double p50_ns;
     double p95_ns;
     double p99_ns;
 };
@@ -68,12 +69,14 @@ class latency_sampler_t
 
         out.mean_ns = _sum / static_cast<double> (_count);
         if (_samples.empty ()) {
+            out.p50_ns = out.mean_ns;
             out.p95_ns = out.mean_ns;
             out.p99_ns = out.mean_ns;
             return out;
         }
 
         std::sort (_samples.begin (), _samples.end ());
+        out.p50_ns = percentile (_samples, 0.50);
         out.p95_ns = percentile (_samples, 0.95);
         out.p99_ns = percentile (_samples, 0.99);
         return out;

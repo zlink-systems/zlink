@@ -10,7 +10,7 @@ than a top-level factory — the only wrapper binding covered so far where this 
 exact signatures are owned by
 [`internal/native/context.go`](../../../../bindings/go/internal/native/context.go) and
 [`utility.go`](../../../../bindings/go/internal/native/utility.go), re-exported as aliases through
-[`contracts/core.go`](../../../../bindings/go/contracts/core.go).
+[`root_projection.go`](../../../../bindings/go/root_projection.go).
 
 ---
 
@@ -19,7 +19,7 @@ exact signatures are owned by
 Creates a messaging context — the factory and owner of sockets.
 
 ```go
-ctx, err := contracts.NewContext()
+ctx, err := zlink.NewContext()
 defer ctx.Close()
 ```
 
@@ -49,8 +49,8 @@ this context but does not close the context or its sockets. `RecalculateAutoHwm`
 automatic HWM only for sockets still configured with an `AutoHwmProfile`.
 
 **When to use.** Call `Shutdown()` before `Close()` on a context with sockets in use across
-multiple goroutines. Call `RecalculateAutoHwm()` after changing the auto-HWM profile or a
-message-unit option, to apply new sizing immediately.
+multiple goroutines. Call `RecalculateAutoHwm()` after changing the Auto-HWM profile
+to apply new sizing immediately.
 
 ---
 
@@ -62,7 +62,7 @@ the defaults every socket created from the context inherits.
 ```go
 opts := ctx.Options()
 opts.SetIOThreads(8)
-opts.SetAutoHwmProfile(contracts.AutoHwmProfileLowLatency)
+opts.SetCoreHwmProfile(zlink.AutoHwmProfileLowLatency)
 opts.AddThreadAffinity(2)
 ```
 
@@ -79,18 +79,18 @@ where only a subset of accessors can fail.
 | `ThreadNamePrefix()` / `SetThreadNamePrefix(string)` | OS-visible dispatch thread name prefix |
 | `AutoHwmEnabled()` / `SetAutoHwmEnabled(bool)` | whether auto-HWM sizing is active |
 | `AutoHwmRecalcDebounce()` / `SetAutoHwmRecalcDebounce(time.Duration)` | minimum interval between automatic recalculations |
-| `MaxMessageSize()` / `SetMaxMessageSize(int)` | per-message size cap |
 | `MessageStructSize()` | read-only, native message struct size, diagnostic only |
 | `Blocky()` / `SetBlocky(bool)` | whether blocking calls actually block vs. fail fast |
-| `AutoHwmProfile()` / `SetAutoHwmProfile(AutoHwmProfile)` | automatic HWM sizing profile — see Sockets category |
-| `AutoHwmMsgUnitBytes()` / `SetAutoHwmMsgUnitBytes(int)` | accounted-byte unit for auto-HWM; `0` selects the socket-type default |
+| `CoreHwmProfile()` / `SetCoreHwmProfile(AutoHwmProfile)` | automatic HWM sizing profile — see Sockets category |
+| `CoreHwmMemoryLimitBytes()` / `SetCoreHwmMemoryLimitBytes(uint64)` | Configured memory limit in bytes. |
+| `CoreHwmBudgetBytes()` / `SetCoreHwmBudgetBytes(uint64)` | Configured Core budget in bytes. |
 | `AddThreadAffinity(cpu int)` | setter-only, pins an I/O thread to a CPU |
 | `RemoveThreadAffinity(cpu int)` | setter-only, unpins an I/O thread from a CPU |
 
 **Completion result.** Every accessor is synchronous, returning `error` alongside its value.
 
 **When to use.** Adjust before creating sockets when the defaults don't fit the deployment. Pair an
-`AutoHwmProfile`/`AutoHwmEnabled` change with `Context.RecalculateAutoHwm()` to apply it
+`CoreHwmProfile`/`AutoHwmEnabled` change with `Context.RecalculateAutoHwm()` to apply it
 immediately.
 
 ---
@@ -117,40 +117,33 @@ capability roles — this entry only covers how each is created.
 
 ## `RoutingID`
 
-A binary-safe value type identifying a messaging peer or route, 1 to 255 bytes. A value type
-(`struct`, not a pointer), unlike every other language's reference/handle-shaped routing id.
+`RoutingID` is a comparable value that stores 1–255 bytes. It can be used as a Go map key.
 
 ```go
-fromString := contracts.NewRoutingIDString("worker-3")
-fromBytes := contracts.NewRoutingID(rawBytes)
-fromUint32 := contracts.NewRoutingIDUint32(42)
-restored, err := contracts.NewRoutingIDFromHex(previouslyPrinted.Hex())
+fromString := zlink.NewRoutingIDString("worker-3")
+fromUint32 := zlink.NewRoutingIDUint32(42)
+fromBytes := zlink.NewRoutingID(rawBytes)
+restored, err := zlink.TryNewRoutingIDFromHex(previouslyPrinted.Hex())
 ```
-
-**Options.** Package-level constructors; none return an error except `NewRoutingIDFromHex` — the
-others panic on invalid length.
 
 | Member | Meaning |
 | --- | --- |
-| `NewRoutingID(data []byte)` | copies the full slice as-is; panics out of range |
-| `NewRoutingIDString(value string)` | UTF-8 encode; panics out of range |
-| `NewRoutingIDUint32(value uint32)` | 4-byte big-endian; panics out of range |
-| `NewRoutingIDUUIDBytes(value [16]byte)` | 16-byte, e.g. UUID bytes; panics out of range |
-| `NewRoutingIDFromHex(value string) (RoutingID, error)` | restores bytes `Hex()` printed — the only constructor returning an error rather than panicking |
-| `Bytes()` | defensive copy of the bytes |
-| `Size()` | byte length, 1-255 |
-| `Hash() uint64` | a diagnostic/map-key helper, distinct from Go's built-in `==` comparability since `RoutingID` is a fixed-size value struct |
-| `Hex()` | hex encoding, round-trippable with `NewRoutingIDFromHex` |
-| `Equal(other RoutingID) bool` | value equality |
-| `String()` | display form: printable UTF-8, then 4-byte-as-uint32, then 16-byte-as-UUID-format, then a `hex:`-prefixed fallback |
+| `NewRoutingID(data []byte) RoutingID` / `NewRoutingIDString(value string) RoutingID` | Copy the input bytes. Lengths outside 1–255 yield the zero value. |
+| `NewRoutingIDFromHex(value string) RoutingID` | Decode the output of `Hex()`. Invalid input yields the zero value. |
+| `TryNewRoutingID(data []byte) (RoutingID, error)` / `TryNewRoutingIDFromHex(value string) (RoutingID, error)` | Report invalid input immediately as a `*ConfigError` with `ConfigInvalidArgument`. |
+| `NewRoutingIDUint32(value uint32) RoutingID` / `Uint32() (uint32, bool)` | Write or read four big-endian bytes. |
+| `NewRoutingIDUUIDBytes(value [16]byte) RoutingID` / `UUIDBytes() ([16]byte, bool)` | Write or read the 16 UUID bytes. |
+| `Bytes()` / `Size()` / `Hex()` | Copy the bytes, report their length, or encode them as hex. |
+| `Equal(other RoutingID) bool` / `Hash() uint64` | Compare or hash the bytes. |
+| `String()` | Display form, in order of preference: printable UTF-8, a decimal uint32 for four bytes, UUID notation for 16 bytes, or `hex:` followed by hex digits. |
 
-**Completion result.** All members are synchronous. `RoutingID` being a plain value struct means it
-is directly comparable with `==` and usable as a map key without `Hash()`/`Equal()`, though both are
-provided as explicit alternatives.
+`Uint32()` and `UUIDBytes()` return `ok=false` when the byte length differs from the expected length.
 
-**When to use.** Use `NewRoutingIDFromHex` (not `NewRoutingID` on hex-decoded bytes) specifically
-when the input might be malformed, since it is the only routing-id constructor that reports an
-error instead of panicking on invalid input.
+**Completion result.** All members are synchronous. Compare IDs with `==` or `Equal()`.
+A `RoutingID` can be used directly as a map key. `Hash()` returns an explicit hash.
+
+**When to use.** Save an ID with `Hex()`. Use `TryNewRoutingIDFromHex` to report malformed
+hex input and `TryNewRoutingID` to report an invalid byte slice.
 
 ---
 
@@ -159,7 +152,7 @@ error instead of panicking on invalid input.
 Checks for an optional build capability.
 
 ```go
-hasTLS, err := contracts.Has("tls")
+hasTLS, err := zlink.Has("tls")
 ```
 
 **Options.** `capability string` — recognized names include `"tcp"`, `"ipc"`, `"tls"`, `"ws"`,
@@ -181,14 +174,14 @@ Creates a high-resolution stopwatch, a thread-safe integer counter, or a running
 thread — three independent utility resources, all declared in `utility.go`.
 
 ```go
-watch := contracts.NewStopwatch()
+watch := zlink.NewStopwatch()
 partialUs := watch.Intermediate()
 totalUs := watch.Stop()
 
-counter := contracts.NewAtomicCounter()
+counter := zlink.NewAtomicCounter()
 newValue := counter.Increment()
 
-thread, err := contracts.NewThread(doWork)
+thread, err := zlink.NewThread(doWork)
 _ = thread.Join()
 ```
 
@@ -217,37 +210,31 @@ needs to own the underlying native thread's lifecycle.
 
 ---
 
-## `Proxy(...)` / `ProxySteerable(...)` / `Sleep(seconds)` / `MultipartClose(parts)`
+## `Proxy(...)` / `Sleep(seconds)` / `MultipartClose(parts)`
 
-Runs a bidirectional message-forwarding loop between two sockets (optionally steerable via a
-control socket), sleeps the calling goroutine, or closes every message in a multipart slice.
+`Proxy` forwards messages in both directions and may copy traffic to a capture socket.
 
 ```go
-contracts.Proxy(frontend, backend, capture) // capture may be nil; blocks until context termination
-contracts.ProxySteerable(frontend, backend, capture, control)
-contracts.Sleep(1) // seconds, not milliseconds
-contracts.MultipartClose(parts)
+err := zlink.Proxy(frontend, backend, capture) // capture may be nil
+zlink.Sleep(1) // seconds
+zlink.MultipartClose(parts)
 ```
 
-**Options.** Both `Proxy` and every socket type satisfy the `SocketTarget` interface (Eventing
-category also uses it for `Poller`/`SocketMonitor` registration), so any concrete socket can be
-passed directly.
+**Options.** The eight socket types implement `SocketTarget` and can be passed directly
+to `Proxy`.
 
 | Member | Meaning |
 | --- | --- |
-| `Proxy(frontend, backend, capture SocketTarget) error` | `capture` may be `nil` |
-| `ProxySteerable(frontend, backend, capture, control SocketTarget) error` | adds a required `control` source |
-| `Sleep(seconds int)` | blocks the calling goroutine; no return value at all — not even the value-less `error` most other functions here return |
-| `MultipartClose(parts []*Message)` | closes every part in one call |
+| `Proxy(frontend, backend, capture SocketTarget) error` | Pass `nil` to omit capture. |
+| `Sleep(seconds int)` | Blocks the calling goroutine for the given number of seconds. |
+| `MultipartClose(parts []*Message)` | Closes each message in the slice. |
 
-**Completion result.** `Proxy`/`ProxySteerable` return `error` and block the calling goroutine
-until the context is terminated (or, for `ProxySteerable`, until a control command or error ends
-the loop) — run either on a dedicated goroutine. `Sleep`/`MultipartClose` have no return value.
+**Completion result.** `Proxy` blocks until the context terminates or forwarding fails
+and returns `error`. `Sleep` and `MultipartClose` return no value.
 
-**When to use.** Use `Proxy` for a simple fire-and-forget forwarding loop. Use `ProxySteerable` when
-the application needs to pause/resume/terminate the loop from another goroutine via the control
-socket. Use `MultipartClose` to release every message in a received or constructed multipart slice
-in one call instead of a hand-written loop.
+**When to use.** Run `Proxy` in a dedicated goroutine when the caller must continue
+while forwarding runs. Use `MultipartClose` to release every message in a received
+or constructed multipart slice.
 
 ---
 

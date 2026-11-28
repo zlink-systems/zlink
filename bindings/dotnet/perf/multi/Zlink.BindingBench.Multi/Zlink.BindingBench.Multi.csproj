@@ -13,6 +13,7 @@
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Zlink.BindingBench.PacedAdmission" />
     <ProjectReference Include="../../common/Zlink.BindingBench.Common/Zlink.BindingBench.Common.csproj"
       SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>

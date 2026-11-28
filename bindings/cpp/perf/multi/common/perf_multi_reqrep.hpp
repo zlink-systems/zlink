@@ -6,13 +6,12 @@
 #include "perf_client_helpers.hpp"
 #include "perf_entry.hpp"
 #include "perf_metric_header.hpp"
+#include "perf_multi_measurement.hpp"
 
 #include <atomic>
 #include <csignal>
-#include <condition_variable>
 #include <exception>
 #include <memory>
-#include <mutex>
 #include <type_traits>
 
 namespace perf
@@ -67,9 +66,10 @@ struct client_completion_state_t
         run_id (1U),
         msg_size (msg_size_),
         deadline_ns (0),
+        sample_start_ns (0),
         outstanding (0),
         completed (0),
-        change_epoch (0),
+        active_sends (0),
         fatal (false),
         latency ()
     {
@@ -78,13 +78,12 @@ struct client_completion_state_t
     const uint32_t run_id;
     const size_t msg_size;
     std::atomic<uint64_t> deadline_ns;
+    std::atomic<uint64_t> sample_start_ns;
     std::atomic<unsigned long long> outstanding;
     std::atomic<unsigned long long> completed;
-    std::atomic<unsigned long long> change_epoch;
+    uint64_t active_sends;
     std::atomic<bool> fatal;
-    std::mutex change_mutex;
-    std::condition_variable changed;
-    std::mutex latency_mutex;
+    // Reply continuations and the sampler run on the application ready queue.
     bench_latency_sampler_t latency;
 };
 
@@ -228,27 +227,20 @@ template <typename SocketT> class client_bench_t
               .count ()),
           std::memory_order_release);
 
-        size_t submitted_since_progress = 0;
+        size_t submit_cursor = 0;
+        const bool websocket = _transport == "ws" || _transport == "wss";
+        using perf_multi_measurement::progress_quantum_bytes;
+        // The payload is sized to max(msg_size, header_size) during setup, as in C.
+        const size_t submit_count =
+          websocket ? std::min (_slots.size (),
+                                std::max<size_t> (1, progress_quantum_bytes
+                                                       / _slots.front ()->logical.payload.size ()))
+                    : _slots.size ();
         while (std::chrono::steady_clock::now () < deadline
                && !_completion->fatal.load (std::memory_order_acquire)) {
-            size_t submitted = 0;
-            for (size_t i = 0; i < _slots.size (); ++i) {
-                const uint64_t previous_seq = _slots[i]->next_seq;
-                if (!launch_request (*_slots[i])) {
-                    _completion->fatal.store (true, std::memory_order_release);
-                    signal_change (_completion);
-                    break;
-                }
-                submitted += _slots[i]->next_seq != previous_seq ? 1 : 0;
-            }
-            if (_completion->fatal.load (std::memory_order_acquire))
+            const auto [ok, submitted] = submit_round (submit_cursor, submit_count);
+            if (!ok || !progress_once (deadline, !submitted))
                 break;
-            submitted_since_progress += submitted;
-            if (submitted == 0 || submitted_since_progress >= 64) {
-                if (!progress_once (deadline, submitted == 0))
-                    break;
-                submitted_since_progress = 0;
-            }
         }
 
         const int drain_timeout_ms = std::max (1, _settings.send_drain_timeout_ms);
@@ -278,9 +270,56 @@ template <typename SocketT> class client_bench_t
             || _completion->outstanding.load (std::memory_order_acquire) != 0
             || completed == 0)
             return false;
+        const unsigned long long active_completed = completed;
+        const uint64_t epoch = static_cast<uint64_t> (perf_metric::now_ns ());
+        perf_multi_measurement::schedule_t schedule (
+          perf_multi_measurement::target_rate (active_completed, duration_s), epoch);
+        const uint64_t paced_deadline_ns =
+          epoch + perf_multi_measurement::settle_ns
+          + static_cast<uint64_t> (_settings.latency_duration_seconds) * 1000000000ULL;
+        const auto paced_deadline =
+          std::chrono::steady_clock::time_point (std::chrono::nanoseconds (paced_deadline_ns));
+        _completion->completed.store (0, std::memory_order_release);
+        _completion->latency.reset ();
+        _completion->sample_start_ns.store (epoch + perf_multi_measurement::settle_ns,
+                                            std::memory_order_release);
+        _completion->deadline_ns.store (paced_deadline_ns, std::memory_order_release);
+        while (std::chrono::steady_clock::now () < paced_deadline
+               && !_completion->fatal.load (std::memory_order_acquire)) {
+            const auto [ok, submitted] = submit_round (submit_cursor, submit_count, &schedule);
+            if (!ok)
+                break;
+            const auto now = static_cast<uint64_t> (perf_metric::now_ns ());
+            const auto wake_ns = schedule.due (now)
+                                   ? paced_deadline_ns
+                                   : std::min (paced_deadline_ns, schedule.next_ns ());
+            const auto wake_deadline =
+              std::chrono::steady_clock::time_point (std::chrono::nanoseconds (wake_ns));
+            if (!progress_once (wake_deadline, !submitted))
+                break;
+        }
+        const auto paced_drain_deadline =
+          std::chrono::steady_clock::now () + std::chrono::milliseconds (drain_timeout_ms);
+        while (_completion->outstanding.load (std::memory_order_acquire) != 0
+               && std::chrono::steady_clock::now () < paced_drain_deadline) {
+            if (!progress_once (paced_drain_deadline, true))
+                break;
+        }
+        if (_completion->outstanding.load (std::memory_order_acquire) != 0) {
+            close_requesters_and_drain (_slots, _ready_queue, _completion);
+            return false;
+        }
+        if (_completion->fatal.load (std::memory_order_acquire)
+            || _completion->latency.count () == 0)
+            return false;
         const bench_latency_stats_t latency = _completion->latency.snapshot ();
         print_client_result_lines (_lib_name, _config.result_pattern, _transport, _msg_size,
-                                   completed, duration_s, 2.0, latency);
+                                   active_completed, duration_s, 2.0, latency);
+        perf_multi_measurement::print_diagnostic (
+          _config.result_pattern, _msg_size, _completion->active_sends, duration_s, schedule,
+          active_completed,
+          _completion->completed.load ()
+            / static_cast<double> (_settings.latency_duration_seconds));
         std::cout << "CLIENT_DONE," << _msg_size << std::endl;
         // Keep the request completion target sockets alive until the runner
         // has stopped the server and sent STOP
@@ -335,31 +374,60 @@ template <typename SocketT> class client_bench_t
         }
     }
 
+    std::pair<bool, bool> submit_round (size_t &cursor_,
+                                        size_t count_,
+                                        perf_multi_measurement::schedule_t *schedule_ = NULL)
+    {
+        bool submitted = false;
+        for (size_t offset = 0; offset < count_; ++offset) {
+            const auto now = perf_metric::now_ns ();
+            auto phase = perf_metric::phase_active;
+            if (schedule_) {
+                if (!schedule_->due (now))
+                    break;
+                phase = perf_multi_measurement::latency_sample (now, schedule_->epoch_ns,
+                                                                _settings.latency_duration_seconds)
+                          ? perf_metric::phase_latency
+                          : perf_metric::phase_warmup;
+            }
+            // As in C REQREP, submit one request per sender visit.
+            auto &slot = *_slots[cursor_];
+            cursor_ = (cursor_ + 1) % _slots.size ();
+            const auto previous_seq = slot.next_seq;
+            if (!launch_request (slot, phase, schedule_)) {
+                _completion->fatal.store (true, std::memory_order_release);
+                return {false, submitted};
+            }
+            submitted |= slot.next_seq != previous_seq;
+        }
+        return {true, submitted};
+    }
+
     bool progress_once (const std::chrono::steady_clock::time_point &deadline_,
                         bool wait_)
     {
         try {
-            const auto now = std::chrono::steady_clock::now ();
-            const auto wait = wait_ && now < deadline_
-                                ? std::min (
-                                    std::chrono::milliseconds (50),
-                                    std::chrono::duration_cast<std::chrono::milliseconds> (
-                                      deadline_ - now))
-                                : std::chrono::milliseconds::zero ();
+            const auto end_ns =
+              std::chrono::duration_cast<std::chrono::nanoseconds> (deadline_.time_since_epoch ())
+                .count ();
+            const auto wait =
+              wait_ ? perf_multi_measurement::schedule_t::wait_ms (perf_metric::now_ns (), end_ns)
+                    : std::chrono::milliseconds::zero ();
             (void) _completion_poller.wait (
               _completion_events.data (), _completion_events.size (),
               wait);
         }
         catch (const zlink::binding_error_t &) {
             _completion->fatal.store (true, std::memory_order_release);
-            signal_change (_completion);
             return false;
         }
         (void) _ready_queue.run_ready_round ();
         return true;
     }
 
-    bool launch_request (client_slot_t<SocketT> &slot_)
+    bool launch_request (client_slot_t<SocketT> &slot_,
+                         perf_metric::phase_t phase_,
+                         perf_multi_measurement::schedule_t *schedule_ = NULL)
     {
         const logical_launch_t launch =
           slot_.logical.launch.load (std::memory_order_acquire);
@@ -369,19 +437,16 @@ template <typename SocketT> class client_bench_t
             return false;
 
         const uint64_t sent_ns = perf_metric::now_ns ();
-        if (!perf_metric::stamp_payload (
-              slot_.logical.payload.data (), slot_.logical.payload.size (),
-              _completion->run_id, perf_metric::phase_active, _msg_size,
-              slot_.next_seq, sent_ns))
+        if (!perf_metric::stamp_payload (slot_.logical.payload.data (),
+                                         slot_.logical.payload.size (), _completion->run_id, phase_,
+                                         _msg_size, slot_.next_seq, sent_ns))
             return false;
 
         slot_.logical.launch.store (logical_launch_t::launching,
                                     std::memory_order_release);
-        submit_async_request (_ready_queue, *slot_.socket, _target_rid,
-                              &slot_.logical,
-                              std::chrono::milliseconds (
-                                std::max (1, request_timeout_ms ())),
-                              _completion);
+        submit_async_request (_ready_queue, *slot_.socket, _target_rid, &slot_.logical,
+                              std::chrono::milliseconds (std::max (1, request_timeout_ms ())),
+                              _completion, schedule_);
         switch (slot_.logical.launch.load (std::memory_order_acquire)) {
             case logical_launch_t::ready:
             case logical_launch_t::waiting_admission:
@@ -393,13 +458,6 @@ template <typename SocketT> class client_bench_t
                 return false;
         }
         return false;
-    }
-
-    static void signal_change (
-      const std::shared_ptr<client_completion_state_t> &completion_)
-    {
-        completion_->change_epoch.fetch_add (1, std::memory_order_release);
-        completion_->changed.notify_all ();
     }
 
     static zlink::request_submission_t begin_request (
@@ -440,32 +498,42 @@ template <typename SocketT> class client_bench_t
         if (!measurement_parts_valid (parts_))
             return;
         perf_metric::header_t header;
-        if (perf_metric::decode_payload_header (
-              parts_.front ().data (), parts_.front ().size (), &header)
-            && perf_metric::is_expected (
-              header, completion_->run_id, perf_metric::phase_active,
-              completion_->msg_size)) {
+        const uint64_t sample_start = completion_->sample_start_ns.load (std::memory_order_acquire);
+        const perf_metric::phase_t phase =
+          sample_start == 0 ? perf_metric::phase_active : perf_metric::phase_latency;
+        if (perf_metric::decode_payload_header (parts_.front ().data (), parts_.front ().size (),
+                                                &header)
+            && perf_metric::is_expected (header, completion_->run_id, phase,
+                                         completion_->msg_size)) {
             const uint64_t completion_ns = static_cast<uint64_t> (
               std::chrono::duration_cast<std::chrono::nanoseconds> (
                 std::chrono::steady_clock::now ().time_since_epoch ())
                 .count ());
-            if (completion_ns
-                < completion_->deadline_ns.load (std::memory_order_acquire)) {
-                const uint64_t now = perf_metric::now_ns ();
-                std::lock_guard<std::mutex> lock (completion_->latency_mutex);
-                completion_->latency.add (
-                  perf_metric::elapsed_latency_ns (now, header.sent_ts_ns) * 0.5);
+            const bool in_window =
+              phase == perf_metric::phase_active
+                ? completion_ns < completion_->deadline_ns.load (std::memory_order_acquire)
+                : header.sent_ts_ns > 0 && static_cast<uint64_t> (header.sent_ts_ns) >= sample_start
+                    && static_cast<uint64_t> (header.sent_ts_ns)
+                         < completion_->deadline_ns.load (std::memory_order_acquire);
+            if (in_window) {
+                if (phase == perf_metric::phase_latency) {
+                    const uint64_t now = perf_metric::now_ns ();
+                    completion_->latency.add (
+                      perf_metric::elapsed_latency_ns (now, header.sent_ts_ns) * 0.5);
+                }
                 completion_->completed.fetch_add (1, std::memory_order_relaxed);
             }
         }
     }
 
-    static perf::detached_async_task_t submit_async_request (
-      perf::application_ready_queue_t &ready_queue_, SocketT &socket_,
-      const zlink::routing_id_t &target_rid_,
-      logical_request_t *logical_,
-      std::chrono::milliseconds timeout_,
-      std::shared_ptr<client_completion_state_t> completion_)
+    static perf::detached_async_task_t
+    submit_async_request (perf::application_ready_queue_t &ready_queue_,
+                          SocketT &socket_,
+                          const zlink::routing_id_t &target_rid_,
+                          logical_request_t *logical_,
+                          std::chrono::milliseconds timeout_,
+                          std::shared_ptr<client_completion_state_t> completion_,
+                          perf_multi_measurement::schedule_t *schedule_)
     {
         co_await bind_application_ready_queue_t{ready_queue_};
         try {
@@ -476,7 +544,6 @@ template <typename SocketT> class client_bench_t
                 logical_->launch.store (logical_launch_t::fatal,
                                          std::memory_order_release);
                 completion_->fatal.store (true, std::memory_order_release);
-                signal_change (completion_);
                 co_return;
             }
             zlink::request_submission_t submission =
@@ -486,18 +553,22 @@ template <typename SocketT> class client_bench_t
               submission.result == ZLINK_SUBMIT_BACKPRESSURED;
             if (submission.result != ZLINK_SUBMIT_OK && !backpressured)
                 throw std::logic_error ("unexpected request submit result");
+            const uint64_t due_ns = schedule_ ? schedule_->submitted () : 0;
             logical_->launch.store (
               backpressured ? logical_launch_t::waiting_admission
                             : logical_launch_t::ready,
               std::memory_order_release);
-            signal_change (completion_);
             try {
                 if (backpressured) {
                     co_await std::move (submission.admitted);
                     logical_->launch.store (logical_launch_t::ready,
                                              std::memory_order_release);
-                    signal_change (completion_);
                 }
+                const uint64_t admitted_ns = static_cast<uint64_t> (perf_metric::now_ns ());
+                if (schedule_)
+                    schedule_->accepted (admitted_ns, due_ns);
+                else if (admitted_ns < completion_->deadline_ns.load (std::memory_order_acquire))
+                    ++completion_->active_sends;
                 std::vector<zlink::message_t> reply =
                   co_await std::move (submission.reply);
                 observe_reply (completion_, reply);
@@ -512,7 +583,6 @@ template <typename SocketT> class client_bench_t
                                          std::memory_order_release);
             }
             completion_->outstanding.fetch_sub (1, std::memory_order_release);
-            signal_change (completion_);
             co_return;
         }
         catch (...) {
@@ -520,7 +590,6 @@ template <typename SocketT> class client_bench_t
                                      std::memory_order_release);
             completion_->fatal.store (true, std::memory_order_release);
         }
-        signal_change (completion_);
     }
 
     const config_t _config;

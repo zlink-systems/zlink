@@ -128,7 +128,6 @@ jobs:
 
       - name: Report oversized Framework C++ test sources
         if: ${{ !inputs.skip_tests }}
-        continue-on-error: true
         run: python3 scripts/ci/framework-cpp-build-report.py test-lines
 
       - name: Setup Node.js for conformance validation

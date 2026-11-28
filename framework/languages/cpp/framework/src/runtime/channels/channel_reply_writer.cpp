@@ -3,6 +3,7 @@
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "runtime/streams/admission_queue_messages.hpp"
 
 #include <utility>
 
@@ -14,9 +15,14 @@ runtime::messaging::envelope_header_t channel_reply_writer_t::create_reply_heade
   std::string_view channel_name,
   const runtime::messaging::envelope_header_t &request) const
 {
+    auto name = runtime::messaging::header_text_t::view (request.message_name);
+    if (kind == runtime::messaging::message_kind_t::response) {
+        if (auto queue_reply = runtime::admission_queue::reply_packet_name (request.message_name))
+            name = std::move (*queue_reply);
+    }
     return {.kind = kind,
             .channel_name = runtime::messaging::header_text_t::view (channel_name),
-            .message_name = runtime::messaging::header_text_t::view (request.message_name),
+            .message_name = std::move (name),
             .content_type = runtime::messaging::header_text_t::view (request.content_type),
             .correlation_id = runtime::messaging::header_text_t::view (request.correlation_id)};
 }

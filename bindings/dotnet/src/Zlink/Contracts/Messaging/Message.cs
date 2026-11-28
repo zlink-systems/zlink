@@ -12,9 +12,11 @@ namespace Systems.Zlink;
 /// <remarks>
 ///     A message is disposable because it may own native storage. Span-returning
 ///     APIs expose storage owned by this instance and are valid only while the
-///     message remains undisposed. Do not use the message, including repeated
-///     disposal or object-identity metadata lookup, after ownership is consumed
-///     or disposal returns; the runtime may reuse the returned wrapper identity.
+///     message owns the payload. Once submission consumes the payload or the
+///     caller disposes the message, payload reads are empty and submitting the
+///     message fails with <see cref="ZlinkSubmitException.ErrorCode.InvalidHandle"/>.
+///     When a receive result disposes its parts, it may return their wrappers to
+///     the pool. References to parts owned by that result expire at that point.
 /// </remarks>
 public sealed partial class Message : IDisposable, IAsyncDisposable
 {
@@ -60,7 +62,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     /// <summary>
     ///     Gets the payload size in bytes.
     /// </summary>
-    public int Size => GetSizeCore();
+    public int Size => checked((int)GetPayloadSize());
 
     /// <summary>
     ///     Gets whether the payload is empty.
@@ -71,8 +73,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     ///     Gets the native payload reference count.
     /// </summary>
     /// <remarks>
-    ///     Newly created messages own their native storage directly. A moved or
-    ///     disposed message cannot report a reference count.
+    ///     Returns zero after this message is consumed by submit or disposed.
     /// </remarks>
     public int RefCount => GetRefCountCore();
 
@@ -88,7 +89,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    ///     Releases the payload storage and returns this wrapper; do not use it afterward.
+    ///     Releases the payload storage owned by this message.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Dispose()

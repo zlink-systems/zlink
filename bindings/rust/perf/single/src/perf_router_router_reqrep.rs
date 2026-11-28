@@ -16,8 +16,8 @@ fn main() {
     };
 
     let ctx = common::perf_context();
-    let replier = ctx.router_socket().expect("replier");
-    let requester = ctx.router_socket().expect("requester");
+    let replier = ctx.create_router_socket().expect("replier");
+    let requester = ctx.create_router_socket().expect("requester");
     let replier_rid = RoutingId::from(b"SERVER");
     let requester_rid = RoutingId::from(b"CLIENT");
     replier

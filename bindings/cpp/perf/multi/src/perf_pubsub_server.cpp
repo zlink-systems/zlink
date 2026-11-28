@@ -5,11 +5,15 @@
 #include "../common/perf_common.hpp"
 #include "../common/perf_entry.hpp"
 
+#include "../common/perf_multi_measurement.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cerrno>
 #include <csignal>
 #include <cstring>
+#include <atomic>
+#include <thread>
 #include <vector>
 
 namespace
@@ -67,7 +71,10 @@ bool run_phase (::perf::socket_t &publisher,
                 uint64_t &seq,
                 perf_metric::phase_t phase,
                 std::chrono::steady_clock::duration duration,
-                bool send_active)
+                bool send_active,
+                uint64_t *active_sends = NULL,
+                perf_multi_measurement::schedule_t *schedule = NULL,
+                const std::atomic<uint64_t> *caught_up_ns = NULL)
 {
     if (duration <= std::chrono::steady_clock::duration::zero ())
         return true;
@@ -77,17 +84,31 @@ bool run_phase (::perf::socket_t &publisher,
 
     try {
         const size_t send_size = std::max<size_t> (static_cast<size_t> (1), msg_size);
-        const auto deadline = std::chrono::steady_clock::now () + duration;
-        while (std::chrono::steady_clock::now () < deadline) {
+        const auto duration_ns = static_cast<uint64_t> (
+          std::chrono::duration_cast<std::chrono::nanoseconds> (duration).count ());
+        const uint64_t deadline_ns = static_cast<uint64_t> (perf_metric::now_ns ()) + duration_ns;
+        for (;;) {
+            const uint64_t now_ns = static_cast<uint64_t> (perf_metric::now_ns ());
+            const uint64_t caught_up =
+              caught_up_ns ? caught_up_ns->load (std::memory_order_acquire) : 0;
+            const uint64_t end_ns =
+              caught_up != 0 ? std::min (deadline_ns, caught_up + duration_ns / 2) : deadline_ns;
+            if (now_ns >= end_ns)
+                break;
+            if (schedule && !schedule->due (now_ns)) {
+                std::this_thread::sleep_for (schedule->wait_until_due_ms (now_ns, end_ns));
+                continue;
+            }
             zlink::message_t payload_part (send_size);
             if (!payload_part.valid ())
                 return false;
             // HOT PATH: construct the native payload that the public publish
             // operation consumes, then stamp its frame directly. Copying a
             // temporary vector into every message adds no wire-level value.
-            if (!perf_metric::stamp_payload (payload_part.data (), send_size,
-                                             run_id, phase, msg_size, seq++,
-                                             perf_metric::now_ns ()))
+            const perf_metric::phase_t message_phase =
+              schedule && caught_up == 0 ? perf_metric::phase_warmup : phase;
+            if (!perf_metric::stamp_payload (payload_part.data (), send_size, run_id, message_phase,
+                                             msg_size, seq++, perf_metric::now_ns ()))
                 return false;
             int sent = -1;
             if (perf::multi::measurement_part_count () == 2) {
@@ -102,6 +123,10 @@ bool run_phase (::perf::socket_t &publisher,
             }
             if (sent != 0)
                 return false;
+            if (schedule)
+                schedule->accepted (static_cast<uint64_t> (perf_metric::now_ns ()));
+            else if (active_sends)
+                ++*active_sends;
         }
 
         return true;
@@ -155,10 +180,11 @@ bool perf_pubsub_server (const std::string &lib_name, const std::string &transpo
 
     const uint32_t run_id = 1U;
     uint64_t seq = 1;
+    uint64_t active_sends = 0;
 
-    if (!run_phase (publisher.sock (), msg_size, run_id, seq,
-                    perf_metric::phase_active,
-                    std::chrono::seconds (std::max (1, settings.duration_seconds)), true))
+    if (!run_phase (publisher.sock (), msg_size, run_id, seq, perf_metric::phase_active,
+                    std::chrono::seconds (std::max (1, settings.duration_seconds)), true,
+                    &active_sends))
         return false;
 
     // Signal active-phase end via the wire-level stop token on the active
@@ -167,7 +193,57 @@ bool perf_pubsub_server (const std::string &lib_name, const std::string &transpo
     if (!publish_stop_token (publisher.sock ()))
         return false;
 
-    return true;
+    std::cout << "PHASE_DONE," << msg_size << ',' << static_cast<int> (perf_metric::phase_active)
+              << std::endl;
+    size_t active_received = 0;
+    if (!perf::multi::wait_for_size_count_from_stdin (msg_size, "PHASE_PACED,", &active_received))
+        return false;
+    const uint64_t epoch = static_cast<uint64_t> (perf_metric::now_ns ());
+    perf_multi_measurement::schedule_t schedule (
+      perf_multi_measurement::target_rate (active_received,
+                                           static_cast<double> (settings.duration_seconds)),
+      epoch);
+    if (schedule.rate <= 0.0)
+        return false;
+    std::atomic<uint64_t> caught_up_ns (0);
+    std::atomic<uint64_t> paced_received (0);
+    std::thread phase_input ([&] {
+        std::string line;
+        while (std::getline (std::cin, line)) {
+            size_t size = 0;
+            size_t count = 0;
+            if (perf::multi::parse_size_command_line (line, "PHASE_CATCHUP,", &size)
+                && size == msg_size) {
+                const uint64_t now = static_cast<uint64_t> (perf_metric::now_ns ());
+                if (now <= epoch
+                             + static_cast<uint64_t> (settings.latency_duration_seconds)
+                                 * 1000000000ULL)
+                    caught_up_ns.store (now, std::memory_order_release);
+            } else if (perf::multi::parse_size_count_command_line (line, "PHASE_COMPLETE,", &size,
+                                                                   &count, true)
+                       && size == msg_size) {
+                paced_received.store (count, std::memory_order_release);
+                break;
+            } else if (line == "STOP" || line == "QUIT")
+                break;
+        }
+    });
+    const bool paced_ok =
+      run_phase (publisher.sock (), msg_size, run_id, seq, perf_metric::phase_latency,
+                 std::chrono::seconds (2 * settings.latency_duration_seconds), true, NULL,
+                 &schedule, &caught_up_ns);
+    const bool stop_ok = paced_ok && publish_stop_token (publisher.sock ());
+    std::cout << "PHASE_DONE," << msg_size << ',' << static_cast<int> (perf_metric::phase_latency)
+              << std::endl;
+    phase_input.join ();
+    perf_multi_measurement::print_diagnostic (
+      "PUBSUB", msg_size, active_sends, settings.duration_seconds, schedule, active_received,
+      paced_received.load () / static_cast<double> (settings.latency_duration_seconds),
+      caught_up_ns.load () != 0,
+      caught_up_ns.load () != 0 ? (caught_up_ns.load () - epoch) / 1e9 : -1.0);
+    std::cout << "REFERENCE," << lib_name << ",PUBSUB," << transport << ',' << msg_size
+              << ",sender_late," << schedule.late_count << std::endl;
+    return paced_ok && stop_ok;
 }
 
 int main (int argc, char **argv)

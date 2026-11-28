@@ -28,7 +28,7 @@
     },
     {
       "path": "include/zlink_enum.h",
-      "sha256": "a5ced2274716178033726f874a1bee0bd3b98cb7b0c3b062209a252f98ff83ac"
+      "sha256": "644855014d38aad7550a7a2db0cb1642a6fedd7499074676618bbbd211933628"
     },
     {
       "path": "include/zlink_errno.h",

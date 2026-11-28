@@ -93,6 +93,21 @@ func newSendRetryState(
 	return state, nil
 }
 
+func classifyWritableWait(completionID uint64, err error) (waiting bool, failure error) {
+	if completionID == 0 || err == nil {
+		return false, err
+	}
+	var submitErr *SubmitError
+	if !errors.As(err, &submitErr) || submitErr.Result != SubmitBackpressured {
+		return false, err
+	}
+	if submitErr.InternalErrno() != int(C.EAGAIN) {
+		return false, newSubmitError(SubmitInternalError, int(C.EPROTO))
+	}
+	return true, nil
+}
+
+// attempt returns a wait token, an admission with ID zero, or a submit error.
 func (s *sendRetryState) attempt(userContext uintptr) (uint64, error) {
 	if s == nil || s.core == nil || s.payload == nil {
 		return 0, newSubmitError(SubmitInvalidHandle, int(C.EFAULT))
@@ -116,7 +131,15 @@ func (s *sendRetryState) attempt(userContext uintptr) (uint64, error) {
 			C.uintptr_t(userContext), &completionID)
 		return submitErrorFromCall(rc, cerr)
 	})
-	return uint64(completionID), err
+	id := uint64(completionID)
+	waiting, err := classifyWritableWait(id, err)
+	if waiting {
+		return id, nil
+	}
+	if err == nil && id != 0 {
+		return 0, newSubmitError(SubmitInternalError, int(C.EPROTO))
+	}
+	return 0, err
 }
 
 func (s *requestRetryState) attempt(userContext uintptr) (uint64, error) {
@@ -157,43 +180,30 @@ func (e *completionEntry) attemptSend() bool {
 		return true
 	}
 
-	completionID, err := e.send.attempt(e.handleKey)
-	if err == nil {
-		if completionID != 0 {
-			err = newSubmitError(SubmitInternalError, int(C.EPROTO))
-		} else {
-			e.setWritableWaiting(false)
-			e.send.payload.takeSourceOwnership()
-			e.send.payload.close()
-			e.finishSend(nil)
-			return true
-		}
-	}
-
-	var submitErr *SubmitError
-	if errors.As(err, &submitErr) && submitErr.Result == SubmitBackpressured {
-		if submitErr.InternalErrno() == int(C.EAGAIN) && completionID != 0 {
-			e.send.payload.takeSourceOwnership()
-			e.publishSendWait(completionID)
-			if activateErr := e.setWritableWaiting(true); activateErr != nil {
-				// Core already owns the token. Preserve the entry as a tombstone so
-				// its cgo context cannot be reused before socket shutdown.
-				e.mu.Lock()
-				if !e.publicDone {
-					e.err = activateErr
-					e.finishAdmittedLocked(activateErr)
-					e.publicDone = true
-					close(e.done)
-				}
-				e.mu.Unlock()
-				e.send.payload.close()
+	waitID, err := e.send.attempt(e.handleKey)
+	if waitID != 0 {
+		e.send.payload.takeSourceOwnership()
+		e.publishSendWait(waitID)
+		if activateErr := e.setWritableWaiting(true); activateErr != nil {
+			// Core already owns the token. Preserve the entry as a tombstone so
+			// its cgo context cannot be reused before socket shutdown.
+			e.mu.Lock()
+			if !e.publicDone {
+				e.err = activateErr
+				e.finishAdmittedLocked(activateErr)
+				e.publicDone = true
+				close(e.done)
 			}
-			return false
+			e.mu.Unlock()
+			e.send.payload.close()
 		}
-		err = newSubmitError(SubmitInternalError, int(C.EPROTO))
+		return false
 	}
 
 	e.setWritableWaiting(false)
+	if err == nil {
+		e.send.payload.takeSourceOwnership()
+	}
 	e.send.payload.close()
 	e.finishSend(err)
 	return true
@@ -231,26 +241,22 @@ func submitManagedSend(
 		send.payload.close()
 		return nil, newSubmitError(SubmitInvalidState, int(C.ESHUTDOWN))
 	}
-	// Only the in-flight count is recorded before the native call. A completion
-	// entry is created after Core returns a wait token.
-	owner.inflightSends++
-	owner.mu.Unlock()
-	completionID, err := send.attempt(key)
-	if err == nil && completionID == 0 {
-		send.payload.takeSourceOwnership()
-		send.payload.close()
-		owner.discardEarlyWritable(key)
-		return &sendSubmission{result: SubmitOK}, nil
+	if owner.inflightSends == nil {
+		owner.inflightSends = make(map[uintptr]*earlyWritableRecord)
 	}
-	var submitErr *SubmitError
-	if !errors.As(err, &submitErr) || submitErr.Result != SubmitBackpressured ||
-		submitErr.InternalErrno() != int(C.EAGAIN) || completionID == 0 {
-		send.payload.close()
-		owner.discardEarlyWritable(key)
-		if err == nil || (submitErr != nil && submitErr.Result == SubmitBackpressured) {
-			return nil, newSubmitError(SubmitInternalError, int(C.EPROTO))
+	owner.inflightSends[key] = nil
+	owner.mu.Unlock()
+	waitID, err := send.attempt(key)
+	if waitID == 0 {
+		if err == nil {
+			send.payload.takeSourceOwnership()
 		}
-		return nil, err
+		send.payload.close()
+		owner.discardInitialSend(key)
+		if err != nil {
+			return nil, err
+		}
+		return &sendSubmission{result: SubmitOK}, nil
 	}
 	// Only a native wait token needs a completion entry. Publication joins any
 	// WRITABLE that the public drain received while this call was in flight.
@@ -258,7 +264,7 @@ func submitManagedSend(
 	*retry = send
 	entry := newSendCompletionEntry(retry, key)
 	entry.attemptMu.Lock()
-	if activateErr := owner.publishInitialSendWait(entry, completionID); activateErr != nil {
+	if activateErr := owner.publishInitialSendWait(entry, waitID); activateErr != nil {
 		// Core owns the token. Keep the entry until its completion is drained.
 		entry.mu.Lock()
 		entry.err = activateErr
@@ -343,9 +349,8 @@ func submitCompletionRequest(
 		return &requestSubmission{result: SubmitOK, entry: entry}, nil
 	}
 
-	var submitErr *SubmitError
-	if errors.As(err, &submitErr) && submitErr.Result == SubmitBackpressured &&
-		submitErr.InternalErrno() == int(C.EAGAIN) && completionID != 0 {
+	waiting, err := classifyWritableWait(uint64(completionID), err)
+	if waiting {
 		retry, snapshotErr := newRequestRetryState(core, target, timeoutMillis, parts)
 		entry.request = retry
 		entry.publishSendWait(uint64(completionID))
@@ -373,12 +378,9 @@ func submitCompletionRequest(
 	}
 
 	entry.attemptMu.Unlock()
-	if err != nil {
-		entry.failSubmit()
-		owner.unregister(entry)
-		return nil, err
-	}
-	return nil, newSubmitError(SubmitInternalError, int(C.EPROTO))
+	entry.failSubmit()
+	owner.unregister(entry)
+	return nil, err
 }
 
 func requestTimeoutValue(timeout time.Duration) (uint32, error) {
