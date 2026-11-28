@@ -8,7 +8,6 @@ use zlink::{
     POLLIN, PollEvent, Poller, RecvFlags, RecvResult, SocketMonitor, SubSocket, TopicMessage,
 };
 
-const RECEIVE_BATCH: usize = 64;
 const DRAIN_LIMIT: Duration = Duration::from_secs(10);
 const DRAIN_QUIET: Duration = Duration::from_millis(50);
 const RECEIVE_POLL_MS: i64 = 10;
@@ -80,7 +79,10 @@ fn main() {
 
     loop {
         let now = Instant::now();
-        assert!(now < drain_deadline, "pubsub receive drain timed out");
+        if now >= drain_deadline {
+            eprintln!("multi_client_error: pubsub receive drain timed out");
+            std::process::exit(1);
+        }
         if now >= active_deadline || stopped.len() == sockets.len() {
             if let Some(done) = phase_control.take_if(|control| control.is_finished()) {
                 producer_done = done.join().expect("phase control thread failed");
@@ -103,7 +105,7 @@ fn main() {
                 continue;
             }
             let slot = event.slot;
-            for _ in 0..RECEIVE_BATCH {
+            for _ in 0..common::MAX_BURST_PER_SENDER {
                 match sockets[slot].subscribe(&mut topic_msg, RecvFlags::DONT_WAIT) {
                     Ok(true) => {}
                     Ok(false) => break,

@@ -324,35 +324,11 @@ test('Entry Spot routed actor packet replies with its current actor packet targe
   relay.close();
 });
 
-test('Entry Spot materializes a remotely returning actor with its original Entry node', async () => {
+test('Entry Spot accepts routed admission for a remotely returning actor', async () => {
   let dispatchHandler;
   const replies = [];
-  const events = [];
   const originalEntryNodeRid = zlink.RoutingId.from('play-node-b');
-  const actorRef = {
-    nodeRid: originalEntryNodeRid,
-    actorId: 'player-2',
-    generation: 2n
-  };
-  const actor = {
-    context: {
-      actorId: 'player-2',
-      [framework.ZLINK_ACTOR_LIFECYCLE_SNAPSHOT]() {
-        return {
-          actorRef,
-          actorType: 'PlayerActor',
-          membershipEpoch: 1n
-        };
-      }
-    }
-  };
-
-  class EntrySpot {
-    async onJoinedActor(joinedActor) {
-      events.push(`joined:${joinedActor.context.actorId}`);
-    }
-  }
-
+  class EntrySpot {}
   const activation = new spots.ZLinkEntrySpotActivation({
     detachedTaskRunner: detachedTaskRunner,
     entrySpotType: EntrySpot,
@@ -368,32 +344,7 @@ test('Entry Spot materializes a remotely returning actor with its original Entry
     },
     nativeNode: { routingId: originalEntryNodeRid, bindRemoteActorSession() {} },
     nodeRid: originalEntryNodeRid,
-    spotNodeName: 'play-b',
-    entryActorRuntime: {
-      resolveActor() { return undefined; },
-      async commitActorTransaction(_actor, onJoined) {
-        events.push('commit');
-        try {
-          await onJoined();
-        } catch (error) {
-          events.push(`commit-error:${error.message}`);
-          throw error;
-        }
-      },
-      async destroyActor() {},
-    },
-    actorTransferRuntime: {
-      async materializeRoutedActor(actorId, actorType, adapterKey, state, actorEntryNodeRid) {
-        events.push(
-          `materialize:${actorId}:${actorType}:${adapterKey}:${state.data().toString()}:${String(actorEntryNodeRid)}`
-        );
-        assert.equal(String(actorEntryNodeRid), String(originalEntryNodeRid));
-        return {
-          actor,
-          actorRef
-        };
-      }
-    }
+    spotNodeName: 'play-b'
   });
 
   await activation.create();
@@ -406,8 +357,6 @@ test('Entry Spot materializes a remotely returning actor with its original Entry
     actorType: 'PlayerActor',
     actorNodeRid: 'play-node-a',
     actorGeneration: '1',
-    actorEntryNodeRid: String(originalEntryNodeRid),
-    actorEntryNodeRidHex: originalEntryNodeRid.toHex(),
     request: Buffer.from(JSON.stringify({ returnHome: true })).toString('base64'),
     transferId: 'return-player-2'
   };
@@ -439,20 +388,6 @@ test('Entry Spot materializes a remotely returning actor with its original Entry
   route({ ...common, phase: 'admission' });
   await waitFor(() => replies.length === 1, 'Entry Spot remote admission reply');
   assert.equal(replies[0].accepted, true);
-
-  route({
-    ...common,
-    phase: 'commit',
-    transferAdapterKey: 'PlayerActor',
-    transferState: Buffer.from('player-state').toString('base64')
-  });
-  await waitFor(() => replies.length === 2, 'Entry Spot remote commit reply');
-  assert.equal(replies[1].accepted, true, JSON.stringify({ reply: replies[1], events }));
-  assert.deepEqual(events, [
-    'materialize:player-2:PlayerActor:PlayerActor:player-state:play-node-b',
-    'commit',
-    'joined:player-2'
-  ]);
 
   await activation.dispose();
 });

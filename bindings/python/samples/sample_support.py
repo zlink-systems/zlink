@@ -5,6 +5,7 @@ import time
 import zlink
 
 
+CONNECTION_TIMEOUT_MS = 5000
 _ALLOCATED_TCP_PORTS = set()
 
 
@@ -31,7 +32,7 @@ def _poll_monitor_event(monitor, timeout_ms):
             poller.remove_monitor(monitor)
 
 
-def wait_connected(*monitors, timeout_ms=5000):
+def wait_connected(*monitors, timeout_ms=CONNECTION_TIMEOUT_MS):
     pending = list(monitors)
     deadline = time.monotonic() + (timeout_ms / 1000.0)
 
@@ -51,7 +52,7 @@ def wait_connected(*monitors, timeout_ms=5000):
         pending = next_pending
 
 
-def wait_socket_monitor_event(monitor, expected_event, timeout_ms=5000):
+def wait_socket_monitor_event(monitor, expected_event, timeout_ms=CONNECTION_TIMEOUT_MS):
     deadline = time.monotonic() + (timeout_ms / 1000.0)
     expected_value = int(expected_event)
 

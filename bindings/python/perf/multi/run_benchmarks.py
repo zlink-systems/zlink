@@ -30,7 +30,7 @@ from perf_report import (
     parse_auto_hwm_detail_line,
     sort_result_data_lines,
 )
-from perf_runtime import configure_runtime
+from perf_runtime import configure_runtime, require_binding_runtime
 
 
 ROOT = Path(__file__).resolve().parent
@@ -187,43 +187,6 @@ POLICY_TRANSPORTS = {
 RUNNABLE_TRANSPORTS = POLICY_TRANSPORTS
 
 
-def _require_binding_runtime():
-    src_path = str(DEFAULT_PYTHONPATH.resolve())
-    if src_path in sys.path:
-        sys.path.remove(src_path)
-    sys.path.insert(0, src_path)
-
-    try:
-        import zlink
-        from zlink._native import _zlink_native
-
-        package_root = (DEFAULT_PYTHONPATH / "zlink").resolve()
-        extension_source = package_root / "_native" / "_zlink_native.c"
-        module_path = Path(zlink.__file__).resolve()
-        extension_path = Path(_zlink_native.__file__).resolve()
-        if not module_path.is_relative_to(package_root):
-            raise RuntimeError(f"zlink was imported outside the source package: {module_path}")
-        if not extension_path.is_relative_to(package_root / "_native"):
-            raise RuntimeError(
-                f"zlink native extension was imported outside the source package: {extension_path}"
-            )
-        if not extension_path.is_file():
-            raise RuntimeError(f"zlink native extension is missing: {extension_path}")
-        if not extension_source.is_file():
-            raise RuntimeError(f"zlink native extension source is missing: {extension_source}")
-        if extension_source.stat().st_mtime_ns > extension_path.stat().st_mtime_ns:
-            raise RuntimeError(
-                f"zlink native extension is older than its source: {extension_path}"
-            )
-        zlink.version()
-    except Exception as exc:
-        raise SystemExit(
-            "The current source-tree Python binding and its in-place native extension "
-            f"are required for official perf runs ({exc}). "
-            "Run `python3 setup.py build_ext --inplace --force` in bindings/python."
-        ) from exc
-
-
 def _validate_python_build_options(args):
     if args.build_dir:
         raise SystemExit(
@@ -257,7 +220,7 @@ def parse_args(argv):
     parser.add_argument(
         "--reuse-build",
         action="store_true",
-        help="validate and reuse the existing in-place extension without building",
+        help="reuse existing build outputs without rebuilding the STREAM client",
     )
     parser.add_argument(
         "--clean-build",
@@ -1353,7 +1316,7 @@ def main(argv=None):
     start_time = time.perf_counter()
     args = parse_args(argv or sys.argv[1:])
     _validate_python_build_options(args)
-    _require_binding_runtime()
+    require_binding_runtime(DEFAULT_PYTHONPATH)
     if args.pin_cpu and not pin_current_process_cpu0():
         print("warning: cpu pinning requested but could not pin to cpu 0", file=sys.stderr)
     patterns = _parse_patterns(args.pattern)
