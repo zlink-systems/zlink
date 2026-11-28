@@ -113,7 +113,7 @@ function(add_zlink_bench_single name source)
         # Copy the custom zlink.dll to the executable directory
         add_custom_command(TARGET ${name} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:libzlink>"
+            "$<TARGET_FILE:${ZLINK_C_CORE_TARGET}>"
             "$<TARGET_FILE_DIR:${name}>/zlink.dll"
         )
     endif()
@@ -143,14 +143,14 @@ function(add_zlink_bench_multi name source)
         # Copy the custom zlink.dll to the executable directory
         add_custom_command(TARGET ${name} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:libzlink>"
+            "$<TARGET_FILE:${ZLINK_C_CORE_TARGET}>"
             "$<TARGET_FILE_DIR:${name}>/zlink.dll"
         )
     endif()
 endfunction()
 
 if(EXISTS "${ZLINK_INCLUDE_DIR}/zlink.h")
-    if(ZLINK_BUILD_WITH_ZMQ_ZLINK_BENCHES)
+    if(ZLINK_BUILD_WITH_ZMQ_ZLINK_BENCHES AND NOT ZLINK_C_BUILD_NATIVE_BENCHES_ONLY)
         # --- zlink (current) ---
         add_zlink_bench_single(comp_zlink_pair single/zlink/bench_zlink_pair.cpp)
         add_zlink_bench_single(comp_zlink_pubsub single/zlink/bench_zlink_pubsub.cpp)
@@ -173,19 +173,27 @@ if(EXISTS "${ZLINK_INCLUDE_DIR}/zlink.h")
                         multi/zlink/bench_zlink_multi_pubsub_client.cpp)
         add_zlink_bench_multi(comp_zlink_multi_pubsub_server
                         multi/zlink/bench_zlink_multi_pubsub_server.cpp)
+    elseif(NOT ZLINK_C_BUILD_NATIVE_BENCHES_ONLY)
+        message(STATUS
+                "Skipping core/bench/with_zmq zlink comparison benches: required zlink comparison APIs are unavailable.")
+    endif()
+    if(ZLINK_BUILD_WITH_ZMQ_ZLINK_BENCHES OR ZLINK_C_BUILD_NATIVE_BENCHES_ONLY)
         add_zlink_bench_multi(comp_zlink_multi_stream_server
                         multi/zlink/bench_zlink_multi_stream_server.cpp)
         add_zlink_bench_multi(comp_zlink_multi_stream
                         multi/zlink/bench_zlink_multi_stream.cpp)
-    else()
-        message(STATUS
-                "Skipping core/bench/with_zmq zlink comparison benches: required zlink comparison APIs are unavailable.")
+        target_include_directories(comp_zlink_multi_stream PRIVATE "${ZLINK_C_BENCH_BOOST_INCLUDE_DIR}")
+        target_link_libraries(comp_zlink_multi_stream PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+        if(WIN32)
+            target_link_libraries(comp_zlink_multi_stream PRIVATE Crypt32)
+        endif()
     endif()
 else()
     message(WARNING "zlink headers not found at ${ZLINK_INCLUDE_DIR}")
 endif()
 
-if(EXISTS "${STD_LIBZMQ_INCLUDE_DIR}/zmq.h" AND STD_LIBZMQ_LIBRARY)
+if(NOT ZLINK_C_BUILD_NATIVE_BENCHES_ONLY
+   AND EXISTS "${STD_LIBZMQ_INCLUDE_DIR}/zmq.h" AND STD_LIBZMQ_LIBRARY)
     message(STATUS "Found standard libzmq for comparison: ${STD_LIBZMQ_LIBRARY}")
 
     # --- standard libzmq (baseline) ---
@@ -216,6 +224,6 @@ if(EXISTS "${STD_LIBZMQ_INCLUDE_DIR}/zmq.h" AND STD_LIBZMQ_LIBRARY)
                       multi/zmq/bench_zmq_multi_stream.cpp)
     add_std_zmq_bench_multi(comp_std_zmq_multi_stream_client
                       multi/zmq/bench_zmq_multi_stream_client.cpp)
-else()
+elseif(NOT ZLINK_C_BUILD_NATIVE_BENCHES_ONLY)
     message(STATUS "Standard libzmq not found. Comparative benchmarks will be skipped.")
 endif()
