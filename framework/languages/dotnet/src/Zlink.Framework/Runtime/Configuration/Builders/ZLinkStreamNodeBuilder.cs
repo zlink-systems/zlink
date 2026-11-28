@@ -33,6 +33,38 @@ internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registr
             };
     }
 
+    public bool AdmissionQueueEnabled
+    {
+        get => registration.AdmissionQueue.Enabled;
+        set => registration.AdmissionQueue = registration.AdmissionQueue with { Enabled = value };
+    }
+
+    public string? AdmissionQueueKey
+    {
+        get => registration.AdmissionQueue.Key;
+        set => registration.AdmissionQueue = registration.AdmissionQueue with { Key = value };
+    }
+
+    public string? AdmissionQueuePreviousKey
+    {
+        get => registration.AdmissionQueue.PreviousKey;
+        set =>
+            registration.AdmissionQueue = registration.AdmissionQueue with { PreviousKey = value };
+    }
+
+    public int? AdmissionGlobalLimit
+    {
+        get => registration.AdmissionQueue.GlobalLimit;
+        set =>
+            registration.AdmissionQueue = registration.AdmissionQueue with { GlobalLimit = value };
+    }
+
+    public string? AdmissionQueueMeshName
+    {
+        get => registration.AdmissionQueue.MeshName;
+        set => registration.AdmissionQueue = registration.AdmissionQueue with { MeshName = value };
+    }
+
     public IZLinkStreamNodeBuilder Bind(string endpoint)
     {
         if (string.IsNullOrWhiteSpace(endpoint))
