@@ -1,3 +1,4 @@
+import type { ZLinkDiagnosticLease } from '../diagnostics/diagnostic-log';
 import {
   createInternalFrameworkException,
   ZLinkFrameworkInternalErrorKind
@@ -176,6 +177,7 @@ export interface ZLinkActorTransferRuntimeActorManager {
 }
 
 export interface ZLinkActorTransferRuntimeOptions {
+  readonly diagnosticLease?: ZLinkDiagnosticLease;
   readonly routeTransport: ZLinkActorRoutedJoinTransport;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
   readonly flowCreationEnabled?: () => boolean;
@@ -484,17 +486,25 @@ export class ZLinkActorTransferRuntime {
     try {
       if (state.spotId !== undefined) {
         if (isRelocationDebugEnabled()) {
-          relocationDebug('source_actor_move.await_spot_transfer', {
-            actorId: actor.context.actorId,
-            spotId: String(state.spotId)
-          });
+          relocationDebug(
+            'source_actor_move.await_spot_transfer',
+            {
+              actorId: actor.context.actorId,
+              spotId: String(state.spotId)
+            },
+            this.options.diagnosticLease?.()
+          );
         }
         await this.options.spotManager()?.beginActorTransfer(state.spotId, actor.context.actorId);
         if (isRelocationDebugEnabled()) {
-          relocationDebug('source_actor_move.spot_transfer_complete', {
-            actorId: actor.context.actorId,
-            spotId: String(state.spotId)
-          });
+          relocationDebug(
+            'source_actor_move.spot_transfer_complete',
+            {
+              actorId: actor.context.actorId,
+              spotId: String(state.spotId)
+            },
+            this.options.diagnosticLease?.()
+          );
         }
       }
     } catch (error) {
@@ -596,10 +606,14 @@ export class ZLinkActorTransferRuntime {
     discard(reason: unknown): void;
   }> {
     if (isRelocationDebugEnabled()) {
-      relocationDebug('maintenance_session.begin', {
-        actorId: actor.context.actorId,
-        spotId: state.spotId === undefined ? undefined : String(state.spotId)
-      });
+      relocationDebug(
+        'maintenance_session.begin',
+        {
+          actorId: actor.context.actorId,
+          spotId: state.spotId === undefined ? undefined : String(state.spotId)
+        },
+        this.options.diagnosticLease?.()
+      );
     }
     // Relocation 04 §4.1: the Session owner seals a bound Actor's binding
     // (command 42/43) before the source stops that Actor's application
@@ -631,9 +645,13 @@ export class ZLinkActorTransferRuntime {
     }
     if (bound) this.options.actorHandoff.sealConnectionBoundIngress(actor.context.actorId);
     if (isRelocationDebugEnabled()) {
-      relocationDebug('maintenance_session.source_move_complete', {
-        actorId: actor.context.actorId
-      });
+      relocationDebug(
+        'maintenance_session.source_move_complete',
+        {
+          actorId: actor.context.actorId
+        },
+        this.options.diagnosticLease?.()
+      );
     }
     try {
       const handoffBacklog = this.options.actorHandoff.snapshot(actor.context.actorId);

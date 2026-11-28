@@ -1,3 +1,4 @@
+import { logDiagnostic, type ZLinkDiagnosticLease } from '../diagnostics/diagnostic-log';
 import { ZLinkStreamHeaderFlags, type ZLinkStreamFrameHeader } from './protocol';
 import {
   ZLinkFrameworkErrorKind,
@@ -186,7 +187,8 @@ export class ZLinkActorSessionBindingRegistry<
     //  (spec 48:205 — transport/deadline limits apply during relocation).
     private readonly sealWaitTimeoutMs: number = zlinkDefaultLocationOptions.sessionRelocationSealTimeoutMs,
     private readonly errorSink?: () =>
-      { reportRuntimeTaskException(taskName: string, error: unknown): void } | undefined
+      { reportRuntimeTaskException(taskName: string, error: unknown): void } | undefined,
+    private readonly diagnosticLease?: ZLinkDiagnosticLease
   ) {
     if (!Number.isSafeInteger(terminalRelocationCapacity) || terminalRelocationCapacity <= 0) {
       throw new RangeError('Session relocation terminal capacity must be a positive safe integer.');
@@ -889,7 +891,15 @@ export class ZLinkActorSessionBindingRegistry<
         );
       }
       if (recorded.seal?.phase === 'terminal') {
-        console.warn(`late_session_relocation_seal session=${value.session.sessionRid}`);
+        logDiagnostic(
+          this.diagnosticLease?.(),
+          'warn',
+          'relocation',
+          'late_session_relocation_seal',
+          {
+            message: `session=${value.session.sessionRid}`
+          }
+        );
         return undefined;
       }
       return recorded;

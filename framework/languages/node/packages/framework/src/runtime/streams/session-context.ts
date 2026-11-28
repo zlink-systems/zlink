@@ -1,4 +1,5 @@
-import { relocationDebug, relocationDebugTerminal } from '../diagnostics';
+import type { ZLinkTelemetryLease } from '../diagnostics/message-flow-delivery';
+import { isRelocationDebugEnabled, relocationDebug, relocationDebugTerminal } from '../diagnostics';
 import type {
   ActorRef,
   RoutingId,
@@ -146,7 +147,8 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
     private readonly runtime: ZLinkSessionContextRuntime,
     readonly stream: ZLinkSessionContextStream,
     private readonly closeSession: (signal?: AbortSignal) => Promise<void>,
-    providerResolver?: ZLinkProviderResolver
+    providerResolver?: ZLinkProviderResolver,
+    private readonly diagnosticLease?: ZLinkTelemetryLease
   ) {
     this.client = new DefaultZLinkSessionClient(this);
     this.actors = new DefaultZLinkSessionActors(this, runtime);
@@ -176,7 +178,12 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
   }
 
   async cleanupBindings(): Promise<void> {
-    relocationDebug('cleanupBindings.enter', { sessionId: this.stream.sessionId });
+    if (isRelocationDebugEnabled())
+      relocationDebug(
+        'cleanupBindings.enter',
+        { sessionId: this.stream.sessionId },
+        this.diagnosticLease
+      );
     let failure: { error: unknown } | undefined;
     try {
       await this.runtime.cleanup(this);
@@ -184,11 +191,13 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
       failure = { error };
       throw error;
     } finally {
-      relocationDebugTerminal(
-        'cleanupBindings.exit',
-        { sessionId: this.stream.sessionId },
-        failure
-      );
+      if (isRelocationDebugEnabled())
+        relocationDebugTerminal(
+          'cleanupBindings.exit',
+          { sessionId: this.stream.sessionId },
+          failure,
+          this.diagnosticLease
+        );
     }
   }
 

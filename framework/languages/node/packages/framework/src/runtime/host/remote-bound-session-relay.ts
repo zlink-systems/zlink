@@ -1,3 +1,4 @@
+import { logDiagnostic, type ZLinkDiagnosticLease } from '../diagnostics/diagnostic-log';
 import type { ActorRef, RoutingId, ZLinkActor } from '../../contracts';
 import type { ZLinkBackendActorSessionNode } from '../backend';
 import {
@@ -41,6 +42,7 @@ import {
 } from '../framework-errors-internal';
 
 export interface ZLinkRemoteBoundSessionRelayOptions {
+  readonly diagnosticLease?: ZLinkDiagnosticLease;
   readonly currentOwner: () =>
     import('../locations/internal-location-contracts').ZLinkLocationOwnerToken | undefined;
   readonly requestTimeoutMs?: number;
@@ -364,7 +366,15 @@ export class ZLinkRemoteBoundSessionRelay {
   }
 
   private warnLateSessionRouteUpdate(value: ServiceSessionRelocationRoute): void {
-    console.warn(`late_session_route_update session=${value.session.sessionRid}`);
+    logDiagnostic(
+      this.options.diagnosticLease?.(),
+      'warn',
+      'relocation',
+      'late_session_route_update',
+      {
+        message: `session=${value.session.sessionRid}`
+      }
+    );
   }
 
   private async applyServiceWireSessionRelocationRoute(

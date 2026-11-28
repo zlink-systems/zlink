@@ -1,3 +1,4 @@
+import type { ZLinkTelemetryLease } from '../diagnostics/message-flow-delivery';
 import { startActorTeardown } from '../actors/actor-runtime-state';
 import type { RequestRuntime } from '../foundation/request-runtime';
 import type { ZLinkMeshDispatchAdmission } from '../admission';
@@ -124,6 +125,7 @@ const ZLINK_SEND_DONT_WAIT = 1;
 const EMPTY_SPOT_METADATA: ReadonlyMap<string, string> = new Map();
 
 export interface ZLinkSpotNodeRuntimeManagerOptions {
+  readonly diagnosticLease?: ZLinkTelemetryLease;
   readonly requests?: RequestRuntime;
   readonly admission?: import('../admission').ZLinkRuntimeAdmissionGate;
   readonly errorSink: import('../diagnostics/dispatch-error-port').ZLinkDispatchErrorSink;
@@ -315,6 +317,7 @@ export class ZLinkSpotNodeRuntimeManager {
         );
       }
       const node = meshAdapter.createMeshNode(this.options.context, {
+        diagnosticLease: this.options.diagnosticLease,
         meshName: spotNodeName,
         routingId,
         sendHighWaterMark: spotNode.router?.sendHighWaterMark,

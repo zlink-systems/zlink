@@ -1,3 +1,4 @@
+import type { ZLinkDiagnosticLease } from '../diagnostics/diagnostic-log';
 import { RequestRuntime } from '../foundation/request-runtime';
 import type { PendingOperation, OperationObserver } from '../foundation/operation-registry';
 import { identityRequestReply, type ZLinkRequestResult } from '../messaging/request-result';
@@ -325,7 +326,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     private readonly metrics?: ZLinkRuntimeMetrics,
     private readonly flowCreationEnabled: () => boolean = () => true,
     private readonly outboundFlow: () => ZLinkMessageFlowTracer | undefined = () => undefined,
-    private readonly requests = new RequestRuntime()
+    private readonly requests = new RequestRuntime(),
+    private readonly diagnosticLease?: ZLinkDiagnosticLease
   ) {}
 
   canRouteChannel(routerChannelId: string): boolean {
@@ -516,6 +518,9 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       signal,
       (requestOperation, receiver) => {
+        const diagnosticLease = this.requestDeadlineDiagnostics
+          ? this.diagnosticLease?.()
+          : undefined;
         if (this.requestDeadlineDiagnostics)
           requestOperation.nodeRequestStartedMs = performance.now();
         requestOperation.mapCaller(
@@ -534,9 +539,16 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
             if (
               requestOperation.nodeRequestStartedMs !== undefined &&
               error instanceof ZLinkFrameworkException &&
-              error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded
+              error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded &&
+              isRelocationDebugEnabled()
             ) {
-              traceNodeRequestDeadline(requestOperation, meshName, targetNodeRid, correlationId);
+              traceNodeRequestDeadline(
+                requestOperation,
+                meshName,
+                targetNodeRid,
+                correlationId,
+                diagnosticLease
+              );
             }
             if (!isRemoteChannelErrorReply(error))
               this.traceNodeRequest(

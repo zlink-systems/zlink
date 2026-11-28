@@ -1,3 +1,5 @@
+import type { ZLinkTelemetryLease } from '../diagnostics/message-flow-delivery';
+import { logDiagnostic } from '../diagnostics/diagnostic-log';
 import {
   createInternalFrameworkException,
   ZLinkFrameworkInternalErrorKind
@@ -144,6 +146,7 @@ export type RawServiceIngressHandler = (
 ) => RawServicePumpResult | undefined | Promise<RawServicePumpResult | undefined>;
 
 export interface RawServiceMeshRuntimeOptions {
+  readonly diagnosticLease?: ZLinkTelemetryLease;
   readonly requests?: RequestRuntime;
   readonly onReceiveReady?: () => void;
   readonly infrastructureTaskRunner?: import('../spots/spot-actor-join-dispatch').ZLinkDetachedTaskRunner;
@@ -263,7 +266,10 @@ export class RawServiceMeshRuntime {
   private serviceIngressAccepts?: (command: number) => boolean;
   private closed = false;
 
+  private readonly diagnosticLease?: ZLinkTelemetryLease;
+
   constructor(options: RawServiceMeshRuntimeOptions) {
+    this.diagnosticLease = options.diagnosticLease;
     this.requestOwner = options.requests;
     this.onReceiveReady = options.onReceiveReady;
     this.infrastructureTaskRunner = options.infrastructureTaskRunner;
@@ -1448,10 +1454,11 @@ export class RawServiceMeshRuntime {
               this.topology.peer(descriptor.nodeRoutingId)?.descriptor
             )
           : undefined;
-      console.warn(
-        `RouteMesh admission rejected peer '${received.sourceRid}' as ${result}` +
+      logDiagnostic(this.diagnosticLease, 'warn', 'mesh', 'route_mesh.admission_rejected', {
+        message:
+          `RouteMesh admission rejected peer '${received.sourceRid}' as ${result}` +
           (detail === undefined ? '.' : ` (${detail}).`)
-      );
+      });
       await this.sendControl(received.sourceRid, [encodeReject(admissionReason(result))]);
       return 'infrastructure';
     }

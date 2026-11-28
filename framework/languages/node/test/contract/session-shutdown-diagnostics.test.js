@@ -1,3 +1,4 @@
+const { observeDiagnosticSubmissions, debugArguments } = require('./helpers/diagnostic-submissions.cjs');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
@@ -7,7 +8,7 @@ test('Session shutdown diagnostics pair boundaries, identify failures, and remai
   for (const scenario of ['disabled', 'resolved', 'session-rejected', 'actor-rejected']) {
     await t.test(scenario, async () => {
       const previous = process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
-      const originalConsole = console.error;
+
       const records = [];
       const calls = [];
       const failure = new TypeError('disconnect callback failed');
@@ -64,7 +65,7 @@ test('Session shutdown diagnostics pair boundaries, identify failures, and remai
       });
       host.useStreamRuntimeForTesting(manager);
       process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = scenario === 'disabled' ? '0' : '1';
-      console.error = (...args) => records.push(args);
+      const stopObserving = observeDiagnosticSubmissions(record => records.push(debugArguments(record)));
       try {
         runtime.markConnected(sessionId);
         const context = await connection;
@@ -190,7 +191,7 @@ test('Session shutdown diagnostics pair boundaries, identify failures, and remai
         }
       } finally {
         await manager.dispose();
-        console.error = originalConsole;
+        stopObserving();
         if (previous === undefined) delete process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
         else process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = previous;
       }

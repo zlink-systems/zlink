@@ -1,3 +1,5 @@
+import { logDiagnostic, type ZLinkDiagnosticLease } from './diagnostic-log';
+import type { ZLinkTelemetryLease } from './message-flow-delivery';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { NodeRequestProgress } from '../foundation/operation-registry';
 import type {
@@ -71,16 +73,27 @@ export function isRelocationDebugEnabled(): boolean {
   return process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION === '1';
 }
 
-export function relocationDebug(marker: string, detail: Record<string, unknown>): void {
+export function relocationDebug(
+  marker: string,
+  detail: Record<string, unknown>,
+  lease?: ZLinkTelemetryLease
+): void {
   if (!isRelocationDebugEnabled()) return;
-  console.error('[zlink.runtime.relocation]', marker, detail);
+  logDiagnostic(
+    lease ?? shutdownTrace.getStore()?.lease,
+    'error',
+    'relocation',
+    '[zlink.runtime.relocation]',
+    { message: marker, detail }
+  );
 }
 
 export function traceNodeRequestDeadline(
   progress: NodeRequestProgress,
   meshName: string,
   targetRid: string,
-  correlationId: string
+  correlationId: string,
+  lease?: ZLinkTelemetryLease
 ): void {
   const start = progress.nodeRequestStartedMs;
   if (start === undefined) return;
@@ -94,38 +107,46 @@ export function traceNodeRequestDeadline(
   else if (progress.routeSelectedMs !== undefined) stage = 'peer_admission';
 
   const elapsed = (time: number | undefined) => (time === undefined ? undefined : time - start);
-  relocationDebug('node_request_deadline', {
-    meshName,
-    targetRid,
-    correlationId,
-    stage,
-    routeGeneration: progress.routeGeneration,
-    elapsedMs: performance.now() - start,
-    routeSelectedMs: elapsed(progress.routeSelectedMs),
-    peerAdmittedMs: elapsed(progress.peerAdmittedMs),
-    bindingSubmittedMs: elapsed(progress.bindingSubmittedMs),
-    bindingAdmittedMs: elapsed(progress.bindingAdmittedMs),
-    replyReceivedMs: elapsed(progress.replyReceivedMs),
-    localDispatchMs: elapsed(progress.localDispatchMs)
-  });
+  relocationDebug(
+    'node_request_deadline',
+    {
+      meshName,
+      targetRid,
+      correlationId,
+      stage,
+      routeGeneration: progress.routeGeneration,
+      elapsedMs: performance.now() - start,
+      routeSelectedMs: elapsed(progress.routeSelectedMs),
+      peerAdmittedMs: elapsed(progress.peerAdmittedMs),
+      bindingSubmittedMs: elapsed(progress.bindingSubmittedMs),
+      bindingAdmittedMs: elapsed(progress.bindingAdmittedMs),
+      replyReceivedMs: elapsed(progress.replyReceivedMs),
+      localDispatchMs: elapsed(progress.localDispatchMs)
+    },
+    lease
+  );
 }
 
 export function relocationDebugTerminal(
   marker: string,
   detail: Record<string, unknown>,
-  failure?: { error: unknown }
+  failure?: { error: unknown },
+  lease?: ZLinkTelemetryLease
 ): void {
-  if (!isRelocationDebugEnabled()) return;
-  relocationDebug(marker, {
-    ...detail,
-    outcome: failure === undefined ? 'resolved' : 'rejected',
-    errorType:
-      failure === undefined
-        ? undefined
-        : failure.error instanceof Error
-          ? failure.error.name
-          : typeof failure.error
-  });
+  relocationDebug(
+    marker,
+    {
+      ...detail,
+      outcome: failure === undefined ? 'resolved' : 'rejected',
+      errorType:
+        failure === undefined
+          ? undefined
+          : failure.error instanceof Error
+            ? failure.error.name
+            : typeof failure.error
+    },
+    lease
+  );
 }
 
 type ShutdownStepRunner = <T>(stage: string, operation: () => Promise<T>) => Promise<T>;
@@ -136,10 +157,11 @@ const runUntracedShutdownStep: ShutdownStepRunner = (_stage, operation) => opera
 export function traceHostShutdown(
   deadlineAtMs: number,
   signal: AbortSignal,
+  lease: ZLinkTelemetryLease,
   operation: (step: ShutdownStepRunner) => Promise<ZLinkFrameworkTerminationResult>
 ): Promise<ZLinkFrameworkTerminationResult> {
   if (!isRelocationDebugEnabled()) return operation(runUntracedShutdownStep);
-  const trace = new ShutdownDeadlineTrace(deadlineAtMs);
+  const trace = new ShutdownDeadlineTrace(deadlineAtMs, lease);
   return shutdownTrace.run(trace, async () => {
     const onAbort = () => trace.captureAtDeadline(performance.now(), true);
     signal.addEventListener('abort', onAbort, { once: true });
@@ -164,7 +186,10 @@ class ShutdownDeadlineTrace {
   }>();
   pendingSteps?: { stage: string; meshName: string | undefined; elapsedMs: number }[];
 
-  constructor(private readonly deadlineAtMs: number) {}
+  constructor(
+    private readonly deadlineAtMs: number,
+    readonly lease?: ZLinkTelemetryLease
+  ) {}
 
   async runStep<T>(stage: string, operation: () => T | Promise<T>, meshName?: string): Promise<T> {
     const startedAtMs = performance.now();
@@ -209,15 +234,27 @@ export async function traceShutdownStep<T>(
     relocationDebug('shutdown_step', { stage, meshName, outcome: 'completed' });
     return result;
   } catch (error) {
-    relocationDebug('shutdown_step', { stage, meshName, outcome: 'failed', error });
+    logDiagnostic(
+      shutdownTrace.getStore()?.lease,
+      'error',
+      'relocation',
+      '[zlink.runtime.relocation]',
+      {
+        message: 'shutdown_step',
+        detail: { stage, meshName, outcome: 'failed' },
+        error
+      }
+    );
     throw error;
   }
 }
 
 /** Emits high-cardinality resolver detail only on the existing relocation debug path. */
-export function emitActorOwnerLeaseObservation(observation: ZLinkActorOwnerLeaseObservation): void {
-  if (!isRelocationDebugEnabled()) return;
-  console.error('[zlink.runtime.relocation]', 'actor_route.owner_lease_observed', observation);
+export function emitActorOwnerLeaseObservation(
+  observation: ZLinkActorOwnerLeaseObservation,
+  lease?: ZLinkTelemetryLease
+): void {
+  relocationDebug('actor_route.owner_lease_observed', { ...observation }, lease);
 }
 
 /** Runtime composition port. It is intentionally absent from the public contract barrel. */
@@ -229,17 +266,19 @@ export interface ZLinkRuntimeEventPublisher {
 export class DefaultZLinkRuntimeEventPublisher implements ZLinkRuntimeEventPublisher {
   private readonly handlers: ZLinkRuntimeEventHandler<ZLinkRuntimeEvent>[] = [];
 
+  constructor(private readonly diagnosticLease?: ZLinkDiagnosticLease) {}
+
   register<TEvent extends ZLinkRuntimeEvent>(handler: ZLinkRuntimeEventHandler<TEvent>): void {
     this.handlers.push(handler as ZLinkRuntimeEventHandler<ZLinkRuntimeEvent>);
   }
 
   async publish<TEvent extends ZLinkRuntimeEvent>(event: TEvent): Promise<void> {
+    const lease = this.diagnosticLease?.();
     for (const handler of this.handlers) {
       try {
         await handler.handle(event);
       } catch (error) {
-        console.error('[monitoring-event-dispatch]', error);
-        continue;
+        logDiagnostic(lease, 'error', 'monitoring', '[monitoring-event-dispatch]', { error });
       }
     }
   }
@@ -398,7 +437,8 @@ export class ZLinkLocationMonitoringEventEmitter {
       readonly actor?: ZLinkLocationMonitoringRegistration;
       readonly route?: ZLinkLocationMonitoringRegistration;
     },
-    private readonly publisher?: ZLinkRuntimeEventPublisher
+    private readonly publisher?: ZLinkRuntimeEventPublisher,
+    private readonly diagnosticLease?: ZLinkTelemetryLease
   ) {
     for (const source of [
       registration.peer,
@@ -529,7 +569,13 @@ export class ZLinkLocationMonitoringEventEmitter {
       return;
     }
     void this.publisher.publish(event).catch((error) => {
-      console.error('[location-monitoring-event-dispatch]', error);
+      logDiagnostic(
+        this.diagnosticLease,
+        'error',
+        'monitoring',
+        '[location-monitoring-event-dispatch]',
+        { error }
+      );
     });
   }
 }

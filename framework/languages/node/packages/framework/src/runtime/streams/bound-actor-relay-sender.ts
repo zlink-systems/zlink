@@ -1,3 +1,4 @@
+import type { ZLinkDiagnosticLease } from '../diagnostics/diagnostic-log';
 import type { ZLinkMessage, ZLinkMessageSerializer, ZLinkSessionActor } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import {
@@ -33,6 +34,7 @@ import type { ServiceStreamSessionBinding } from '../foundation/service-runtime-
 export const DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS = 2000;
 
 export interface ZLinkBoundActorRelaySenderOptions {
+  readonly diagnosticLease?: ZLinkDiagnosticLease;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
   readonly actorBindTimeoutMs?: number;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
@@ -286,28 +288,42 @@ export class ZLinkBoundActorRelaySender {
 
   async notifyPhysicalDisconnect(context: DefaultZLinkSessionContext): Promise<void> {
     if (isRelocationDebugEnabled())
-      relocationDebug('relay.notifyPhysicalDisconnect.enter', {
-        sessionId: context.stream.sessionId,
-        actors: [...context.boundActors].map((actor) => actor.actorId)
-      });
+      relocationDebug(
+        'relay.notifyPhysicalDisconnect.enter',
+        {
+          sessionId: context.stream.sessionId,
+          actors: [...context.boundActors].map((actor) => actor.actorId)
+        },
+        this.options.diagnosticLease?.()
+      );
     let failure: { error: unknown } | undefined;
     try {
       const snapshot = [...context.boundActors];
       const timeoutMs = this.options.actorBindTimeoutMs ?? DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS;
       await Promise.allSettled(
         snapshot.map(async (actor) => {
-          relocationDebug('relay.lifecycle.submit', {
-            sessionId: context.stream.sessionId,
-            actorId: actor.actorId
-          });
+          if (isRelocationDebugEnabled())
+            relocationDebug(
+              'relay.lifecycle.submit',
+              {
+                sessionId: context.stream.sessionId,
+                actorId: actor.actorId
+              },
+              this.options.diagnosticLease?.()
+            );
           let detached;
           let failure: { error: unknown } | undefined;
           try {
             detached = await this.lifecycle.run(actor.actorId, async () => {
-              relocationDebug('relay.lifecycle.enter', {
-                sessionId: context.stream.sessionId,
-                actorId: actor.actorId
-              });
+              if (isRelocationDebugEnabled())
+                relocationDebug(
+                  'relay.lifecycle.enter',
+                  {
+                    sessionId: context.stream.sessionId,
+                    actorId: actor.actorId
+                  },
+                  this.options.diagnosticLease?.()
+                );
               let failure: { error: unknown } | undefined;
               try {
                 const route = await this.routes.route(actor.actorId);
@@ -337,32 +353,41 @@ export class ZLinkBoundActorRelaySender {
                 failure = { error };
                 throw error;
               } finally {
-                relocationDebugTerminal(
-                  'relay.lifecycle.exit',
-                  { sessionId: context.stream.sessionId, actorId: actor.actorId },
-                  failure
-                );
+                if (isRelocationDebugEnabled())
+                  relocationDebugTerminal(
+                    'relay.lifecycle.exit',
+                    { sessionId: context.stream.sessionId, actorId: actor.actorId },
+                    failure,
+                    this.options.diagnosticLease?.()
+                  );
               }
             });
           } catch (error) {
             failure = { error };
             throw error;
           } finally {
-            relocationDebugTerminal(
-              'relay.lifecycle.terminal',
-              { sessionId: context.stream.sessionId, actorId: actor.actorId },
-              failure
-            );
+            if (isRelocationDebugEnabled())
+              relocationDebugTerminal(
+                'relay.lifecycle.terminal',
+                { sessionId: context.stream.sessionId, actorId: actor.actorId },
+                failure,
+                this.options.diagnosticLease?.()
+              );
           }
           if (detached === false) return;
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), timeoutMs);
           try {
-            relocationDebug('relay.remoteDisconnect.start', {
-              sessionId: context.stream.sessionId,
-              actorId: actor.actorId,
-              timeoutMs
-            });
+            if (isRelocationDebugEnabled())
+              relocationDebug(
+                'relay.remoteDisconnect.start',
+                {
+                  sessionId: context.stream.sessionId,
+                  actorId: actor.actorId,
+                  timeoutMs
+                },
+                this.options.diagnosticLease?.()
+              );
             let failure: { error: unknown } | undefined;
             try {
               await Promise.race([
@@ -389,11 +414,13 @@ export class ZLinkBoundActorRelaySender {
               failure = { error };
               throw error;
             } finally {
-              relocationDebugTerminal(
-                'relay.remoteDisconnect.terminal',
-                { sessionId: context.stream.sessionId, actorId: actor.actorId, timeoutMs },
-                failure
-              );
+              if (isRelocationDebugEnabled())
+                relocationDebugTerminal(
+                  'relay.remoteDisconnect.terminal',
+                  { sessionId: context.stream.sessionId, actorId: actor.actorId, timeoutMs },
+                  failure,
+                  this.options.diagnosticLease?.()
+                );
             }
           } finally {
             clearTimeout(timer);
@@ -411,7 +438,8 @@ export class ZLinkBoundActorRelaySender {
             sessionId: context.stream.sessionId,
             actors: [...context.boundActors].map((actor) => actor.actorId)
           },
-          failure
+          failure,
+          this.options.diagnosticLease?.()
         );
     }
   }

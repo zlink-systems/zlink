@@ -1,3 +1,4 @@
+const { observeDiagnosticSubmissions } = require('./helpers/diagnostic-submissions.cjs');
 'use strict';
 
 const assert = require('node:assert/strict');
@@ -33,9 +34,8 @@ test('structural guard decision observes current environment without caching', (
 
 test('relocation debug emitter remains gated when called directly and observes live environment', () => {
   const prior = process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
-  const originalError = console.error;
   const records = [];
-  console.error = (...args) => records.push(args);
+  const stopObserving = observeDiagnosticSubmissions(record => records.push(record));
   try {
     delete process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
     assert.equal(diagnostics.isRelocationDebugEnabled(), false);
@@ -49,7 +49,7 @@ test('relocation debug emitter remains gated when called directly and observes l
     diagnostics.relocationDebug('disabled-again', {});
     assert.equal(records.length, 1);
   } finally {
-    console.error = originalError;
+    stopObserving();
     restoreEnvironment('ZLINK_DEBUG_FRAMEWORK_RELOCATION', prior);
   }
 });

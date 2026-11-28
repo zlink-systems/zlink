@@ -1,3 +1,4 @@
+import type { ZLinkTelemetryLease } from '../diagnostics/message-flow-delivery';
 import { requireOneWayCompletion } from '../messaging/submission-result';
 import { diag } from '@opentelemetry/api';
 import { logs, SeverityNumber } from '@opentelemetry/api-logs';
@@ -135,6 +136,7 @@ export interface ZLinkStreamSessionContextFactory {
 }
 
 export interface ZLinkStreamSessionRuntimeOptions {
+  readonly diagnosticLease?: ZLinkTelemetryLease;
   readonly nodeName?: string;
   readonly sessionTypeName?: string;
   readonly heartbeatIntervalMs?: number;
@@ -252,7 +254,8 @@ export class ZLinkStreamSessionRuntime {
       options.meshCompletions,
       undefined,
       options.nativeSessionRouteForMesh,
-      () => this.completeAuthenticationRequests()
+      () => this.completeAuthenticationRequests(),
+      options.diagnosticLease
     );
     this.context = options.bindingRuntime.createSessionContext(
       this.stream,
@@ -607,17 +610,29 @@ export class ZLinkStreamSessionRuntime {
   async drainClose(shutdownSignal?: AbortSignal): Promise<void> {
     this.stream.shutdownSignal ??= shutdownSignal;
     if (isRelocationDebugEnabled())
-      relocationDebug('session.drainClose.enter', { ...this.shutdownSnapshot() });
+      relocationDebug(
+        'session.drainClose.enter',
+        { ...this.shutdownSnapshot() },
+        this.options.diagnosticLease
+      );
     let failure: { error: unknown } | undefined;
     try {
       this.closeReason = 'server_drain';
       if (isRelocationDebugEnabled())
-        relocationDebug('drainClose.final.submit', { ...this.shutdownSnapshot() });
+        relocationDebug(
+          'drainClose.final.submit',
+          { ...this.shutdownSnapshot() },
+          this.options.diagnosticLease
+        );
       let failure: { error: unknown } | undefined;
       try {
         const final = this.serial.executeFinal(async () => {
           if (isRelocationDebugEnabled())
-            relocationDebug('drainClose.final.enter', { ...this.shutdownSnapshot() });
+            relocationDebug(
+              'drainClose.final.enter',
+              { ...this.shutdownSnapshot() },
+              this.options.diagnosticLease
+            );
           let failure: { error: unknown } | undefined;
           try {
             if (
@@ -640,7 +655,8 @@ export class ZLinkStreamSessionRuntime {
               relocationDebugTerminal(
                 'drainClose.final.exit',
                 { ...this.shutdownSnapshot() },
-                failure
+                failure,
+                this.options.diagnosticLease
               );
           }
         });
@@ -649,18 +665,25 @@ export class ZLinkStreamSessionRuntime {
         failure = { error };
         throw error;
       } finally {
-        relocationDebugTerminal(
-          'drainClose.final.terminal',
-          { sessionId: this.stream.sessionId },
-          failure
-        );
+        if (isRelocationDebugEnabled())
+          relocationDebugTerminal(
+            'drainClose.final.terminal',
+            { sessionId: this.stream.sessionId },
+            failure,
+            this.options.diagnosticLease
+          );
       }
     } catch (error) {
       failure = { error };
       throw error;
     } finally {
       if (isRelocationDebugEnabled())
-        relocationDebugTerminal('session.drainClose.exit', { ...this.shutdownSnapshot() }, failure);
+        relocationDebugTerminal(
+          'session.drainClose.exit',
+          { ...this.shutdownSnapshot() },
+          failure,
+          this.options.diagnosticLease
+        );
     }
   }
 
@@ -1047,7 +1070,12 @@ export class ZLinkStreamSessionRuntime {
         if (this.stream.isShutdownForced()) return;
       }
 
-      relocationDebug('complete.onDisconnected.enter', { sessionId: this.stream.sessionId });
+      if (isRelocationDebugEnabled())
+        relocationDebug(
+          'complete.onDisconnected.enter',
+          { sessionId: this.stream.sessionId },
+          this.options.diagnosticLease
+        );
       let failure: { error: unknown } | undefined;
       try {
         await session.onDisconnected?.(this.context);
@@ -1055,11 +1083,13 @@ export class ZLinkStreamSessionRuntime {
         failure = { error };
         throw error;
       } finally {
-        relocationDebugTerminal(
-          'complete.onDisconnected.exit',
-          { sessionId: this.stream.sessionId },
-          failure
-        );
+        if (isRelocationDebugEnabled())
+          relocationDebugTerminal(
+            'complete.onDisconnected.exit',
+            { sessionId: this.stream.sessionId },
+            failure,
+            this.options.diagnosticLease
+          );
       }
     } finally {
       if (!this.stream.isShutdownForced()) await this.cleanup(bindingsCleanup, creationFailed);
@@ -1085,7 +1115,11 @@ export class ZLinkStreamSessionRuntime {
 
   private async cleanup(bindingsCleanup?: Promise<void>, creationFailed = false): Promise<void> {
     if (isRelocationDebugEnabled())
-      relocationDebug('session.cleanup.enter', { ...this.shutdownSnapshot() });
+      relocationDebug(
+        'session.cleanup.enter',
+        { ...this.shutdownSnapshot() },
+        this.options.diagnosticLease
+      );
     let failure: { error: unknown } | undefined;
     try {
       if (this.connected && !this.metricsClosed) {
@@ -1105,7 +1139,12 @@ export class ZLinkStreamSessionRuntime {
       throw error;
     } finally {
       if (isRelocationDebugEnabled())
-        relocationDebugTerminal('session.cleanup.exit', { ...this.shutdownSnapshot() }, failure);
+        relocationDebugTerminal(
+          'session.cleanup.exit',
+          { ...this.shutdownSnapshot() },
+          failure,
+          this.options.diagnosticLease
+        );
     }
   }
 
@@ -1309,7 +1348,11 @@ export class ZLinkStreamSessionNodeRuntime {
 
   async drainCloseSessions(shutdownSignal?: AbortSignal): Promise<void> {
     if (isRelocationDebugEnabled())
-      relocationDebug('shutdown.sessions.enter', { sessions: this.shutdownSnapshot() });
+      relocationDebug(
+        'shutdown.sessions.enter',
+        { sessions: this.shutdownSnapshot() },
+        this.options.diagnosticLease
+      );
     let failure: { error: unknown } | undefined;
     try {
       await Promise.allSettled(
@@ -1323,7 +1366,8 @@ export class ZLinkStreamSessionNodeRuntime {
         relocationDebugTerminal(
           'shutdown.sessions.exit',
           { sessions: this.shutdownSnapshot() },
-          failure
+          failure,
+          this.options.diagnosticLease
         );
     }
   }
@@ -1388,7 +1432,9 @@ export class ZLinkStreamSessionNodeRuntime {
         this.options.nativeSessionService,
         this.options.meshCompletions,
         undefined,
-        this.options.nativeSessionRouteForMesh
+        this.options.nativeSessionRouteForMesh,
+        undefined,
+        this.options.diagnosticLease
       );
     const payloadBytes = messageToBytes(payload);
     if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
@@ -1959,7 +2005,9 @@ export class ZLinkStreamSessionNodeRuntime {
         this.options.nativeSessionService,
         this.options.meshCompletions,
         undefined,
-        this.options.nativeSessionRouteForMesh
+        this.options.nativeSessionRouteForMesh,
+        undefined,
+        this.options.diagnosticLease
       );
       void rejected.closeForDrain().catch((error) => this.options.onError?.(error));
       return undefined;

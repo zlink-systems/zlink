@@ -266,7 +266,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     runtimeDependencies?: {
       readonly raw?: RawServiceMeshRuntime;
       readonly stateful?: ServiceStatefulRuntime;
-    }
+    },
+    private readonly diagnosticLease?: import('../../diagnostics/message-flow-delivery').ZLinkTelemetryLease
   ) {
     if (meshName.length === 0) throw new TypeError('MeshName must be non-empty.');
     if (routingId === undefined || routingId.length === 0) {
@@ -433,6 +434,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       throw new Error('MeshNode bind endpoint is not configured.');
     const descriptor = { ...this.createDescriptor(), state: serviceState };
     const runtime = new RawServiceMeshRuntime({
+      diagnosticLease: this.diagnosticLease,
       requests: this.requests,
       onPendingOperationsChanged: this.onPendingOperationsChanged,
       descriptor,

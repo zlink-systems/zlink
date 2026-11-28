@@ -23,6 +23,7 @@ import { ZLinkRemoteActorJoinReceiver } from './remote-actor-join-receiver';
 
 export interface ZLinkBoundSessionRelayOptions {
   readonly currentOwner: ZLinkRemoteBoundSessionRelayOptions['currentOwner'];
+  readonly diagnosticLease?: ZLinkRemoteBoundSessionRelayOptions['diagnosticLease'];
   readonly admission?: ZLinkRuntimeAdmissionGate;
   readonly requestTimeoutMs?: number;
   readonly sessionRelocationSealTimeoutMs: number;
@@ -67,6 +68,7 @@ export class ZLinkBoundSessionRelay {
       actorErrorSender: (...args) => this.boundSessions.sendActorError(...args)
     });
     this.boundSessions = new ZLinkRemoteBoundSessionRelay({
+      diagnosticLease: options.diagnosticLease,
       currentOwner: options.currentOwner,
       requestTimeoutMs: options.requestTimeoutMs,
       sessionRelocationSealTimeoutMs: options.sessionRelocationSealTimeoutMs,
