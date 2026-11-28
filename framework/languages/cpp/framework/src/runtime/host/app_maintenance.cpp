@@ -884,10 +884,12 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                   terminal.reason);
                 if (!target) {
                     if (terminal.reason == relocation_reason_t::target_unavailable
-                        && unit.kind == placement_object_kind_t::instance_spot
-                        && close_committed (
-                          co_await location_store->get ().read_authority (spot_key)))
-                        continue;
+                        && unit.kind == placement_object_kind_t::instance_spot) {
+                        const auto current =
+                          co_await location_store->get ().read_authority (spot_key);
+                        if (close_committed (current))
+                            continue;
+                    }
                     complete (terminal);
                     co_return;
                 }
@@ -901,10 +903,12 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 const auto spot_source =
                   co_await node->native_node ().resolve_spot_async (std::string (unit.spot_id));
                 if (!spot_source) {
-                    if (unit.kind == placement_object_kind_t::instance_spot
-                        && close_committed (
-                          co_await location_store->get ().read_authority (spot_key)))
-                        continue;
+                    if (unit.kind == placement_object_kind_t::instance_spot) {
+                        const auto current =
+                          co_await location_store->get ().read_authority (spot_key);
+                        if (close_committed (current))
+                            continue;
+                    }
                     terminal.reason = relocation_reason_t::state_incompatible;
                     complete (terminal);
                     co_return;
@@ -952,10 +956,12 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                   sources, std::move (stable_types), *target, authorities, deadline_at);
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
                     if (unit.kind == placement_object_kind_t::instance_spot
-                        && !source_authority_lost (moved.reason)
-                        && close_committed (
-                          co_await location_store->get ().read_authority (spot_key)))
-                        continue;
+                        && !source_authority_lost (moved.reason)) {
+                        const auto current =
+                          co_await location_store->get ().read_authority (spot_key);
+                        if (close_committed (current))
+                            continue;
+                    }
                     terminal.reason = relocation_reason_t::relocation_failed;
                     complete (terminal, moved.reason);
                     co_return;

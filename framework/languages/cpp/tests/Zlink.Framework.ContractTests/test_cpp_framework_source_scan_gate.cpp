@@ -27,6 +27,7 @@ std::vector<std::string> short_circuit_awaits (const std::filesystem::path &root
 {
     static const std::regex same_line (R"((\|\||&&|\?)[^;]*co_await)");
     static const std::regex continued (R"(^\s*(\|\||&&|\?|:)\s*[!(]*\s*co_await)");
+    static const std::regex short_circuit_operator (R"((\|\||&&|\?))");
     std::vector<std::string> found;
     for (const auto &entry : std::filesystem::recursive_directory_iterator (root)) {
         const auto ext = entry.path ().extension ();
@@ -35,12 +36,28 @@ std::vector<std::string> short_circuit_awaits (const std::filesystem::path &root
         const auto text = read_text_file (entry.path ());
         std::size_t line_number = 0;
         std::size_t start = 0;
+        bool open_operand = false;
+        long operand_depth = 0;
         while (start < text.size ()) {
             const auto end = text.find ('\n', start);
             const auto line = text.substr (start, end == std::string::npos ? end : end - start);
             ++line_number;
-            if (std::regex_search (line, same_line) || std::regex_search (line, continued))
+            const auto opens = std::count (line.begin (), line.end (), '(');
+            const auto closes = std::count (line.begin (), line.end (), ')');
+            const bool awaits = line.find ("co_await") != std::string::npos;
+            if (std::regex_search (line, same_line) || std::regex_search (line, continued)
+                || (open_operand && awaits))
                 found.push_back (entry.path ().string () + ":" + std::to_string (line_number));
+            // A short-circuit operand whose call arguments continue on later lines
+            // (`&& f (` then `co_await g ()`) is still that operand.
+            if (open_operand) {
+                operand_depth += opens - closes;
+                if (operand_depth <= 0 || line.find (';') != std::string::npos)
+                    open_operand = false;
+            } else if (std::regex_search (line, short_circuit_operator) && opens > closes) {
+                open_operand = true;
+                operand_depth = opens - closes;
+            }
             if (end == std::string::npos)
                 break;
             start = end + 1;
