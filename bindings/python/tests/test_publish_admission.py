@@ -80,13 +80,23 @@ def test_publish_projects_core_not_connected(monkeypatch):
     native = lib()
     calls = []
 
-    def submit_storage(handle, target, parts, flags, context, timeout, token, topic):
-        calls.append((topic, len(parts)))
-        for part in parts:
-            assert native.zlink_msg_close(ctypes.byref(part)) == 0
-        return (2, errno.ENOTCONN, 0)
+    def reject_publish(topic, parts, count):
+        calls.append((topic, count))
+        for index in range(count):
+            assert native.zlink_msg_close(ctypes.byref(parts[index])) == 0
+        return int(zlink.SubmitResult.NOT_CONNECTED)
 
-    monkeypatch.setattr(_native_extension, "submit_storage", submit_storage)
+    if _native_extension is None:
+        monkeypatch.setattr(
+            native, "zlink_publish",
+            lambda handle, topic, parts, count, flags: reject_publish(topic, parts, count),
+        )
+        monkeypatch.setattr(native, "zlink_errno", lambda: errno.ENOTCONN)
+    else:
+        def submit_storage(handle, target, parts, flags, context, timeout, token, topic):
+            return reject_publish(topic, parts, len(parts)), errno.ENOTCONN, 0
+
+        monkeypatch.setattr(_native_extension, "submit_storage", submit_storage)
     with (
         zlink.create_context() as context,
         zlink.create_pub_socket(context) as publisher,

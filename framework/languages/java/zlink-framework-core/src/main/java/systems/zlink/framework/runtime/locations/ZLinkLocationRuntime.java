@@ -441,11 +441,11 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                         "The resolved owner no longer owns this incarnation.");
             }
             if (!application) return;
-            if (paused()) throw new OwnerLeaseAdmissionClosedException();
+            if (paused()) throw ownerLeaseAdmissionClosed();
             if (isOwnerAdmissionOpenCore()) return;
             if (episode != null && episode.records.containsKey(this) && storeOutageRetention)
                 return;
-            throw new OwnerLeaseAdmissionClosedException();
+            throw ownerLeaseAdmissionClosed();
         }
 
         private boolean canStartOnOpenLease() {
@@ -783,8 +783,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     public ZLinkLocationOwnerToken descriptorPublicationOwnerToken() {
         return inStateLane(
                 () -> {
-                    if (!ownerLeaseWithinDeadlineCore())
-                        throw new OwnerLeaseAdmissionClosedException();
+                    if (!ownerLeaseWithinDeadlineCore()) throw ownerLeaseAdmissionClosed();
                     return ownerToken;
                 });
     }
@@ -850,7 +849,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     public void ensureOwnerAdmissionOpen() {
         ensureOwnerAdmissionOpenCore();
-        if (recoveringCore(outage)) throw new OwnerLeaseAdmissionClosedException();
+        if (recoveringCore(outage)) throw ownerLeaseAdmissionClosed();
     }
 
     private boolean recoveringCore(StoreOutage episode) {
@@ -2744,21 +2743,34 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private void ensureOwnerAdmissionOpenCore() {
         if (!isOwnerAdmissionOpenCore()) {
-            throw new OwnerLeaseAdmissionClosedException();
+            throw ownerLeaseAdmissionClosed();
         }
     }
 
-    /** The runtime takes no new admission once the owner lease deadline passes (ShuttingDown). */
+    /** Identifies failures caused by closed owner lease admission. */
     public static boolean isExecutionPaused(Throwable failure) {
         return unwrap(failure) instanceof OwnerLeaseAdmissionClosedException;
     }
 
+    private OwnerLeaseAdmissionClosedException ownerLeaseAdmissionClosed() {
+        long deadline = ownerAdmissionDeadlineNanos;
+        String message;
+        if (!started) {
+            message = "Location runtime is stopped.";
+        } else if (deadline == 0L) {
+            message = "The owner lease admission is not open yet.";
+        } else if (monotonicNow.getAsLong() - deadline >= 0L) {
+            message = "The owner lease admission deadline has expired.";
+        } else {
+            message = "The owner lease admission is closed.";
+        }
+        return new OwnerLeaseAdmissionClosedException(message);
+    }
+
     private static final class OwnerLeaseAdmissionClosedException extends ZLinkFrameworkException
             implements ZLinkLocationStoreFailure {
-        private OwnerLeaseAdmissionClosedException() {
-            super(
-                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
-                    "The owner lease admission deadline has expired.");
+        private OwnerLeaseAdmissionClosedException(String message) {
+            super(ZLinkFrameworkErrorKind.SHUTTING_DOWN, message);
         }
     }
 
