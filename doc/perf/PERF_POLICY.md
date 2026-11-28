@@ -85,6 +85,9 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   정상 상태의 in-flight는 목표율 × 단방향 지연이다. 그래서 in-flight의 절대 크기로 판정하지 않는다
   (그렇게 하면 지연 상한을 묻게 되어 fanout이 큰 작은 메시지에서 항상 실패한다). 지연은 catch-up 뒤
   표본으로 따로 보고한다. 판정은 C `perf_multi_measurement`의 catch-up tracker 한 곳이 소유한다.
+  수신율은 같은 창에서 목표 일정이 예정한 송신 개수와 개수로 비교한다(목표율 × 경과 시간을 실수로 비교하지 않는다).
+  관측 시점이 두 도착 사이에 걸릴 수 있으므로 subscriber마다 1건 부족까지는 목표 이상으로 본다. 이 허용값은
+  tracker의 상수 하나(`receive_quantum`)가 소유한다.
   catch-up은 기존 latency duration 동안 허용하고, 도달 뒤 같은 시간만큼 표본을 수집한다.
   deadline까지 도달하지 못하면 `latency`, `latency_p95`, `latency_p99`를
   `invalid:<reason>`으로 기록하고 throughput은 유효한 측정값을 유지한다.
