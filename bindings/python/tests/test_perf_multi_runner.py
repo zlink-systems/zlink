@@ -199,7 +199,7 @@ class PerfMultiRunnerTests(unittest.TestCase):
                 list(POLICY_TRANSPORTS),
                 [],
                 clients,
-                {"PERF_MULTI_MONITOR_HWM": "100000"},
+                {"PERF_MULTI_MONITOR_HWM_BYTES": "100000"},
             )
             self.assertEqual(options["default_clients"], "100")
             self.assertEqual(options["default_stream_clients"], "100")

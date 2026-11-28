@@ -534,9 +534,7 @@ def _multi_effective_options(args, section):
     service_clients = os.environ.get("PERF_SERVICE_CLIENTS") or "auto"
     monitor_hwm_bytes = (
         os.environ.get("PERF_MULTI_MONITOR_HWM_BYTES")
-        or os.environ.get("PERF_MULTI_MONITOR_HWM")
         or os.environ.get("PERF_MONITOR_HWM_BYTES")
-        or os.environ.get("PERF_MONITOR_HWM")
         or "4096000"
     )
     selected_patterns = [
@@ -573,6 +571,7 @@ def _multi_effective_options(args, section):
         f"- msg_sizes: {args.msg_sizes}",
         f"- routed_echo_per_socket_payload: {routed_echo_per_socket_payload}",
         f"- duration_seconds: {args.duration}",
+        f"- latency_duration_seconds: {os.environ.get('PERF_MULTI_LATENCY_DURATION_SECONDS') or args.duration}",
         f"- clients: {args.clients}",
         f"- default_clients: {default_clients}",
         f"- default_stream_clients: {default_stream_clients}",
