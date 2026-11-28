@@ -5214,9 +5214,9 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       const participant = reservation.prepared.plan.participants.find(
         (value) => value.key.value === key.value
       )!;
-      const confirm = async (signal?: AbortSignal): Promise<ZLinkAuthoritySnapshot | undefined> => {
+      const confirm = async (signal?: AbortSignal): Promise<boolean> => {
         const current = await this.requireLocationStore().readAuthority(key, signal);
-        if (current.kind !== 'snapshot') return undefined;
+        if (current.kind !== 'snapshot') return false;
         const relocation = current.relocation;
         const owner = this.options.currentOwner();
         const sameStage =
@@ -5230,7 +5230,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         // Authority publication can be cleared while the original Store read is pending.
         // After opening, confirm the exact current target fence for the reserved request.
         const publicationCleared = stage.phase === 'open' && relocation === undefined;
-        return (sameStage || publicationCleared) &&
+        return (
+          (sameStage || publicationCleared) &&
           current.allocation.state === 'active' &&
           current.objectGeneration === generation &&
           current.authorityOwnerGeneration === fence.authorityOwnerGeneration &&
@@ -5247,23 +5248,45 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           owner.leaseGeneration === target.ownerLeaseGeneration &&
           !(await this.exactSourceLeaseExpired(owner, signal)) &&
           stage.phase !== 'failed'
-          ? current
-          : undefined;
+        );
       };
       if (request.kind === 'actor') {
         return {
           kind: 'actor',
           route: (...args) =>
-            this.options.actorTransfer.captureTargetRequest(
-              meshName,
-              async (signal) => (await confirm(signal)) !== undefined,
-              ...args
-            )
+            this.options.actorTransfer.captureTargetRequest(meshName, confirm, ...args)
         };
       }
-      if (hidden.activation !== undefined) {
-        return { kind: 'spot', activation: hidden.activation, confirm };
-      }
+      const activation = hidden.activation;
+      if (activation === undefined) continue;
+      if (request.kind === 'spot') return { kind: 'spot', activation, confirm };
+
+      const targetSpotId = request.target.spot.spotId;
+      const { expected } = participant;
+      const plan = reservation.prepared.plan;
+      return {
+        kind: 'instanceSpot',
+        activation,
+        confirm,
+        route: instanceRouteFromAuthority(targetSpotId, {
+          allocation: {
+            ...expected.allocation,
+            descriptor: plan.targetDescriptor,
+            descriptorLifecycleGeneration: plan.targetDescriptorLifecycleGeneration
+          },
+          objectGeneration: expected.objectGeneration,
+          authorityOwnerGeneration: fence.authorityOwnerGeneration,
+          ownerId: plan.targetOwner.ownerId,
+          ownerLeaseGeneration: plan.targetOwner.leaseGeneration,
+          // This route stays in the queued record. Publication supplies the committed StoreVersion.
+          storeVersion: expected.storeVersion
+        }),
+        target: {
+          targetSpotId,
+          stableType: expected.allocation.stableType,
+          objectGeneration: expected.objectGeneration
+        }
+      };
     }
     return undefined;
   }
@@ -6295,13 +6318,17 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     hidden.replayCompletion = Promise.all(
       hidden.replayPackets.map(async (record, index) => {
         let terminal: Promise<void> | undefined;
-        const replay = decodeRelocatedInstanceSpotRecord(record, (...result) => {
-          if (terminal !== undefined || hidden.onReplayResult === undefined) return false;
-          terminal = hidden.onReplayResult(record, BigInt(index + 1), result);
-          void terminal.catch(() => undefined);
-          return true;
-        });
-        await manager.dispatchMeshInstance(this.meshName, owner, replay, undefined, admission);
+        const replay = decodeRelocatedInstanceSpotRecord(
+          record,
+          (...result) => {
+            if (terminal !== undefined || hidden.onReplayResult === undefined) return false;
+            terminal = hidden.onReplayResult(record, BigInt(index + 1), result);
+            void terminal.catch(() => undefined);
+            return true;
+          },
+          admission
+        );
+        await manager.dispatchMeshInstance(this.meshName, owner, replay);
         await terminal;
       })
     ).then(() => undefined);

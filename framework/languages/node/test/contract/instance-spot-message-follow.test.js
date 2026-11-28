@@ -311,9 +311,19 @@ test('Ready Instance one-way reaches the new owner with its original sender and 
 test(
   'committed Instance Spot admits Follow before target publication',
   { timeout: 30_000 },
-  async (t) => {
+  committedFollowScenario(false)
+);
+
+test(
+  'pending Follow confirmation allows the next record on the same connection',
+  { timeout: 30_000 },
+  committedFollowScenario(true)
+);
+
+function committedFollowScenario(holdConfirmation) {
+  return async (t) => {
     const hostClock = fixedRidHostClock(t);
-    const mesh = 'instance-follow-barrier';
+    const mesh = holdConfirmation ? 'instance-follow-pending' : 'instance-follow-barrier';
     const spotId = 'room';
     const callerRid = 'follow-caller';
     const key = encodeAuthorityKey('instance_spot', spotId);
@@ -323,6 +333,8 @@ test(
     const publish = deferred();
     const created = deferred();
     const delivered = deferred();
+    const nextSpotCreated = deferred();
+    const nextRecordDelivered = deferred();
     const handled = { previous: [], target: [] };
     const apps = [];
     let moving;
@@ -351,6 +363,14 @@ test(
         handle(_spot, notice) {
           if (notice.marker === 'create') {
             created.resolve();
+            return;
+          }
+          if (notice.marker === 'create-next') {
+            nextSpotCreated.resolve();
+            return;
+          }
+          if (notice.marker === 'next') {
+            nextRecordDelivered.resolve();
             return;
           }
           handled[rid].push(notice);
@@ -394,10 +414,10 @@ test(
       t.signal.throwIfAborted();
     }
 
-    function snapshotRoute(snapshot) {
+    function snapshotRoute(snapshot, targetSpotId = spotId) {
       assert.equal(snapshot.kind, 'snapshot');
       return {
-        targetSpotId: spotId,
+        targetSpotId,
         targetNodeRid: String(snapshot.allocation.descriptor.rid),
         targetNodeGeneration: snapshot.allocation.descriptorLifecycleGeneration,
         objectGeneration: snapshot.objectGeneration,
@@ -435,6 +455,20 @@ test(
     assert.equal(oldRoute.targetNodeRid, previous.rid);
     const current = await start('target', previous);
     const caller = await start(callerRid, previous);
+    let nextRoute;
+    if (holdConfirmation) {
+      const nextSpotId = 'next-room';
+      await current.app
+        .get(nest.ZLINK_SPOT_OUTBOUND)
+        .sendToSpot(nextSpotId, new Notice('create-next'))
+        .instanceSpot('room')
+        .inMesh(mesh)
+        .submit();
+      await nextSpotCreated.promise;
+      const nextKey = encodeAuthorityKey('instance_spot', nextSpotId);
+      const store = current.host.serviceRelocation.options.locationStore();
+      nextRoute = snapshotRoute(await store.readAuthority(nextKey), nextSpotId);
+    }
     while (
       !previous.node.stateful.raw.isPeerRouteReady(current.rid) ||
       !current.node.stateful.raw.isPeerRouteReady(previous.rid) ||
@@ -474,6 +508,7 @@ test(
     let validResult;
     let validDrops;
     let stage;
+    const releaseRead = deferred();
     try {
       stage = await Promise.race([
         committed.promise,
@@ -489,6 +524,19 @@ test(
       assert.equal(newRoute.objectGeneration, oldRoute.objectGeneration);
       assert.equal((await moving).outcome, framework.ZLinkFrameworkRelocationOutcome.Relocated);
 
+      const readStarted = deferred();
+      if (holdConfirmation) {
+        const store = targetRuntime.options.locationStore();
+        const readAuthority = store.readAuthority.bind(store);
+        t.mock.method(store, 'readAuthority', async (authorityKey, signal) => {
+          if (authorityKey.value === key.value) {
+            readStarted.resolve();
+            await releaseRead.promise;
+          }
+          return readAuthority(authorityKey, signal);
+        });
+      }
+
       assert.equal(
         await caller.node.sendToInstanceSpot(
           oldRoute,
@@ -496,6 +544,29 @@ test(
         ),
         SubmitResult.Ok
       );
+      if (holdConfirmation) {
+        await readStarted.promise;
+        assert.equal(
+          await previous.node.sendToInstanceSpot(
+            nextRoute,
+            encodeChannelEnvelopeParts(3, mesh, 'Notice', new Notice('next'))
+          ),
+          SubmitResult.Ok
+        );
+        const timeout = new AbortController();
+        try {
+          await Promise.race([
+            nextRecordDelivered.promise,
+            delay(2_000, undefined, { signal: timeout.signal }).then(() =>
+              assert.fail('the next record did not dispatch while Follow confirmation was pending')
+            )
+          ]);
+          assert.deepEqual(handled, { previous: [], target: [] }, 'Follow must wait for publication');
+        } finally {
+          timeout.abort();
+          releaseRead.resolve();
+        }
+      }
       validResult = await validFollow.promise;
       await telemetry.observed();
       validDrops = drops().length;
@@ -517,13 +588,10 @@ test(
         ),
         true
       );
-      assert.equal(await invalidFollow.promise, 'dropped');
-      await telemetry.observed();
-      assert.equal(drops().length - validDrops, 1, 'wrong target generation must produce one drop');
-      assert.equal(drops().at(-1).reason, 'stale_target');
-      assert.equal(drops().at(-1).sourceRid, original.rid);
+      await invalidFollow.promise;
       assert.deepEqual(handled, { previous: [], target: [] }, 'handlers must wait for publication');
     } finally {
+      releaseRead.resolve();
       publish.resolve();
     }
 
@@ -535,9 +603,11 @@ test(
       { previous: handled.previous, target: handled.target, drops: validDrops },
       { previous: [], target: [{ marker: 'follow' }], drops: 0 }
     );
-    assert.equal(drops().length, 1);
-  }
-);
+    assert.equal(drops().length, 1, 'wrong target generation must produce one drop');
+    assert.equal(drops()[0].reason, 'stale_target');
+    assert.equal(drops()[0].sourceRid, original.rid);
+  };
+}
 
 test('invalid Ready Follow routes drop once without handler admission', async (t) => {
   for (const scenario of [

@@ -270,13 +270,18 @@ export type ServiceRelocationRequest =
   | { readonly kind: 'actor'; readonly target: ServiceActorRouteFence }
   | { readonly kind: 'spot' | 'instanceSpot'; readonly target: ServiceSpotRouteFence };
 
+type ServiceRelocationSpotAdmission = Pick<ServiceSpotTargetAdmission, 'activation'> & {
+  confirm(signal?: AbortSignal): Promise<boolean>;
+};
+
 export type ServiceRelocationRequestAdmission =
   | { readonly kind: 'actor'; readonly route: ServiceRelocationActorIngressRouter }
-  | {
-      readonly kind: 'spot';
-      readonly activation: import('../spots/spot-activation-state').ZLinkSpotActivation;
-      confirm(signal?: AbortSignal): Promise<ZLinkAuthoritySnapshot | undefined>;
-    };
+  | (ServiceRelocationSpotAdmission & { readonly kind: 'spot' })
+  | (ServiceRelocationSpotAdmission & {
+      readonly kind: 'instanceSpot';
+      readonly route: ServiceInstanceRouteFence;
+      readonly target: ServiceInstanceApplicationTarget;
+    });
 
 export type ServiceRelocationRequestAdmissionResolver = (
   request: ServiceRelocationRequest
@@ -2962,36 +2967,13 @@ export class ServiceStatefulRuntime {
       }
       case 'instanceSpotFollow': {
         let route = this.readyInstanceFollowRoute(record.target);
-        let staged:
-          | {
-              readonly route: ServiceInstanceRouteFence;
-              readonly target: ServiceInstanceApplicationTarget;
-              readonly admission: ServiceSpotTargetAdmission;
-            }
-          | undefined;
-        if (route === undefined) {
-          const admission = this.relocationRequestAdmission?.({
-            kind: 'instanceSpot',
-            target: record.target
-          });
-          if (admission?.kind === 'spot') {
-            const confirmed = admission.confirm();
-            const authority = await confirmed;
-            route = this.readyInstanceFollowRoute(record.target);
-            if (route === undefined && authority !== undefined) {
-              const target = {
-                targetSpotId: record.target.spot.spotId,
-                stableType: authority.allocation.stableType,
-                objectGeneration: authority.objectGeneration
-              };
-              staged = {
-                route: instanceRouteFromAuthority(target.targetSpotId, authority),
-                target,
-                admission: { activation: admission.activation, confirmed: confirmed.then(Boolean) }
-              };
-            }
-          }
-        }
+        const admission =
+          route === undefined
+            ? this.relocationRequestAdmission?.({ kind: 'instanceSpot', target: record.target })
+            : undefined;
+        route ??= this.readyInstanceFollowRoute(record.target);
+        const staged =
+          route === undefined && admission?.kind === 'instanceSpot' ? admission : undefined;
         const localRoute = route ?? staged?.route;
         if (localRoute !== undefined) {
           const message: ServiceReadyInstanceRecord = {
@@ -3008,19 +2990,30 @@ export class ServiceStatefulRuntime {
           if (staged === undefined) {
             return this.enqueueInstanceSpot(ingress, message, payloadFrame!, metadataFrame);
           }
-          const queued = this.enqueueActivatedInstanceSpot(
+          const confirmed = Promise.resolve().then(async () => {
+            if (queued !== 'application' || !(await staged.confirm())) return false;
+            ingress.onAdmitted?.();
+            return true;
+          });
+          // The Spot gate reports a rejection, even if confirmation settles before dispatch.
+          void confirmed.catch(() => undefined);
+          const queued: RawServicePumpResult = this.enqueueActivatedInstanceSpot(
             ingress,
             message,
             payloadFrame!,
-            { ref: record.target.spot },
+            {
+              ref: {
+                spotId: staged.target.targetSpotId,
+                generation: staged.target.objectGeneration
+              }
+            },
             undefined,
             this.instanceApplicationTerminalCompletion(staged.target),
             metadataFrame,
             undefined,
             staged.target,
-            staged.admission
+            { activation: staged.activation, confirmed }
           );
-          if (queued === 'application') ingress.onAdmitted?.();
           return queued;
         }
         const next = this.findSpotMessageFollow(record.target, 'instanceSpot')?.target;
@@ -6173,7 +6166,7 @@ export class ServiceStatefulRuntime {
       };
       void Promise.resolve()
         .then(async () => {
-          if ((await admission.confirm(signal)) === undefined) return reject();
+          if (!(await admission.confirm(signal))) return reject();
           await this.acceptRequestSource(ingress, signal);
           signal?.throwIfAborted();
           ingress.onAdmitted?.();
