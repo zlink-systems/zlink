@@ -41,10 +41,6 @@ def _send_stop_token(sock):
     raise RuntimeError("dealer-router stop token backpressure retry exhausted")
 
 
-def _public_one_way_metrics(sender, receiver, *, msg_size, duration_s, run_id):
-    return None
-
-
 def main(argv=None):
     args = parse_single_args(argv or sys.argv[1:], pattern="dealer_router")
     run_id = benchmark_run_id()
@@ -94,40 +90,32 @@ def main(argv=None):
                     )
 
                 active_end = time.perf_counter() + args.duration
-                metrics = _public_one_way_metrics(
-                    dealer,
-                    router,
-                    msg_size=args.msg_size,
-                    duration_s=args.duration,
-                    run_id=run_id,
+                sender = threading.Thread(
+                    target=send_loop, args=(dealer, active_end), daemon=True
                 )
-                if metrics is None:
-                    sender = threading.Thread(
-                        target=send_loop, args=(dealer, active_end), daemon=True
-                    )
-                    sender.start()
-                    # C perf_dealer_router.cpp run_active_phase receiver.
-                    received = run_one_way_receiver(
-                        router,
-                        method="recv",
-                        msg_size=args.msg_size,
-                        run_id=run_id,
-                        active_end=active_end,
-                        received=received,
-                        latency_sampler=latency_sampler,
-                    )
+                sender.start()
+                # C perf_dealer_router.cpp run_active_phase receiver.
+                received = run_one_way_receiver(
+                    router,
+                    method="recv",
+                    msg_size=args.msg_size,
+                    run_id=run_id,
+                    active_end=active_end,
+                    received=received,
+                    latency_sampler=latency_sampler,
+                )
 
-                    sender.join()
-                    if received == 0:
-                        raise RuntimeError(
-                            "dealer-router benchmark did not receive any active message"
-                        )
-                    metrics = result_metrics(
-                        count=received,
-                        msg_size=args.msg_size,
-                        elapsed_s=args.duration,
-                        latency_sampler=latency_sampler,
+                sender.join()
+                if received == 0:
+                    raise RuntimeError(
+                        "dealer-router benchmark did not receive any active message"
                     )
+                metrics = result_metrics(
+                    count=received,
+                    msg_size=args.msg_size,
+                    elapsed_s=args.duration,
+                    latency_sampler=latency_sampler,
+                )
                 print_result_lines("DEALER_ROUTER", args.transport, args.msg_size, metrics)
 
 
