@@ -329,9 +329,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                     fence,
                                                     target.applicationVersion(),
                                                     snapshot ->
-                                                            authorities.encode(
-                                                                    ZLinkActorAuthorityPayloadCodec
-                                                                            .State.READY,
+                                                            authorities.encodeRelocationTarget(
                                                                     admission.owned().stableType(),
                                                                     admission.owned().actorId(),
                                                                     targetSpotId,

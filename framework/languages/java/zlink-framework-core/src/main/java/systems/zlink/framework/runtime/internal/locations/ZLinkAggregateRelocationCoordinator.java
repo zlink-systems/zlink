@@ -387,37 +387,31 @@ public final class ZLinkAggregateRelocationCoordinator {
                 primaryKey,
                 fence,
                 applicationVersion,
-                snapshots ->
-                        authorityStore
-                                .sealAggregateInventory(
-                                        fence,
-                                        snapshots.stream()
-                                                .sorted(
-                                                        Comparator.comparing(
-                                                                ZLinkAuthorityEntry::key,
-                                                                ZLinkAggregateInventoryStore
-                                                                        ::compareKeys))
-                                                .map(
-                                                        entry -> {
-                                                            var snapshot = entry.snapshot();
-                                                            return new ZLinkAggregateParticipant(
-                                                                    entry.key(),
-                                                                    snapshot.objectGeneration(),
-                                                                    snapshot
-                                                                            .authorityOwnerGeneration(),
-                                                                    snapshot.storeVersion(),
-                                                                    ZLinkAuthorityGenerationTransition
-                                                                            .NEW_OWNER,
-                                                                    authorityPayload.apply(
-                                                                            snapshot),
-                                                                    "[]"
-                                                                            .getBytes(
-                                                                                    StandardCharsets
-                                                                                            .UTF_8));
-                                                        })
-                                                .toList(),
-                                        cancellation)
-                                .thenApply(HexFormat.of()::formatHex),
+                snapshots -> {
+                    var inventory =
+                            snapshots.stream()
+                                    .sorted(
+                                            Comparator.comparing(
+                                                    ZLinkAuthorityEntry::key,
+                                                    ZLinkAggregateInventoryStore::compareKeys))
+                                    .map(
+                                            entry ->
+                                                    sourceParticipant(
+                                                            entry,
+                                                            entry.snapshot().storeVersion(),
+                                                            authorityPayload.apply(
+                                                                    entry.snapshot())))
+                                    .toList();
+                    if (snapshots.size() == 1
+                            && snapshots.getFirst().snapshot().isMarkerlessActor()) {
+                        return CompletableFuture.completedFuture(
+                                HexFormat.of()
+                                        .formatHex(ZLinkAggregateInventoryStore.digest(inventory)));
+                    }
+                    return authorityStore
+                            .sealAggregateInventory(fence, inventory, cancellation)
+                            .thenApply(HexFormat.of()::formatHex);
+                },
                 "preparing",
                 cancellation);
     }
@@ -568,34 +562,66 @@ public final class ZLinkAggregateRelocationCoordinator {
             byte[] authorityPayload,
             byte[] membershipMutation) {}
 
-    public CompletionStage<List<SealedParticipant>> readSealedInventory(
-            ZLinkAggregateFence fence, String primaryKey, ZLinkStoreCancellation cancellation) {
+    public CompletionStage<ZLinkAuthorityEntry> readCapturedAuthority(
+            UUID relocationId, String primaryKey, ZLinkStoreCancellation cancellation) {
         return authorityStore
                 .read(primaryKey, cancellation)
-                .thenCompose(
+                .thenApply(
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot primary)
                                     || primary.relocation() == null
-                                    || !primary.relocation()
-                                            .relocationId()
-                                            .equals(fence.aggregateId())
+                                    || !primary.relocation().relocationId().equals(relocationId)
                                     || !primary.relocation().phase().equals("captured")) {
-                                return failed(
-                                        new RelocationDataLostException(
-                                                "source inventory is not captured"));
+                                throw new RelocationDataLostException(
+                                        "source inventory is not captured");
                             }
-                            String digest = primary.relocation().sourceInventorySha256();
-                            return authorityStore
-                                    .readAggregateInventory(
-                                            fence, HexFormat.of().parseHex(digest), cancellation)
-                                    .thenCompose(
-                                            entries ->
-                                                    bindSealedInventory(
-                                                            entries,
-                                                            primaryKey,
-                                                            primary,
-                                                            cancellation));
+                            return new ZLinkAuthorityEntry(primaryKey, primary);
                         });
+    }
+
+    public static List<SealedParticipant> reconstructActorInventory(
+            ZLinkAuthorityEntry primary, byte[] authorityPayload) {
+        var relocation = primary.snapshot().relocation();
+        var participant =
+                sourceParticipant(
+                        primary, relocation.coordinatorExpectedStoreVersion(), authorityPayload);
+        byte[] digest = ZLinkAggregateInventoryStore.digest(List.of(participant));
+        if (!relocation.sourceInventorySha256().equals(HexFormat.of().formatHex(digest))) {
+            throw new RelocationDataLostException("Actor authority differs from sealed inventory");
+        }
+        return List.of(
+                new SealedParticipant(
+                        primary,
+                        participant.expectedStoreVersion(),
+                        participant.ownerTransition(),
+                        participant.authorityPayload(),
+                        participant.membershipMutation()));
+    }
+
+    private static ZLinkAggregateParticipant sourceParticipant(
+            ZLinkAuthorityEntry authority, String expectedStoreVersion, byte[] authorityPayload) {
+        var snapshot = authority.snapshot();
+        return new ZLinkAggregateParticipant(
+                authority.key(),
+                snapshot.objectGeneration(),
+                snapshot.authorityOwnerGeneration(),
+                expectedStoreVersion,
+                ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                authorityPayload,
+                "[]".getBytes(StandardCharsets.UTF_8));
+    }
+
+    public CompletionStage<List<SealedParticipant>> readSealedInventory(
+            ZLinkAggregateFence fence,
+            ZLinkAuthorityEntry primary,
+            ZLinkStoreCancellation cancellation) {
+        String digest = primary.snapshot().relocation().sourceInventorySha256();
+        return authorityStore
+                .readAggregateInventory(fence, HexFormat.of().parseHex(digest), cancellation)
+                .thenCompose(
+                        entries ->
+                                bindSealedInventory(
+                                        entries, primary.key(), primary.snapshot(), cancellation));
     }
 
     private CompletionStage<List<SealedParticipant>> bindSealedInventory(

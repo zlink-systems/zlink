@@ -1940,27 +1940,74 @@ final class ZLinkCanonicalRelocationStateMachine
                         : ZLinkAuthorityKeyCodec.spot(prepare.object().objectId());
         var fence = ZLinkAggregateFence.markerlessRelocation(prepare.id());
         return coordinator
-                .readSealedInventory(fence, primaryKey, OPEN)
+                .readCapturedAuthority(prepare.id(), primaryKey, OPEN)
                 .thenCompose(
-                        inventory -> {
-                            List<ZLinkAuthorityEntry> entries =
-                                    inventory.stream()
-                                            .map(
-                                                    ZLinkAggregateRelocationCoordinator
-                                                                    .SealedParticipant
-                                                            ::authority)
-                                            .toList();
-                            var profile = stageRequest(prepare, payload, entries);
-                            return target.applyTargetProfile(
-                                            profile, () -> awaitShellPublication(profile))
-                                    .thenApply(
-                                            resolved ->
-                                                    new TargetRestore(
-                                                            resolved.request(),
+                        primary -> {
+                            if (primary.snapshot().isMarkerlessActor()) {
+                                return targetProfile(prepare, payload, List.of(primary))
+                                        .thenApply(
+                                                profile -> {
+                                                    var request = profile.request();
+                                                    byte[] authorityPayload =
+                                                            new ZLinkActorAuthorityPayloadCodec()
+                                                                    .encodeRelocationTarget(
+                                                                            request.stableType(),
+                                                                            prepare.object()
+                                                                                    .objectId(),
+                                                                            request.spotId(),
+                                                                            profile
+                                                                                    .actorSpotGeneration(),
+                                                                            profile.actorSpotKind(),
+                                                                            request.targetOwnerId(),
+                                                                            request
+                                                                                    .targetOwnerLeaseGeneration(),
+                                                                            request.meshName(),
+                                                                            request.targetNodeRid(),
+                                                                            request
+                                                                                    .targetNodeGeneration());
+                                                    var inventory =
+                                                            ZLinkAggregateRelocationCoordinator
+                                                                    .reconstructActorInventory(
+                                                                            primary,
+                                                                            authorityPayload);
+                                                    return new TargetRestore(
+                                                            request,
                                                             authorityRequest(
                                                                     prepare, payload, inventory,
-                                                                    resolved)));
+                                                                    profile));
+                                                });
+                            }
+                            return coordinator
+                                    .readSealedInventory(fence, primary, OPEN)
+                                    .thenCompose(
+                                            inventory -> {
+                                                var entries =
+                                                        inventory.stream()
+                                                                .map(
+                                                                        ZLinkAggregateRelocationCoordinator
+                                                                                        .SealedParticipant
+                                                                                ::authority)
+                                                                .toList();
+                                                return targetProfile(prepare, payload, entries)
+                                                        .thenApply(
+                                                                profile ->
+                                                                        new TargetRestore(
+                                                                                profile.request(),
+                                                                                authorityRequest(
+                                                                                        prepare,
+                                                                                        payload,
+                                                                                        inventory,
+                                                                                        profile)));
+                                            });
                         });
+    }
+
+    private CompletionStage<ZLinkSpotRetireControl.TargetProfile> targetProfile(
+            ZLinkCanonicalRelocationProtocol.Prepare prepare,
+            byte[] payload,
+            List<ZLinkAuthorityEntry> entries) {
+        var profile = stageRequest(prepare, payload, entries);
+        return target.applyTargetProfile(profile, () -> awaitShellPublication(profile));
     }
 
     private CompletionStage<Void> awaitShellPublication(
