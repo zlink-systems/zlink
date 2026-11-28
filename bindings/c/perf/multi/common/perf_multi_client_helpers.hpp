@@ -1013,82 +1013,7 @@ inline bool run_echo_window_round_robin (
     if (!create_send_wait_tracker (sockets, ZLINK_POLLIN, &tracker))
         return false;
 
-    const auto drain_socket = [&] (send_wait_slot_t *slot, bool count_metrics) -> bool {
-        if (!slot || !slot->socket)
-            return false;
-        while (true) {
-            perf_multi_metric::header_t header;
-            std::memset (&header, 0, sizeof (header));
-            bool decoded = false;
-            const int recv_rc = recv_one_message_header (
-              slot->socket, client_router_send, scratch, ZLINK_DONTWAIT, scratch.size (), &header,
-              &decoded);
-            if (recv_rc < 0)
-                return false;
-            if (recv_rc == 0)
-                return true;
-            if (!decoded || !metric_header_matches (header, run_id, phase, expected_msg_size)) {
-                if (bench_debug_enabled ()
-                    && g_debug_header_logs.fetch_add (1, std::memory_order_acq_rel) < 16) {
-                    std::cerr << "[perf-multi-echo] header mismatch phase="
-                              << static_cast<unsigned int> (phase) << " run_id=" << run_id
-                              << " decoded=" << decoded << " header_run_id=" << header.run_id
-                              << " expected_size=" << expected_msg_size
-                              << " header_size=" << header.msg_size << " header_phase="
-                              << static_cast<unsigned int> (header.phase) << std::endl;
-                }
-                continue;
-            }
-            if (slot->replies == 0) {
-                errno = EPROTO;
-                return false;
-            }
-            --slot->replies;
-
-            const uint64_t received_ns = perf_multi_metric::now_ns ();
-            if (schedule && paced_received_out
-                && perf_multi_measurement::latency_sample (received_ns, latency_epoch,
-                                                           settings.latency_duration_seconds))
-                ++*paced_received_out;
-            const bool inside_active_deadline = received_ns < acceptance_deadline_ns;
-            // Paced samples are selected by actual attempt time; include their
-            // echoes during the bounded drain and discard the first 0.5 seconds.
-            if (schedule) {
-                if (!perf_multi_measurement::latency_sample (header.sent_ts_ns, latency_epoch,
-                                                             settings.latency_duration_seconds))
-                    continue;
-            } else if (!count_metrics || !inside_active_deadline)
-                continue;
-
-            ++local_recv;
-            if (collect_latency) {
-                if (header.sent_ts_ns > 0 && received_ns >= header.sent_ts_ns) {
-                    const double sample_ns =
-                      static_cast<double> (received_ns - header.sent_ts_ns) * 0.5;
-                    lat_sum_local += sample_ns;
-                    ++lat_count_local;
-                    lat_samples.add (sample_ns);
-                }
-            }
-        }
-    };
-
-    const auto service_events = [&] (int event_count, bool count_metrics) -> bool {
-        if (!service_tracker_writable_events (&tracker, event_count, &accepted,
-                                              acceptance_deadline_ns, schedule, count_metrics))
-            return false;
-        for (int i = 0; i < event_count; ++i) {
-            zlink_poller_event_t &event = tracker.events[static_cast<size_t> (i)];
-            if ((event.events & ZLINK_POLLIN) == 0)
-                continue;
-            send_wait_slot_t *slot = tracker_event_slot (event);
-            if (!slot || !drain_socket (slot, count_metrics))
-                return false;
-        }
-        return true;
-    };
-
-    while (std::chrono::steady_clock::now () < deadline && !fatal_error) {
+    const auto submit_due = [&] () -> bool {
         bool submitted = false;
         if (allow_send) {
             for (size_t visited = 0; visited < sockets.size ();) {
@@ -1164,6 +1089,95 @@ inline bool run_echo_window_round_robin (
             }
         }
 
+        return submitted;
+    };
+
+    const auto drain_socket = [&] (send_wait_slot_t *slot, bool count_metrics,
+                                   size_t &received_since_submit) -> bool {
+        if (!slot || !slot->socket)
+            return false;
+        const bool paced = schedule && count_metrics;
+        for (;; ++received_since_submit) {
+            if (paced && received_since_submit == perf_multi_measurement::max_burst_per_sender) {
+                submit_due ();
+                if (fatal_error)
+                    return false;
+                received_since_submit = 0;
+            }
+            perf_multi_metric::header_t header;
+            std::memset (&header, 0, sizeof (header));
+            bool decoded = false;
+            const int recv_rc = recv_one_message_header (
+              slot->socket, client_router_send, scratch, ZLINK_DONTWAIT, scratch.size (), &header,
+              &decoded);
+            if (recv_rc < 0)
+                return false;
+            if (recv_rc == 0)
+                return true;
+            if (!decoded || !metric_header_matches (header, run_id, phase, expected_msg_size)) {
+                if (bench_debug_enabled ()
+                    && g_debug_header_logs.fetch_add (1, std::memory_order_acq_rel) < 16) {
+                    std::cerr << "[perf-multi-echo] header mismatch phase="
+                              << static_cast<unsigned int> (phase) << " run_id=" << run_id
+                              << " decoded=" << decoded << " header_run_id=" << header.run_id
+                              << " expected_size=" << expected_msg_size
+                              << " header_size=" << header.msg_size << " header_phase="
+                              << static_cast<unsigned int> (header.phase) << std::endl;
+                }
+                continue;
+            }
+            if (slot->replies == 0) {
+                errno = EPROTO;
+                return false;
+            }
+            --slot->replies;
+
+            const uint64_t received_ns = perf_multi_metric::now_ns ();
+            if (schedule && paced_received_out
+                && perf_multi_measurement::latency_sample (received_ns, latency_epoch,
+                                                           settings.latency_duration_seconds))
+                ++*paced_received_out;
+            const bool inside_active_deadline = received_ns < acceptance_deadline_ns;
+            // Paced samples are selected by actual attempt time; include their
+            // echoes during the bounded drain and discard the first 0.5 seconds.
+            if (schedule) {
+                if (!perf_multi_measurement::latency_sample (header.sent_ts_ns, latency_epoch,
+                                                             settings.latency_duration_seconds))
+                    continue;
+            } else if (!count_metrics || !inside_active_deadline)
+                continue;
+
+            ++local_recv;
+            if (collect_latency) {
+                if (header.sent_ts_ns > 0 && received_ns >= header.sent_ts_ns) {
+                    const double sample_ns =
+                      static_cast<double> (received_ns - header.sent_ts_ns) * 0.5;
+                    lat_sum_local += sample_ns;
+                    ++lat_count_local;
+                    lat_samples.add (sample_ns);
+                }
+            }
+        }
+    };
+
+    const auto service_events = [&] (int event_count, bool count_metrics) -> bool {
+        if (!service_tracker_writable_events (&tracker, event_count, &accepted,
+                                              acceptance_deadline_ns, schedule, count_metrics))
+            return false;
+        size_t received_since_submit = 0;
+        for (int i = 0; i < event_count; ++i) {
+            zlink_poller_event_t &event = tracker.events[static_cast<size_t> (i)];
+            if ((event.events & ZLINK_POLLIN) == 0)
+                continue;
+            send_wait_slot_t *slot = tracker_event_slot (event);
+            if (!slot || !drain_socket (slot, count_metrics, received_since_submit))
+                return false;
+        }
+        return true;
+    };
+
+    while (std::chrono::steady_clock::now () < deadline && !fatal_error) {
+        const bool submitted = submit_due ();
         if (fatal_error)
             break;
 
