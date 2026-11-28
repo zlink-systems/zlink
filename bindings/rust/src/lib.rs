@@ -49,7 +49,7 @@ pub use contracts::eventing::poller::{
     Pollable, Poller, poll,
 };
 pub use contracts::eventing::timer::Timer;
-pub use contracts::messaging::message::Message;
+pub use contracts::messaging::message::{Message, multipart_close};
 pub use contracts::messaging::operation_contracts::{CompletionKind, SendResult};
 pub use contracts::messaging::operations::{
     Empty, PublishOp, Ready, ReplyOp, RequestOp, RequestSubmission, SendOp, SendSubmission,
@@ -71,5 +71,3 @@ pub use contracts::sockets::socket_options::{
     SubSocketOptions, SubmitRetryMode,
 };
 pub use contracts::sockets::stream_socket::{StreamPacket, StreamSocket};
-
-pub use runtime::core::runtime::multipart_close;

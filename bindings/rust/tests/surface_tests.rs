@@ -5,6 +5,8 @@
 //! - Typed option surfaces exist (no raw option bags)
 //! - Monitor canonical surface exists (recv)
 
+use std::time::Duration;
+
 mod test_support;
 
 use zlink::{
@@ -199,7 +201,9 @@ fn common_typed_options() {
     options.set_receive_high_water_mark(2000).unwrap();
     assert_eq!(options.receive_high_water_mark().unwrap(), 2000);
 
-    options.set_linger(100).unwrap();
+    options
+        .set_linger(Some(Duration::from_millis(100)))
+        .unwrap();
     assert_eq!(options.submit_retry_mode().unwrap(), SubmitRetryMode::Off);
     assert_eq!(
         options.submit_retry_timeout().unwrap(),
@@ -237,7 +241,7 @@ fn router_typed_options() {
     router.set_probe(false).unwrap();
     sock.set_routing_id(&RoutingId::from(b"router-surface"))
         .unwrap();
-    common.set_linger(1).unwrap();
+    common.set_linger(Some(Duration::from_millis(1))).unwrap();
     common
         .set_rid_duplicate_policy(RidDuplicatePolicy::Reject)
         .unwrap();
@@ -252,7 +256,9 @@ fn pub_typed_options() {
     pub_options.set_verbose(false).unwrap();
     pub_options.set_verboser(false).unwrap();
     pub_options.set_no_drop(false).unwrap();
-    common.set_receive_timeout(1).unwrap();
+    common
+        .set_receive_timeout(Some(Duration::from_millis(1)))
+        .unwrap();
 }
 
 #[test]

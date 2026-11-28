@@ -639,7 +639,10 @@ fn submit_result_backpressure_admits_after_writable_then_completes_reply() {
         .common_options()
         .set_receive_high_water_mark(RECORD_HWM)
         .unwrap();
-    router.common_options().set_receive_timeout(5000).unwrap();
+    router
+        .common_options()
+        .set_receive_timeout(Some(Duration::from_millis(5000)))
+        .unwrap();
     router
         .bind("inproc://rust-submit-result-backpressured")
         .unwrap();
@@ -755,7 +758,10 @@ fn ordinary_router_message_has_no_reply_token() {
     let mut received = Received::empty();
     router_socket.recv(&mut received, RecvFlags::NONE).unwrap();
     let reply_token = received.reply_token();
-    assert_eq!(received.single_part().unwrap().as_bytes(), b"plain-data");
+    assert_eq!(
+        received.single_part_or_throw().unwrap().as_bytes(),
+        b"plain-data"
+    );
     assert_eq!(reply_token, None);
 }
 

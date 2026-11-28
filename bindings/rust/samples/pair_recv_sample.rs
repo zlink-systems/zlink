@@ -33,7 +33,8 @@ fn main() {
     server
         .recv(&mut received, zlink::RecvFlags::NONE)
         .expect("recv failed");
-    let payload = received.parts()[0].as_str().expect("utf8 error");
+    let message = received.single_part_or_throw().expect("expected one part");
+    let payload = message.as_str().expect("utf8 error");
     assert_eq!(payload, "hello-pair");
     println!("[pair/recv] send: \"hello-pair\" -> recv: \"{}\"", payload);
     // --8<-- [end:doc]
