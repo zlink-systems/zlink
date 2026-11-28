@@ -17,21 +17,21 @@ check() {
 }
 
 sender_rotation() {
-  rg -qF '++_accepted < MaxBurstPerSender' "$multi/common/PerfCommonMulti.cs" &&
-    rg -qF 'rotation.Accepted()' "$multi/src/PerfMultiDealerDealerClient.cs" &&
-    ! rg -qF 'SendLoopAsync' "$multi/src/PerfMultiDealerDealerClient.cs"
+  grep -qF '++_accepted < MaxBurstPerSender' "$multi/common/PerfCommonMulti.cs" &&
+    grep -qF 'rotation.Accepted()' "$multi/src/PerfMultiDealerDealerClient.cs" &&
+    ! grep -qF 'SendLoopAsync' "$multi/src/PerfMultiDealerDealerClient.cs"
 }
 
 reply_interleave() {
-  rg -qF '++_received == MaxBurstPerSender' "$multi/common/PerfCommonMulti.cs" &&
-    rg -qF 'replyTurn?.Received()' "$multi/src/PerfMultiDealerRouterClient.cs" &&
-    rg -qF 'replyTurn?.Received()' "$multi/src/PerfMultiRouterRouterClient.cs"
+  grep -qF '++_received == MaxBurstPerSender' "$multi/common/PerfCommonMulti.cs" &&
+    grep -qF 'replyTurn?.Received()' "$multi/src/PerfMultiDealerRouterClient.cs" &&
+    grep -qF 'replyTurn?.Received()' "$multi/src/PerfMultiRouterRouterClient.cs"
 }
 
 catch_up() {
-  rg -qF 'InFlight <= WindowStartInFlight' "$multi/src/PerfMultiPubSubClient.cs" &&
-    rg -qF 'minimumDelta + ReceiveQuantum >= scheduled - _windowScheduled' "$multi/src/PerfMultiPubSubClient.cs" &&
-    rg -qF 'catchUp.Observe(' "$multi/src/PerfMultiPubSubClient.cs"
+  grep -qF 'InFlight <= WindowStartInFlight' "$multi/src/PerfMultiPubSubClient.cs" &&
+    grep -qF 'minimumDelta + ReceiveQuantum >= scheduled - _windowScheduled' "$multi/src/PerfMultiPubSubClient.cs" &&
+    grep -qF 'catchUp.Observe(' "$multi/src/PerfMultiPubSubClient.cs"
 }
 
 check '1 sender rotation' sender_rotation
