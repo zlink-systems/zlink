@@ -6710,7 +6710,7 @@ function appendCanonicalActorJoinRecovery(
         nodeGeneration: coordinator.nodeGeneration,
         expectedAuthorityStoreVersion: coordinator.expectedAuthorityStoreVersion
       },
-      operationId: recovery.admissionOperationId,
+      operationId: profile.completionOperationId,
       ...(recovery.replyContentType === undefined
         ? {}
         : { replyContentType: recovery.replyContentType }),

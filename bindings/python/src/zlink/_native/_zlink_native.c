@@ -1614,7 +1614,6 @@ static PyObject *py_msg_bytes (PyObject *self, PyObject *arg)
 static PyMethodDef zlink_native_methods[] = {
   {"message_data", py_message_data, METH_VARARGS, "Build the writable ctypes-backed Message view."},
   {"msg_close", py_msg_close, METH_O, "Close one native message."},
-  {"start_request", py_start_request, METH_VARARGS, "Materialize, submit and register one managed request."},
   {"start_send", py_start_send, METH_VARARGS, "Materialize, submit and register one managed send."},
   {"completion_messages", py_completion_messages, METH_VARARGS, "Clone completion payload into independent Messages."},
   {"install_owner_methods", py_install_owner_methods, METH_O, "Install the native completion drain loop."},
