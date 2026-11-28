@@ -13,7 +13,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Supplier;
 import java.util.logging.LogRecord;
@@ -22,7 +21,7 @@ import java.util.logging.LogRecord;
 public final class ZLinkTelemetryOwner {
     static final int PENDING_LIMIT = 8192;
     private static final ZLinkTelemetryOwner PROCESS = new ZLinkTelemetryOwner();
-    private final ConcurrentLinkedQueue<Delivery> pending = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Diagnostic> pending = new ConcurrentLinkedQueue<>();
     private final AtomicInteger pendingCount = new AtomicInteger();
     private final Overflow flowOverflow = new Overflow(true);
     private final Overflow diagnosticOverflow = new Overflow(false);
@@ -63,7 +62,7 @@ public final class ZLinkTelemetryOwner {
         return new Host();
     }
 
-    /** Admission state only; never retains the host runtime, registration or activator. */
+    /** Controls whether this host can submit diagnostics. */
     public static final class Host implements AutoCloseable {
         private volatile boolean retired;
 
@@ -71,21 +70,7 @@ public final class ZLinkTelemetryOwner {
 
         @Override
         public void close() {
-            if (retired) return;
             retired = true;
-            PROCESS.retire(this);
-        }
-    }
-
-    private static final class Delivery {
-        private static final AtomicReferenceFieldUpdater<Delivery, Diagnostic> RECORD =
-                AtomicReferenceFieldUpdater.newUpdater(Delivery.class, Diagnostic.class, "record");
-        private final Host host;
-        private volatile Diagnostic record;
-
-        private Delivery(Host host, Diagnostic record) {
-            this.host = host;
-            this.record = record;
         }
     }
 
@@ -180,14 +165,12 @@ public final class ZLinkTelemetryOwner {
             if (pendingCount.compareAndSet(count, count + 1)) break;
             count = pendingCount.get();
         }
-        var delivery = new Delivery(host, record);
-        pending.add(delivery);
-        // Retirement may have scanned the queue before this producer published its reservation.
-        // Unlink that late entry before returning its slot, even if the worker is in a provider.
-        if (retired(host) && pending.remove(delivery)) {
-            claim(delivery);
+        // The lease check commits admission before the worker can see the record.
+        if (retired(host)) {
+            pendingCount.decrementAndGet();
             return;
         }
+        pending.add(record);
         signal();
     }
 
@@ -197,21 +180,6 @@ public final class ZLinkTelemetryOwner {
             if (started.get()) LockSupport.unpark(worker);
             else prepare();
         }
-    }
-
-    private void retire(Host host) {
-        pending.removeIf(
-                delivery -> {
-                    if (delivery.host != host) return false;
-                    claim(delivery);
-                    return true;
-                });
-    }
-
-    private Diagnostic claim(Delivery delivery) {
-        Diagnostic record = Delivery.RECORD.getAndSet(delivery, null);
-        if (record != null) pendingCount.decrementAndGet();
-        return record;
     }
 
     private void run() {
@@ -230,10 +198,10 @@ public final class ZLinkTelemetryOwner {
             executing = true;
             flowOverflow.report();
             diagnosticOverflow.report();
-            Delivery delivery = pending.poll();
-            if (delivery != null) {
-                Diagnostic record = claim(delivery);
-                if (record != null && !retired(delivery.host)) deliver(record);
+            Diagnostic record = pending.poll();
+            if (record != null) {
+                pendingCount.decrementAndGet();
+                deliver(record);
             }
         }
     }
