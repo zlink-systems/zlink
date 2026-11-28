@@ -6,6 +6,7 @@
 #include "runtime/dispatch/host_capacity_runtime.hpp"
 #include "runtime/streams/stream_host_ingress.hpp"
 #include "runtime/streams/stream_startup_test_probe.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/utils/poll_interval_wait.hpp"
 #include <boost/asio/post.hpp>
@@ -526,6 +527,56 @@ stream_host_service_t::~stream_host_service_t ()
     stop ();
 }
 
+void stream_host_service_t::bind_admission_queue (
+  std::shared_ptr<admission_queue::queue_node_t> queue)
+{
+    _ingress->bind_queue (std::move (queue));
+}
+
+task_t<void>
+stream_host_service_t::report_admission (std::weak_ptr<stream_host_ingress_t> weak_ingress,
+                                         std::shared_ptr<std::atomic_bool> stop,
+                                         detail::delay_owner_t &delays,
+                                         std::stop_token cancellation,
+                                         std::vector<std::weak_ptr<listener_t>> listeners)
+{
+    using clock = std::chrono::steady_clock;
+    constexpr auto period = std::chrono::seconds (1);
+    auto next = clock::now ();
+    while (!stop->load (std::memory_order_acquire)) {
+        const auto ingress = weak_ingress.lock ();
+        if (!ingress)
+            break;
+        try {
+            auto deliveries =
+              co_await ingress->queue ()->report (ingress->limit (), ingress->in_flight ());
+            if (!deliveries.empty ()) {
+                auto batch = std::make_shared<const std::vector<admission_queue::delivery_t>> (
+                  std::move (deliveries));
+                for (const auto &weak_listener : listeners) {
+                    if (const auto listener = weak_listener.lock ())
+                        listener->push_admission (batch);
+                }
+            }
+        }
+        catch (const std::exception &) {
+            for (const auto &weak_listener : listeners) {
+                if (const auto listener = weak_listener.lock ()) {
+                    listener->report_admission_error (std::current_exception ());
+                    break;
+                }
+            }
+        }
+        const auto now = clock::now ();
+        next += period;
+        if (next <= now)
+            next = now + period;
+        co_await delays.start (std::chrono::ceil<std::chrono::milliseconds> (next - now),
+                               cancellation);
+    }
+    co_return;
+}
+
 task_t<void> stream_host_service_t::start (service_provider_t &services)
 {
     try {
@@ -533,6 +584,8 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
             set_admission_locked (admission_t::accepting);
             if (_admission.load (std::memory_order_relaxed) == admission_t::accepting)
                 _transport_stop.store (false, std::memory_order_release);
+            _admission_report_stop->store (_transport_stop.load (std::memory_order_relaxed),
+                                           std::memory_order_release);
         });
         if (_monitoring)
             _ingress->connect_metrics (_monitoring->metric_provider);
@@ -587,6 +640,13 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
                     request_stop ();
                 }
             });
+            if (_ingress->queue () && _delay_owner) {
+                const auto owned = listener_snapshot ();
+                std::vector<std::weak_ptr<listener_t>> listeners (owned.begin (), owned.end ());
+                auto reporter = report_admission (_ingress, _admission_report_stop, *_delay_owner,
+                                                  _shutdown_cancellation, std::move (listeners));
+                (void) reporter;
+            }
         }
     }
     catch (...) {
@@ -685,6 +745,7 @@ stream_host_service_t::listeners_t stream_host_service_t::request_listener_stop 
     auto listeners = with_listeners ([&] (const listeners_t &owned) {
         set_admission_locked (next);
         _transport_stop.store (true, std::memory_order_release);
+        _admission_report_stop->store (true, std::memory_order_release);
         return owned;
     });
     _liveness_io.stop ();

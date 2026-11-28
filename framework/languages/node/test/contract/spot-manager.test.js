@@ -285,8 +285,8 @@ test('Mesh actor ingress uses the current runtime owner for handoff capture', as
       meshName: 'test.mesh',
       spotId: currentSpotId
     }),
-    async dispatchEntryActorPacket(_origin, _actorId, _parts, _returnResponse, _boundTarget, fallback) {
-      fallbackActorRef = fallback;
+    async dispatchEntryActorDelivery(delivery) {
+      fallbackActorRef = delivery.fallbackActorRef;
     }
   });
 
@@ -316,12 +316,12 @@ test('Mesh actor ingress routes the concrete Entry Spot RID to Entry Spot actor 
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
     entryNodeRidProvider: () => entryNodeRid,
-    async dispatchEntryActorPacket(_origin, actorId, parts, returnResponse, _boundTarget, fallback) {
+    async dispatchEntryActorDelivery({ actorId, parts, returnResponse, fallbackActorRef }) {
       dispatched = true;
       assert.equal(actorId, 'actor-1');
       assert.deepEqual(parts, []);
       assert.equal(returnResponse, false);
-      assert.equal(fallback.actorId, 'actor-1');
+      assert.equal(fallbackActorRef.actorId, 'actor-1');
     }
   });
 

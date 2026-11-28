@@ -20,6 +20,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     private readonly TimeProvider _timeProvider;
     private readonly ZLinkStreamNodeRegistration _livenessOptions;
     private readonly ZLinkAuthenticationAdmission _authenticationAdmission;
+    private readonly ZLinkAdmissionQueueNode? _admissionQueue;
     private readonly string _transport;
     private readonly long _maxMessageSize;
     private readonly ZLinkApplicationJobQueue _applicationJobQueue;
@@ -47,7 +48,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         string? advertisedEndpoint = null,
         long maxMessageSize = ZLinkSocketConfig.DefaultStreamMaxMessageSize,
         ZLinkApplicationJobQueue? applicationJobQueue = null,
-        ZLinkAuthenticationAdmission? authenticationAdmission = null
+        ZLinkAuthenticationAdmission? authenticationAdmission = null,
+        ZLinkAdmissionQueueNode? admissionQueue = null
     )
     {
         NodeName = nodeName;
@@ -82,6 +84,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         _authenticationAdmission =
             authenticationAdmission
             ?? new ZLinkAuthenticationAdmission(_livenessOptions.AuthenticationAdmission);
+        _admissionQueue = admissionQueue;
         _sessionIngress = new ZLinkSessionSerialExecutor(runtime.ExecutionOwner, runtime.ErrorSink);
         _controlIngress = new ZLinkSessionSerialExecutor(runtime.ExecutionOwner, runtime.ErrorSink);
         _sessions = new ZLinkStreamSessionTable(
@@ -94,7 +97,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             actorDispatchEnabled,
             _runtime.ErrorSink,
             _livenessOptions,
-            _readerLiveness
+            _readerLiveness,
+            admissionQueue
         );
     }
 
@@ -625,48 +629,44 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                 return true;
             }
 
-            if (!_authenticationAdmission.TryAdmit(decoded, out var authentication))
+            ZLinkAuthenticationAdmission.Lease? authentication = null;
+            if (_authenticationAdmission.IsAuthentication(decoded))
             {
-                frame.Dispose();
-                if (await _sessions.TryGetAsync(routingId).ConfigureAwait(false) is { } session)
-                    session.RecordRejectedApplicationInbound();
-
-                var error = new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    "Authentication admission is full."
-                );
-                using var flow = ZLinkFlowContext.Enter(
-                    decoded.FlowId,
-                    decoded.FlowOrigin is { } origin
-                        ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(origin)
-                        : null,
-                    _runtime.Flow.CaptureEnabled,
-                    ZLinkFlowOrigin.Inbound
-                );
-                if (_runtime.Flow.DispatchErrorsEnabled)
-                    _runtime.Flow.TraceDispatchError(
-                        new ZLinkDispatchFailure(
-                            ZLinkDispatchErrorSurface.StreamSession,
-                            ZLinkDispatchMessageKind.Request,
-                            ZLinkDispatchErrorReason.Backpressure,
-                            ZLinkDispatchErrorAction.ReplyError,
-                            decoded.Name,
-                            SourceRid: routingId.ToString(),
-                            CorrelationId: decoded.CorrelationId,
-                            Exception: error
-                        )
+                var epoch = 0UL;
+                if (_admissionQueue is { } queue)
+                {
+                    epoch = queue.Verify(
+                        decoded.Metadata.Get(ZLinkAdmissionQueueNode.TicketKey),
+                        NodeName,
+                        routingId
                     );
-                var (_, reply) = ZLinkSessionStreamTransport.EncodeError(
-                    decoded,
-                    error,
-                    _authenticationAdmission.RetryMetadata
-                );
-                ZLinkUnawaitedSubmit.Observe(
-                    new ValueTask(Socket.SendAsync(routingId, reply, _stopSource.Token)),
-                    "stream-authentication-admission-rejection",
-                    _runtime.ErrorSink
-                );
-                return true;
+                    if (epoch == 0)
+                    {
+                        frame.Dispose();
+                        await RejectAuthenticationAsync(
+                                routingId,
+                                decoded,
+                                ZLinkAdmissionQueueNode.QueueRequired,
+                                "Authentication requires an admission ticket."
+                            )
+                            .ConfigureAwait(false);
+                        return true;
+                    }
+                }
+
+                authentication = _authenticationAdmission.TryAcquire(epoch);
+                if (authentication is null)
+                {
+                    frame.Dispose();
+                    await RejectAuthenticationAsync(
+                            routingId,
+                            decoded,
+                            _authenticationAdmission.RetryMetadata,
+                            "Authentication admission is full."
+                        )
+                        .ConfigureAwait(false);
+                    return true;
+                }
             }
 
             var admitted = false;
@@ -702,6 +702,67 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             frame.Dispose();
             throw;
         }
+    }
+
+    private async ValueTask RejectAuthenticationAsync(
+        RoutingId routingId,
+        ZlinkStreamHeader decoded,
+        ZlinkStreamMetadata metadata,
+        string message
+    )
+    {
+        if (await _sessions.TryGetAsync(routingId).ConfigureAwait(false) is { } session)
+            session.RecordRejectedApplicationInbound();
+
+        var error = new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, message);
+        using var flow = ZLinkFlowContext.Enter(
+            decoded.FlowId,
+            decoded.FlowOrigin is { } origin
+                ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(origin)
+                : null,
+            _runtime.Flow.CaptureEnabled,
+            ZLinkFlowOrigin.Inbound
+        );
+        if (_runtime.Flow.DispatchErrorsEnabled)
+            _runtime.Flow.TraceDispatchError(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.StreamSession,
+                    ZLinkDispatchMessageKind.Request,
+                    ZLinkDispatchErrorReason.Backpressure,
+                    ZLinkDispatchErrorAction.ReplyError,
+                    decoded.Name,
+                    SourceRid: routingId.ToString(),
+                    CorrelationId: decoded.CorrelationId,
+                    Exception: error
+                )
+            );
+        var (_, reply) = ZLinkSessionStreamTransport.EncodeError(decoded, error, metadata);
+        ZLinkUnawaitedSubmit.Observe(
+            new ValueTask(Socket.SendAsync(routingId, reply, _stopSource.Token)),
+            "stream-authentication-admission-rejection",
+            _runtime.ErrorSink
+        );
+    }
+
+    internal async ValueTask DeliverAdmissionAsync(
+        AdmissionDelivery delivery,
+        CancellationToken cancellationToken
+    )
+    {
+        ZLinkAdmissionTicket.TryDecode(delivery.SessionRid, out var bytes);
+        var session = await _sessions.TryGetAsync(RoutingId.From(bytes)).ConfigureAwait(false);
+        if (session is null)
+            return;
+        ZLinkUnawaitedSubmit.Observe(
+            ZLinkAdmissionStreamPackets.DeliverAsync(
+                session.Stream,
+                delivery,
+                null,
+                cancellationToken
+            ),
+            "admission-queue-delivery",
+            _runtime.ErrorSink
+        );
     }
 
     private async Task<bool> AdmitApplicationPacketAsync(
