@@ -34,6 +34,8 @@ provider each intervene differently.
 | Provider | Configures the structured logger, metric exporter, and telemetry provider. Delaying processing or changing the result is forbidden. |
 | Operational tooling | Doesn't intervene inside an unregistered process, and judges process state using only public query/subscription and structured log. |
 
+**Diagnostic records the Framework emits itself don't delay processing either.** Log and diagnostic records the Framework creates on an execution resource that runs I/O, receiving, a lane, or Store completion are not passed to a provider synchronously on that resource (including file sinks, callbacks, and language default loggers such as JUL, `ILogger`, and `console`); they are handed to the process-lifetime diagnostic delivery worker. Its queue is bounded; when it is full, new records are dropped and the loss count is recorded as a metric. Records left for a stopping host are dropped when that host's lease ends. Handing a record over creates no wait beyond allocation and copying.
+
 ## 2. Documents in This Topic
 
 | Document in this topic | Ownership scope |

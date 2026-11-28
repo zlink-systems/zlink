@@ -1,6 +1,7 @@
 package systems.zlink.stream.connector;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -1464,12 +1465,21 @@ final class ZLinkStreamConnectorTest {
                                     false,
                                     false,
                                     ZLinkStreamCompression.NONE));
+            long startedAt = System.nanoTime();
             var failure =
                     assertThrows(
                             ZLinkStreamException.class,
-                            () -> ConnectorTestAwait.await(connector.connect()));
-            assertEquals(ZLinkStreamErrorCode.TLS_VALIDATION_FAILED, failure.errorCode());
-            assertInstanceOf(SSLHandshakeException.class, failure.getCause());
+                            () -> ConnectorTestAwait.await(connector.connect()),
+                            () -> server.connectTiming(startedAt, System.nanoTime()));
+            long finishedAt = System.nanoTime();
+            assertEquals(
+                    ZLinkStreamErrorCode.TLS_VALIDATION_FAILED,
+                    failure.errorCode(),
+                    () -> server.connectTiming(startedAt, finishedAt));
+            assertInstanceOf(
+                    SSLHandshakeException.class,
+                    failure.getCause(),
+                    () -> server.connectTiming(startedAt, finishedAt));
             assertEquals(ZLinkStreamConnectionState.DISCONNECTED, connector.state());
         }
     }
@@ -1600,7 +1610,10 @@ final class ZLinkStreamConnectorTest {
                 new SecureWebSocketStreamConnectorTestServer()) {
             ZLinkStreamConnector connector =
                     createConnector(server.options(ZLinkStreamDispatchMode.MANUAL));
-            ConnectorTestAwait.await(connector.connect());
+            long startedAt = System.nanoTime();
+            assertDoesNotThrow(
+                    () -> ConnectorTestAwait.await(connector.connect()),
+                    () -> server.connectTiming(startedAt, System.nanoTime()));
 
             var requestFrame = server.readFrameAsync();
             var replyFuture =
