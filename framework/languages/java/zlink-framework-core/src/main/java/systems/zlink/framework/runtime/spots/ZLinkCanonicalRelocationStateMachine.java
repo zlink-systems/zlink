@@ -33,6 +33,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacity
 import systems.zlink.framework.runtime.internal.locations.ZLinkSpotTypeCapacityDelta;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.relocation.ZLinkAuthorityUnsettledAtStopException;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
@@ -602,11 +603,7 @@ final class ZLinkCanonicalRelocationStateMachine
 
         void stop() {
             stopped = true;
-            result.completeExceptionally(
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.UNAVAILABLE,
-                            "Relocation unit is unsettled at the host stop deadline; retry on"
-                                    + " another node"));
+            result.completeExceptionally(new ZLinkAuthorityUnsettledAtStopException());
         }
     }
 

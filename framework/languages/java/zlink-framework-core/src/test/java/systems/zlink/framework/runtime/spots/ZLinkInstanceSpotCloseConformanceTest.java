@@ -14,6 +14,7 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.*;
+import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.binding.ZLinkJavaReadyRouteTestAccess;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -35,6 +36,8 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiConsumer;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
@@ -372,12 +375,14 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                             observeUntil(
                                             runtime.routeMeshRuntime().observe(MESH, 8),
                                             status ->
-                                                    status.isReady() && status.readyPeerCount() > 0)
+                                                    status.isReady() && status.readyPeerCount() > 0,
+                                            null)
                                     .get(WAIT.toSeconds(), TimeUnit.SECONDS);
                             observeUntil(
                                             sourceRuntime.routeMeshRuntime().observe(MESH, 8),
                                             status ->
-                                                    status.isReady() && status.readyPeerCount() > 0)
+                                                    status.isReady() && status.readyPeerCount() > 0,
+                                            null)
                                     .get(WAIT.toSeconds(), TimeUnit.SECONDS);
                             long sourceGeneration =
                                     backend.mesh.peers().stream()
@@ -858,20 +863,66 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                             .toCompletableFuture()
                             .get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 }
-                try (ZLinkFrameworkRuntime target =
-                        targetOptions == null
-                                ? null
-                                : ZLinkFrameworkRuntimeTestAccess.start(
-                                        targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+                long targetStartStartedAt =
+                        targetOptions == null ? Long.MIN_VALUE : System.nanoTime();
+                long targetStartCompletedAt = Long.MIN_VALUE;
+                ZLinkFrameworkRuntime target;
+                try {
+                    target =
+                            targetOptions == null
+                                    ? null
+                                    : ZLinkFrameworkRuntimeTestAccess.start(
+                                            targetOptions, new ZLinkJavaBackendAdapterFactory());
+                    if (targetOptions != null) targetStartCompletedAt = System.nanoTime();
+                } catch (Exception | AssertionError failure) {
+                    failure.addSuppressed(
+                            new AssertionError(
+                                    peerReadinessTrace(
+                                            targetStartStartedAt,
+                                            targetStartCompletedAt,
+                                            Long.MIN_VALUE,
+                                            Long.MIN_VALUE,
+                                            runtime.routeMeshRuntime().snapshot(MESH),
+                                            null)));
+                    throw failure;
+                }
+                try (target) {
                     if (host.equals("Relocating")) {
-                        observeUntil(
-                                        runtime.routeMeshRuntime().observe(MESH, 8),
-                                        status -> status.isReady() && status.readyPeerCount() > 0)
-                                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                        observeUntil(
-                                        target.routeMeshRuntime().observe(MESH, 8),
-                                        status -> status.isReady() && status.readyPeerCount() > 0)
-                                .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        AtomicLong sourceReadyFirstObservedAt = new AtomicLong(Long.MIN_VALUE);
+                        AtomicLong targetReadyFirstObservedAt = new AtomicLong(Long.MIN_VALUE);
+                        try {
+                            observeUntil(
+                                            runtime.routeMeshRuntime().observe(MESH, 8),
+                                            status ->
+                                                    status.isReady() && status.readyPeerCount() > 0,
+                                            (status, ready) -> {
+                                                if (ready)
+                                                    sourceReadyFirstObservedAt.compareAndSet(
+                                                            Long.MIN_VALUE, System.nanoTime());
+                                            })
+                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                            observeUntil(
+                                            target.routeMeshRuntime().observe(MESH, 8),
+                                            status ->
+                                                    status.isReady() && status.readyPeerCount() > 0,
+                                            (status, ready) -> {
+                                                if (ready)
+                                                    targetReadyFirstObservedAt.compareAndSet(
+                                                            Long.MIN_VALUE, System.nanoTime());
+                                            })
+                                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                        } catch (Exception | AssertionError failure) {
+                            failure.addSuppressed(
+                                    new AssertionError(
+                                            peerReadinessTrace(
+                                                    targetStartStartedAt,
+                                                    targetStartCompletedAt,
+                                                    sourceReadyFirstObservedAt.get(),
+                                                    targetReadyFirstObservedAt.get(),
+                                                    runtime.routeMeshRuntime().snapshot(MESH),
+                                                    target.routeMeshRuntime().snapshot(MESH))));
+                            throw failure;
+                        }
                     }
                     CompletableFuture<Reply> initial =
                             runtime.route()
@@ -1282,7 +1333,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
             CompletionStage<?> operation)
             throws Exception {
         CompletableFuture<Void> reached =
-                observeUntil(runtime.observe(), status -> status.state() == expected);
+                observeUntil(runtime.observe(), status -> status.state() == expected, null);
         try {
             CompletableFuture.anyOf(reached, operation.toCompletableFuture())
                     .get(WAIT.toSeconds(), TimeUnit.SECONDS);
@@ -1311,7 +1362,8 @@ final class ZLinkInstanceSpotCloseConformanceTest {
 
     private static <T> CompletableFuture<Void> observeUntil(
             Flow.Publisher<systems.zlink.framework.monitoring.ZLinkObservedStatus<T>> publisher,
-            java.util.function.Predicate<T> accepted) {
+            java.util.function.Predicate<T> accepted,
+            @Nullable BiConsumer<T, Boolean> observed) {
         CompletableFuture<Void> reached = new CompletableFuture<>();
         reached.orTimeout(WAIT.toSeconds(), TimeUnit.SECONDS);
         publisher.subscribe(
@@ -1323,7 +1375,9 @@ final class ZLinkInstanceSpotCloseConformanceTest {
 
                     public void onNext(
                             systems.zlink.framework.monitoring.ZLinkObservedStatus<T> value) {
-                        if (accepted.test(value.status())) reached.complete(null);
+                        boolean matched = accepted.test(value.status());
+                        if (observed != null) observed.accept(value.status(), matched);
+                        if (matched) reached.complete(null);
                     }
 
                     public void onError(Throwable error) {
@@ -1338,6 +1392,52 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                     }
                 });
         return reached;
+    }
+
+    private static String peerReadinessTrace(
+            long targetStartStartedAt,
+            long targetStartCompletedAt,
+            long sourceReadyFirstObservedAt,
+            long targetReadyFirstObservedAt,
+            @Nullable ZLinkMeshNodeSnapshot sourceLast,
+            @Nullable ZLinkMeshNodeSnapshot targetLast) {
+        return "target readiness timeline (elapsed ms from target start call): start="
+                + (targetStartStartedAt == Long.MIN_VALUE ? "not started" : "0")
+                + ", startReturned="
+                + (targetStartCompletedAt == Long.MIN_VALUE
+                        ? "not observed"
+                        : TimeUnit.NANOSECONDS.toMillis(
+                                targetStartCompletedAt - targetStartStartedAt))
+                + ", sourceReadyPeerFirstObserved="
+                + (sourceReadyFirstObservedAt == Long.MIN_VALUE
+                        ? "not observed"
+                        : TimeUnit.NANOSECONDS.toMillis(
+                                sourceReadyFirstObservedAt - targetStartStartedAt))
+                + ", targetReadyPeerFirstObserved="
+                + (targetReadyFirstObservedAt == Long.MIN_VALUE
+                        ? "not observed"
+                        : TimeUnit.NANOSECONDS.toMillis(
+                                targetReadyFirstObservedAt - targetStartStartedAt))
+                + "; sourceLastPeerState="
+                + (sourceLast == null
+                        ? "not observed"
+                        : sourceLast.state()
+                                + ", isReady="
+                                + sourceLast.isReady()
+                                + ", readyPeerCount="
+                                + sourceLast.readyPeerCount()
+                                + ", peers="
+                                + sourceLast.peers())
+                + "; targetLastPeerState="
+                + (targetLast == null
+                        ? "not observed"
+                        : targetLast.state()
+                                + ", isReady="
+                                + targetLast.isReady()
+                                + ", readyPeerCount="
+                                + targetLast.readyPeerCount()
+                                + ", peers="
+                                + targetLast.peers());
     }
 
     public record InitialProbe(String value) {
