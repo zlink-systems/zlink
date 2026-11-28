@@ -131,6 +131,35 @@ export function generateAggregateStorageFixtures(schema) {
       membershipMutation: keyFor("membershipMutation", { ...storageKeyFields, index: storageKeyInput.participantIndex }),
     },
   };
+  const standaloneActorCommit = {
+    input: {
+      relocationId: "fedcba98-7654-3210-fedc-ba9876543210",
+      actorId: "golden-actor",
+      stableType: "Game.Actor",
+      objectGeneration: "1",
+      sourceAuthorityOwnerGeneration: "1",
+      expectedStoreVersion: "1",
+      source: {
+        meshName: "mesh", routingIdHex: "73", nodeGeneration: "3",
+        ownerId: "owner-src", ownerLeaseGeneration: "1",
+        entrySpot: { id: "entry", generation: "3" },
+      },
+      target: {
+        meshName: "mesh", routingIdHex: "74", nodeGeneration: "4",
+        ownerId: "owner-tgt", ownerLeaseGeneration: "2",
+        approvedUserSpot: { id: "golden-spot", generation: "1" },
+      },
+    },
+    provenance: {
+      input: "Ready Actor at an Entry Spot, with no prior User Spot membership; target approved one User Spot. The single inventory entry uses newOwner and UTF-8 [] because membership is in the projected authority payload.",
+      codec: "Java ZLinkActorAuthorityPayloadCodec, ZLinkAggregateRelocationCoordinator.projectAuthorityPayload and ZLinkAggregateInventoryStore.digest",
+      command: "cd framework/languages/java && ZLINK_STANDALONE_ACTOR_GOLDEN_OUTPUT=\"$JOB/standalone-actor-commit.json\" ./gradlew --no-daemon --max-workers=4 :zlink-framework-core:test --tests '*.ZLinkAggregateInventoryStoreTest.exportStandaloneActorCommitGolden' --rerun",
+    },
+    expected: {
+      targetAuthorityPayloadHex: "5a4c41550100000000005d0001002e0a47616d652e4163746f720c676f6c64656e2d6163746f72010b676f6c64656e2d73706f74000000000000000102096f776e65722d7467740000000000000002046d657368017400000000000000040000000000000000000081bd66d4",
+      digestSha256: "36a852b37fe03a6899e0ab525d1792063982c293b7c22c85af5fcef1a2ae130a",
+    },
+  };
   const leaf = small.pages[0];
   const top = multiPage.pages.at(-1);
 
@@ -162,6 +191,7 @@ export function generateAggregateStorageFixtures(schema) {
     spec: storage.spec, canonicalization: "RFC8785 (canonicalize@2.1.0)",
     byteEncoding: "jcsHex is exact UTF-8 storage bytes; no BOM or trailing newline",
     storageKeys,
+    standaloneActorCommit,
     cases: [small, multiPage, inventory("empty-0", 0), inventory("byte-limited-256", 256, true),
       inventory("no-membership-change-1", 1, false, undefined, NO_MEMBERSHIP_CHANGE_HEX)],
     rejected,
