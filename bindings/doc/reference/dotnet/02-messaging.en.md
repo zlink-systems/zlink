@@ -41,8 +41,8 @@ using Message fromString = Message.From("hello", Encoding.UTF8);
 
 **Completion result.** All synchronous. `Message` is `IDisposable`/`IAsyncDisposable` — disposal
 releases payload storage. A submit that consumes this message (Sockets/Messaging builder shape
-below) leaves the managed instance empty afterward; reading its payload then throws, but disposing
-it stays safe and is still required.
+below) leaves the managed instance empty afterward; `Size` is then 0, payload reads are empty, and
+submitting it again throws `ZlinkSubmitException` (`InvalidHandle`). Disposing it stays safe and is still required.
 
 **When to use.** A sized or snapshot-copy constructor/factory to build an outbound payload;
 `AsSpan()`/`AsReadOnlySpan()` to read or write in place without an extra copy; `ToArray()`/

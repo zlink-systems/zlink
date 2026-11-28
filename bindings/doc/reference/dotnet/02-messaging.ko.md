@@ -43,8 +43,8 @@ using Message fromString = Message.From("hello", Encoding.UTF8);
 
 **완료 결과.** 모두 동기다. `Message`는 `IDisposable`/`IAsyncDisposable`이다 — 해제하면
 payload storage가 반환된다. 이 메시지를 소비하는 submit(아래 Sockets/Messaging builder
-형태)은 성공 후 managed instance를 빈 상태로 남긴다 — 그 후 payload를 읽으면 예외가
-발생하지만, disposing은 여전히 안전하고 여전히 필요하다.
+형태)은 성공 후 managed instance를 빈 상태로 남긴다 — 그 후 `Size`는 0, payload 읽기는 빈 값이고,
+다시 submit하면 `ZlinkSubmitException`(`InvalidHandle`)이 발생한다. disposing은 여전히 안전하고 여전히 필요하다.
 
 **선택 기준.** outbound payload를 만들 땐 크기 지정 또는 스냅샷 복사 생성자/factory를
 사용한다. 추가 복사 없이 그대로 읽거나 사용할 땐 `AsSpan()`/`AsReadOnlySpan()`을, 독립된

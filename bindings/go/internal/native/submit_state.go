@@ -27,6 +27,16 @@ func configInvalidArgumentError() error {
 	return newConfigError(ConfigInvalidArgument, int(syscall.EINVAL))
 }
 
+func validateSubmitMessage(message *Message) error {
+	if message == nil {
+		return configInvalidArgumentError()
+	}
+	if message.closed {
+		return newConfigError(ConfigInvalidHandle, int(syscall.EFAULT))
+	}
+	return nil
+}
+
 func submitBackpressureAsNotSubmitted(err error) (bool, error) {
 	var submitErr *SubmitError
 	if errors.As(err, &submitErr) && submitErr.Result == SubmitBackpressured {
