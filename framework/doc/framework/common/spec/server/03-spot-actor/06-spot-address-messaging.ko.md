@@ -521,9 +521,10 @@ Close 절차는 다음 순서로 진행한다.
    relocation 중이면(seal 전후 모두) `Unavailable`로 끝나며 send는 diagnostics에 남는다. 이미 수락한 message를
    다시 배치하지 않는다([Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)).
 
-**같은 incarnation의 Close 작업이 이미 lifecycle lane에 있으면 뒤 Close 요청은 새 Close 작업을 만들지 않고 그
-Close의 결과에 합류한다.** 합류는 요청이 그 lane에 접수될 때 정해지며, 진행 중인 Close의 단계를 기다리는 동안
-다시 판정하지 않는다. 합류한 호출자의 취소를 공유 결과가 정해지기 전에 관찰하면 그 호출은 취소로 끝나고, 진행 중인
+**같은 incarnation의 Close가 이미 등록되어 있으면 뒤 Close 요청은 새 Close 작업을 만들지 않고 그 Close의
+결과에 합류한다.** 합류는 요청이 들어올 때 그 incarnation의 Close 등록 하나로 정해진다. 요청은 catalog나
+lifecycle lane의 차례를 기다린 뒤에 판정하지 않으며, 진행 중인 Close의 단계를 기다리는 동안 다시 판정하지 않는다.
+등록은 그 Close의 결과가 정해질 때 풀린다. 합류한 호출자의 취소를 공유 결과가 정해지기 전에 관찰하면 그 호출은 취소로 끝나고, 진행 중인
 Close에는 영향을 주지 않는다. Lifecycle turn을 다시 시작하지 못한 내부 사유(Spot이 닫힘)는 합류한 호출의 결과가
 아니다 — 합류한 호출은 공유 결과나 자기 취소 중 하나로만 끝난다.
 
