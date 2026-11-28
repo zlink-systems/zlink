@@ -112,12 +112,11 @@ func (s *RouterSocket) RequestTimeout() (time.Duration, error) {
 }
 
 func (s *RouterSocket) SetHandover(value bool) error {
-	var raw C.int
+	policy := RidDuplicateReject
 	if value {
-		raw = C.int(C.ZLINK_RID_DUPLICATE_HANDOVER)
+		policy = RidDuplicateHandover
 	}
-	nativeResult13, nativeErr13 := C.zlink_set_option(s.raw(), C.ZLINK_OPT_RID_DUPLICATE_POLICY, unsafe.Pointer(&raw), C.size_t(C.sizeof_int))
-	return configErrorFromCall(nativeResult13, nativeErr13)
+	return s.CommonOptions().SetRidDuplicatePolicy(policy)
 }
 
 func (s *RouterSocket) Handover() (bool, error) {

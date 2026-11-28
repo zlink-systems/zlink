@@ -11,7 +11,7 @@ function. `Poller` and `Poll` are declared in `poller.go`, and `Timer` in `timer
 [`poller.go`](../../../../bindings/go/internal/native/poller.go), and
 [`timer.go`](../../../../bindings/go/internal/native/timer.go), re-exported as
 aliases through
-[`contracts/eventing.go`](../../../../bindings/go/contracts/eventing.go).
+[`root_projection.go`](../../../../bindings/go/root_projection.go).
 
 ---
 
@@ -20,8 +20,8 @@ aliases through
 Observes a socket's connection lifecycle events and reads its current status.
 
 ```go
-monitor, err := contracts.OpenSocketMonitor(dealer, contracts.MonitorEventConnectionReady)
-event, err := monitor.Recv(contracts.RecvFlagsNone)
+monitor, err := zlink.OpenSocketMonitor(dealer, zlink.MonitorEventConnectionReady)
+event, err := monitor.Recv(zlink.RecvFlagsNone)
 status, err := monitor.Status()
 ```
 
@@ -29,10 +29,10 @@ status, err := monitor.Status()
 
 | Member | Meaning |
 | --- | --- |
-| `OpenSocketMonitor(socket SocketTarget, events ...MonitorEventMask) (*SocketMonitor, error)` | opens the monitor; passing no `events` subscribes to `MonitorEventAll`, while supplied masks are OR-combined and honored |
-| `Recv(flags RecvFlags) (*MonitorEvent, error)` | single entry point for both blocking and non-blocking; pass `RecvFlagsDontWait` for the non-blocking form — **the value-return-on-no-data shape here is a documented exception**, per its own doc comment: "Value-return form is allowed for monitor/timer control-plane APIs by doc/spec/bindings/go/README.md §Receive And Subscribe Shape" |
+| `OpenSocketMonitor(socket SocketTarget, options ...MonitorOpenOption) (*SocketMonitor, error)` | Combines event masks with OR and defaults to all events. `MonitorHwmBytes(uint64)` sets the byte HWM. |
+| `Recv(flags RecvFlags) (*MonitorEvent, error)` | Pulls a monitor event. |
 | `Status() (*MonitorStatus, error)` | returns a point-in-time snapshot |
-| `Recv(RecvFlagsDontWait)` | non-blocking pull; returns no event when the queue is empty |
+| `Recv(RecvFlagsDontWait)` | Returns `nil` and a `*RecvError` with `RecvNoData` when the queue is empty. |
 | `Close() error` | closes the monitor |
 
 **Completion result.** All members are synchronous. `SocketTarget` (Core category) is the shared
@@ -47,18 +47,15 @@ limit the subscription.
 
 ## `MonitorEventMask` / `MonitorEventType`
 
-Two distinct named types report the same sixteen lifecycle-event bits: `MonitorEventMask`
-(`uint32`) is the type `OpenSocketMonitor`'s variadic parameter takes; `MonitorEventType`
-(`uint64`) is the type `MonitorEvent.Event` reports. Every named constant exists in both families
-with matching names and numeric values (`MonitorEventConnected` / `MonitorEventTypeConnected`,
-...) — a caller comparing a subscribed mask against a received event's type must convert between
-the two explicitly; they are not interchangeable without a cast, despite carrying the same bits.
+Pass a `MonitorEventMask` (`uint32`) as a `MonitorOpenOption` to select events.
+`MonitorEventType` (`uint64`) is the type of `MonitorEvent.Event`. Both types have 19
+event bits with corresponding names and values. Convert explicitly to compare the two types.
 
 **Options.**
 
 | Member | Meaning |
 | --- | --- |
-| `MonitorEventMask` constants | `MonitorEventConnected`, `MonitorEventConnectDelayed`, `MonitorEventConnectRetried`, `MonitorEventListening`, `MonitorEventBindFailed`, `MonitorEventAccepted`, `MonitorEventAcceptFailed`, `MonitorEventClosed`, `MonitorEventCloseFailed`, `MonitorEventDisconnected`, `MonitorEventMonitorStopped`, `MonitorEventHandshakeFailedNoDetail`, `MonitorEventConnectionReady`, `MonitorEventHandshakeFailedProtocol`, `MonitorEventHandshakeFailedAuth`, `MonitorEventPeerWeightChanged`, `MonitorEventAll` |
+| `MonitorEventMask` constants | `MonitorEventConnected`, `MonitorEventConnectDelayed`, `MonitorEventConnectRetried`, `MonitorEventListening`, `MonitorEventBindFailed`, `MonitorEventAccepted`, `MonitorEventAcceptFailed`, `MonitorEventClosed`, `MonitorEventCloseFailed`, `MonitorEventDisconnected`, `MonitorEventMonitorStopped`, `MonitorEventHandshakeFailedNoDetail`, `MonitorEventConnectionReady`, `MonitorEventHandshakeFailedProtocol`, `MonitorEventHandshakeFailedAuth`, `MonitorEventPeerWeightChanged`, `MonitorEventSendFlowPaused`, `MonitorEventSendFlowResumed`, `MonitorEventFlowStateStale`, `MonitorEventAll` |
 | `MonitorEventType` constants | mirrors every `MonitorEventMask` value above with a `MonitorEventType`-prefixed name (`MonitorEventTypeConnected`, ...) |
 | `MonitorSourceKind` (`uint32`) | `MonitorSourceSocket` — the only value |
 
@@ -105,30 +102,42 @@ any other event kind, bit-test `Event` against the documented `MonitorEventType`
 
 ## `MonitorStatus`
 
-A point-in-time snapshot of a monitored entity's state and auto-high-water-mark telemetry, returned
-by `SocketMonitor.Status()`. A plain public-field struct.
+`SocketMonitor.Status()` returns a point-in-time status snapshot. `ABIVersion` and `StructSize`
+identify the Core layout, and `SourceKind` identifies the observed resource.
 
-**Options.** No parameters — every field is public.
+| Accessor or fields | Meaning |
+| --- | --- |
+| `State().Has(flag)`, `Detail().Has(flag)` | Test typed state and detail flags. `IsReady()` tests `MonitorStateReady`. |
+| `SndPendingMsgs`, `RcvPendingMsgs` | Number of pending messages. |
+| `SndPendingBytes`, `RcvPendingBytes` | Pending accounted bytes. |
+| `AutoHwmEnabled`, `AutoHwmProfile`, `AutoHwmRole`, `AutoHwmPolicyClass` | Auto-HWM configuration diagnostics. |
+| `AutoHwmPlannedSndHwmBytes`, `AutoHwmPlannedRcvHwmBytes`, `AutoHwmAppliedSndHwmBytes`, `AutoHwmAppliedRcvHwmBytes` | Planned and applied HWM in bytes. |
+| `AutoHwmEffectiveSndBuf`, `AutoHwmEffectiveRcvBuf` | Effective send and receive buffer sizes. |
+| `AutoHwmDeferredSndHwmBytes`, `AutoHwmDeferredRcvHwmBytes` | Deferred HWM in bytes. Each field is valid when the corresponding `AutoHwmDeferredSndHwmValid` or `AutoHwmDeferredRcvHwmValid` is `true`. |
+| `AutoHwmLastRecalcMs`, `AutoHwmLastRecalcReason` | Time and reason for the last Auto-HWM recalculation. |
+| `IsFlowStateDetailPopulated()` | Reports whether the receive-flow fields are populated. |
+| `AutoHwmSendBlockedRatioPPM` | Fraction of initial send admission attempts blocked by HWM, in parts per million. |
+| `SndBytesInFlight`, `RcvBytesInFlight`, `MinimumCoreMessageChargeBytes`, `OversizeMessageAdmissionCount`, `OversizeMessageAdmissionMaxBytes` | In-flight bytes, minimum bytes charged per message, and the count and maximum size of admitted oversize messages. |
 
-| Group | Fields |
-|---|---|
-| ABI identity | `ABIVersion`, `StructSize` (`uint32`) |
-| Source/state | `SourceKind` (`MonitorSourceKind`: only `MonitorSourceSocket`), `StateFlags`/`DetailFlags` (`uint32` bitmasks), `IsReady()` (computed method) |
-| Pending counts | `SndPendingMsgs`, `RcvPendingMsgs` (`uint64`) |
-| Auto-HWM config | `AutoHwmEnabled` (`bool`), `AutoHwmProfile`/`AutoHwmRole`/`AutoHwmPolicyClass` (`uint32`), `AutoHwmUnitBudgetBytes`/`AutoHwmSocketMessageSlots` (`uint64`), `AutoHwmSizeCap` (`uint32`) |
-| Connection bucket | `AutoHwmConnectionBucketEnabled` (`bool`), `AutoHwmConnectionBucketCount`/`Index`/`Hwm4K` (`uint32`), `AutoHwmConnectionBucketHysteresisRetained` (`bool`) |
-| Auto-HWM plan (bytes) | `AutoHwmEffectiveMessageBytes`, `AutoHwmPlannedSndHwmBytes`/`RcvHwmBytes`, `AutoHwmAppliedSndHwmBytes`/`RcvHwmBytes` (`uint64`), `AutoHwmEffectiveSndBuf`/`RcvBuf` (`int32`) |
-| Auto-HWM recalc | `AutoHwmLastRecalcMs` (`uint64`), `AutoHwmLastRecalcReason` (`AutoHwmRecalcReason`, Core category), `AutoHwmSendBlockedRatioPPM` (`uint32`) |
-| Auto-HWM deferred shrink | `AutoHwmDeferredSndHwmBytes`/`RcvHwmBytes` (`uint64`, valid only when the matching `AutoHwmDeferredSndHwmValid`/`RcvHwmValid` `bool` is true) |
-| In-flight/charging | `SndBytesInFlight`, `RcvBytesInFlight`, `MinimumCoreMessageChargeBytes`, `OversizeMessageAdmissionCount`, `OversizeMessageAdmissionMaxBytes` (`uint64`) |
+**Completion result.** `Status()` returns a snapshot with public fields and an `error`.
+`IsReady()` and the flag accessors read the snapshot synchronously.
 
-**Completion result.** N/A — plain public fields, plus the one computed method `IsReady()`. **No
-`IsClosed()` method exists on this type in this binding**, unlike rust's `is_closed()` alongside
-`is_ready()`.
+**When to use.** Call `IsReady()` to check readiness. Compare the planned, applied,
+and deferred HWM fields when diagnosing why effective send or receive HWM differs from
+the value set through `CommonSocketOptions`.
 
-**When to use.** Call `IsReady()` instead of decoding `StateFlags` directly. Use the
-connection-bucket and auto-HWM-plan fields when diagnosing why a socket's effective send/receive
-HWM differs from its configured `CommonSocketOptions` value (Sockets category).
+---
+
+## Connection attempt snapshots
+
+Register `PollConnect` for any outbound raw socket. When the event is ready, call
+`ConnectionAttemptsSnapshot() ([]ConnectionAttempt, error)` on the same socket. Use a single
+observer per socket. A successful snapshot clears readiness for the changes it read.
+
+Each row describes one outbound connection registration. `Endpoint` gives the address and
+`State` gives the current state. Compare `IntentID`, `Revision` and `LastFailureID` only for
+equality. `LastFailure` preserves the last failure even after recovery. An empty failure history
+has `LastFailureID == 0`. A failed snapshot returns a `*ConfigError`.
 
 ---
 
@@ -137,10 +146,10 @@ HWM differs from its configured `CommonSocketOptions` value (Sockets category).
 Multiplexes sockets, file descriptors, and timers on a single reusable wait.
 
 ```go
-poller, err := contracts.NewPoller()
-poller.AddSocket(dealer, contracts.PollIn, 1)
+poller, err := zlink.NewPoller()
+poller.AddSocket(dealer, zlink.PollIn, 1)
 poller.AddTimer(timer, 2)
-events := make([]contracts.PollEvent, 8)
+events := make([]zlink.PollEvent, 8)
 ready, err := poller.Wait(events, time.Second)
 ```
 
@@ -152,7 +161,7 @@ ready, err := poller.Wait(events, time.Second)
 | `AddSocket(socket SocketTarget, events PollEventFlag, slot uintptr) error` | registers a socket; `slot` is a caller token echoed back in the matching result |
 | `AddFd(fd int, events PollEventFlag, slot uintptr) error` | registers a raw file descriptor, same shape |
 | `AddTimer(timer *Timer, slot uintptr) error` | registers a timer to be multiplexed alongside sockets/fds |
-| `ModifySocket(socket, events) error` / `ModifyFd(fd, events) error` | replaces the watched events for an already-registered socket/fd; `ModifySocket` rejects a `PollCompletion` flag change specifically — that registration mode must be changed via `RemoveSocket` + `AddSocket` instead, since completion processing has separate ownership in Core |
+| `ModifySocket(socket, events) error` / `ModifyFd(fd, events) error` | Replaces the watched events. Adding or removing `PollCompletion` acquires or releases completion ownership. |
 | `RemoveSocket(socket) error` / `RemoveFd(fd int) error` / `RemoveTimer(timer *Timer) error` | unregisters the source |
 | `Wait(events []PollEvent, timeout time.Duration) (int, error)` | blocks up to `timeout`, writing up to `len(events)` results in place; **takes `time.Duration`**, unlike rust's raw millisecond `i64`; a failed wait is a `*ConfigError` with Core's result (`ConfigBusy`, 709, while another `Wait` runs) |
 | `Size() (int, error)` | the number of currently registered sources; `ConfigBusy` (709) while a `Wait` is in progress |
@@ -171,9 +180,9 @@ ready, err := poller.Wait(events, time.Second)
 `Poller`; `PollEvent` is one ready source reported by `Poller.Wait`.
 
 ```go
-items := []contracts.PollItem{{Socket: dealer, Events: contracts.PollIn}}
-ready, err := contracts.Poll(items, 500*time.Millisecond)
-if items[0].REvents&contracts.PollIn != 0 { /* ... */ }
+items := []zlink.PollItem{{Socket: dealer, Events: zlink.PollIn}}
+ready, err := zlink.Poll(items, 500*time.Millisecond)
+if items[0].REvents&zlink.PollIn != 0 { /* ... */ }
 ```
 
 **Options — `PollItem`** (all fields public).
@@ -215,7 +224,7 @@ A timer that fires on an interval and can be polled or awaited, created independ
 but registerable with one via `Poller.AddTimer`.
 
 ```go
-timer, err := contracts.NewTimer()
+timer, err := zlink.NewTimer()
 timer.Start(1_000_000_000, 0) // interval in nanoseconds, not time.Duration
 fireCount, ok, err := timer.Recv()
 ```
@@ -243,7 +252,7 @@ wait.
 
 | Constant | Used by | Values |
 |---|---|---|
-| `PollEventFlag` (named `int16`) | `Poller.AddSocket`/`ModifySocket`/`AddFd`/`ModifyFd`, `PollItem.Events`/`.REvents`, `PollEvent.Revents` | `PollIn` (`1`), `PollOut` (`2`), `PollErr` (`4`), `PollPri` (`8`), `PollCompletion` (`32`) — **this binding declares all five, including `PollErr`/`PollPri`**, unlike rust, which has no equivalent to either |
+| `PollEventFlag` (`int16`) | `Poller.AddSocket`/`ModifySocket`/`AddFd`/`ModifyFd`, `PollItem.Events`/`REvents`, `PollEvent.Revents` | `PollIn` (1), `PollOut` (2), `PollErr` (4), `PollPri` (8), `PollCompletion` (32), `PollRoute` (64), `PollConnect` (128). |
 | `MonitorSourceKind` (named `uint32`) | `MonitorStatus.SourceKind` | `MonitorSourceSocket` |
 | `PollSourceKind` (named `int32`) | `PollEvent.SourceKind` | `PollSourceSocket`, `PollSourceFD`, `PollSourceTimer` |
 

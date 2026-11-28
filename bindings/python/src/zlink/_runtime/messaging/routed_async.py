@@ -672,6 +672,10 @@ class CompletionOwner:
         entry.fail(error)
         return error, False
 
+    def _abort_rejected_submit(self, entry):
+        self._unregister(entry)
+        entry._release_payload()
+
     def _capture_writable(self, entry, completion):
         record = (
             int(completion.completion_id),
@@ -918,9 +922,13 @@ class CompletionOwner:
                 else:
                     entry.succeed_send()
             else:
-                outcome, resubmit = self._finish_rejected_submit_locked(
-                    entry, rc, internal_errno, completion_id, initial_attempt
-                )
+                try:
+                    outcome, resubmit = self._finish_rejected_submit_locked(
+                        entry, rc, internal_errno, completion_id, initial_attempt
+                    )
+                except BaseException:
+                    self._abort_rejected_submit(entry)
+                    raise
 
             if entry.releasable:
                 if self._entries.get(entry.context) is entry:
@@ -974,9 +982,13 @@ class CompletionOwner:
                     self._finish_request_submit(entry, completion_id)
                     outcome = rc
             else:
-                outcome, resubmit = self._finish_rejected_submit_locked(
-                    entry, rc, internal_errno, completion_id
-                )
+                try:
+                    outcome, resubmit = self._finish_rejected_submit_locked(
+                        entry, rc, internal_errno, completion_id
+                    )
+                except BaseException:
+                    self._abort_rejected_submit(entry)
+                    raise
 
             if entry.releasable:
                 self._unregister(entry)

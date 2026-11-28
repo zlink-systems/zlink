@@ -201,7 +201,8 @@ returns the filter and whether it is a pattern as `Subscription{Filter string; P
 `XPubSocket.ReceiveSubscriptionEvent(out *SubscriptionEvent, flags RecvFlags) (bool, error)` fills
 caller-provided storage.
 
-`CommonOptions()` returns `CommonSocketOptions` for PAIR, DEALER, ROUTER, PUB, SUB, XPUB, and XSUB.
+`CommonOptions() *CommonSocketOptions` is available on PAIR, DEALER, ROUTER, PUB, SUB, XPUB, XSUB, and STREAM.
+For common options that Core does not support on STREAM, `*ConfigError` carries the Core result code and errno.
 `PubOptions()` returns `PubSocketOptions` for PUB and XPUB. The other socket-specific options are methods
 on the socket, including ROUTER `SetMandatory`, `SetHandover`, `SetProbe`, and `SetConnectRoutingID`,
 DEALER `SetProbe`, STREAM `SetNotify` and `SetReceiveMode`, and SUB and XSUB `TopicsCount`.

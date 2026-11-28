@@ -7,12 +7,9 @@
 이 category는 이 레퍼런스에서 core의 result-code-family 표에 대응하는
 부분이다 — 공유 `ZlinkError` interface와, 모든
 submit/request/recv/handler/close/bind/connect/config 실패 API가
-반환하는 8개 typed error struct를 다룬다. 정확한 signature는
-[`internal/native/error.go`](../../../../bindings/go/internal/native/error.go)와
-[`result_codes.go`](../../../../bindings/go/internal/native/result_codes.go)가
-소유하며,
-[`contracts/errors.go`](../../../../bindings/go/contracts/errors.go)를
-통해 alias로 re-export된다.
+반환하는 8개 typed error struct를 다룬다.
+[`contracts/errors.go`](../../../../bindings/go/contracts/errors.go)가 타입을 정의하고
+[`root_projection.go`](../../../../bindings/go/root_projection.go)가 alias로 re-export한다.
 
 ---
 
@@ -32,7 +29,7 @@ errno가 있으면 `"<kind> error (<code>): <native strerror text>"`,
 
 | Error struct | Result 타입 | 반환하는 곳 | 값 |
 |---|---|---|---|
-| `SubmitError` | `SubmitResult`(Messaging category) | send/publish/request-submit API | `SubmitOK`(0), `SubmitBackpressured`(1, 일반적인 제어 흐름), `SubmitNotConnected`(2), `SubmitNotFound`(3), `SubmitTerminated`(4), `SubmitInvalidHandle`(5), `SubmitInvalidArgument`(6), `SubmitNotSupported`(7), `SubmitInvalidState`(8), `SubmitThreadViolation`(9), `SubmitOutOfMemory`(10), `SubmitSeqExhausted`(11), `SubmitInternalError`(12), `SubmitNotAdmitted`(13, 일반적인 제어 흐름) — 전체 13-value 집합 |
+| `SubmitError` | `SubmitResult`(Messaging category) | send/publish/request-submit API | `SubmitOK`(0), `SubmitBackpressured`(1, 일반적인 제어 흐름), `SubmitNotConnected`(2), `SubmitNotFound`(3), `SubmitTerminated`(4), `SubmitInvalidHandle`(5), `SubmitInvalidArgument`(6), `SubmitNotSupported`(7), `SubmitInvalidState`(8), `SubmitThreadViolation`(9), `SubmitOutOfMemory`(10), `SubmitSeqExhausted`(11), `SubmitInternalError`(12), `SubmitNotAdmitted`(13, 일반적인 제어 흐름) |
 | `RequestError` | `RequestResult` | socket completion queue가 request terminal을 낸 뒤의 `RequestSubmitOp.Submit(ctx)` | `RequestOK`(0), `RequestTimedOut`(101), `RequestNotFound`(102), `RequestTerminated`(103), `RequestProtocolError`(104), `RequestInternalError`(105), `RequestRejected`(106), `RequestConflict`(107), `RequestBusy`(108), `RequestNotConnected`(109), `RequestInvalidArgument`(110), `RequestInvalidState`(111), `RequestNotSupported`(112), `RequestBackpressured`(113) — **이 binding은 `Backpressured`를 정의한다**, 대응물이 없는 rust의 `RequestResult`와 다르다 |
 | `RecvError` | `RecvResult` | recv 계열 API | `RecvOK`(0), `RecvNoData`(201), `RecvBusy`(202), `RecvTerminated`(203), `RecvInvalidHandle`(204), `RecvNotSupported`(205), `RecvInternalError`(206), `RecvBufferTooSmall`(207), `RecvInvalidState`(208) — 전체 8-value 집합, node와 일치하며 dotnet/cpp/java/rust/python이 공유하는 6-value 집합과 다르다 |
 | `HandlerError` | `HandlerResult` | 유지된 result family; 현재 monitor, timer, STREAM packet, send-completion, request-reply delivery는 pull/completion 기반 | `HandlerOK`(0), `HandlerInvalidArgument`(301), `HandlerBusy`(302), `HandlerNotSupported`(303), `HandlerDeadlock`(304), `HandlerInvalidHandle`(305), `HandlerInternalError`(306) |
@@ -73,18 +70,16 @@ error family의 `.Result`를 매치한다; POSIX errno 값을 이미 일반적�
 코드를 위한 것.
 
 ```go
-var zerr contracts.ZlinkError
+var zerr zlink.ZlinkError
 if errors.As(err, &zerr) {
     log.Printf("zlink error %d (errno %d): %v", zerr.Code(), zerr.InternalErrno(), zerr)
 }
 ```
 
 **Options.** `ZlinkError`는 Go `interface`다(struct나 enum이 아니라).
-**`Unwrap() error`는 `ZlinkError` interface 자체의 일부가 아니다** —
-각 concrete struct가 이를 구현하지만, `ZlinkError` 타입 값만 가진
-caller는 그 interface를 통해 직접 `Unwrap()`을 호출할 수 없다;
-`errors.Is`/`errors.As`는 표준 라이브러리 자신의 관례에 따라 밑바탕
-concrete 값에 대한 reflection을 통해 여전히 그것을 찾아낸다.
+`Unwrap() error`는 각 concrete struct가 구현한다.
+`errors.Is`와 `errors.As`는 `ZlinkError` 값에 들어 있는 concrete error의
+`Unwrap()`을 사용한다.
 
 | Member | 의미 |
 | --- | --- |
@@ -97,9 +92,9 @@ concrete 값에 대한 reflection을 통해 여전히 그것을 찾아낸다.
 
 **선택 기준.** 어떤 8개 concrete error struct가 만들었는지 신경 쓰지
 않고 `.Code()`/`.InternalErrno()`만 필요할 땐 `errors.As(err,
-&zerr)`(`zerr`을 `contracts.ZlinkError`로 선언)를 사용한다. result
+&zerr)`(`zerr`을 `zlink.ZlinkError`로 선언)를 사용한다. result
 code의 의미가 family별로 다를 땐 대신 특정 struct 타입(예:
-`*contracts.RecvError`)을 사용한다.
+`*zlink.RecvError`)을 사용한다.
 
 ---
 

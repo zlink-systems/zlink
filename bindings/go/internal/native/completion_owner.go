@@ -10,7 +10,6 @@ import "C"
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -806,9 +805,7 @@ func (e *completionEntry) attemptRequest() bool {
 		return false
 	}
 
-	var submitErr *SubmitError
-	if errors.As(err, &submitErr) && submitErr.Result == SubmitBackpressured &&
-		submitErr.InternalErrno() == int(C.EAGAIN) && completionID != 0 {
+	if waiting, _ := classifyWritableWait(completionID, err); waiting {
 		e.publishSendWait(completionID)
 		if activateErr := e.setWritableWaiting(true); activateErr != nil {
 			e.request.payload.close()

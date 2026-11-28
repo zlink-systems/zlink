@@ -1102,13 +1102,15 @@ class ZLinkInMemoryLocationStoreTest {
                                         .get())
                         .token();
         var oldDescriptor = meshNodeDescriptor(oldOwner, 1, "tcp://127.0.0.1:6000");
-        assertUnavailable(
-                () ->
-                        store.updateMeshNode(
-                                oldDescriptor,
-                                systems.zlink.framework.runtime.internal.locations
-                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
-                                        .FIXED_RID_NEW_CLAIM));
+        var waiting =
+                assertUnavailable(
+                        () ->
+                                store.updateMeshNode(
+                                        oldDescriptor,
+                                        systems.zlink.framework.runtime.internal.locations
+                                                .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                                .FIXED_RID_NEW_CLAIM));
+        assertEquals("MeshNode fixed RID claim is within its release wait", waiting.getMessage());
         monotonicNanos.addAndGet(3);
         assertEquals(
                 ZLinkLocationWriteStatus.STORED,
@@ -1416,7 +1418,7 @@ class ZLinkInMemoryLocationStoreTest {
                 ZLinkPlacementCapacityBundle.actor(1));
     }
 
-    private static void assertUnavailable(
+    private static RuntimeException assertUnavailable(
             java.util.function.Supplier<? extends java.util.concurrent.CompletionStage<?>>
                     operation) {
         var failure =
@@ -1430,6 +1432,7 @@ class ZLinkInMemoryLocationStoreTest {
                                 systems.zlink.framework.errors.ZLinkFrameworkException.class,
                                 failure)
                         .kind());
+        return failure;
     }
 
     @Test
