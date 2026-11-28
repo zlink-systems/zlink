@@ -43,10 +43,10 @@ func TestRawSocketCapabilityMatrix(t *testing.T) {
 					t.Errorf("%s present = %t, want %t", method, got, want)
 				}
 			}
-			for _, method := range []string{"Bind", "Unbind", "DisconnectRID", "SetTLSServer", "SetTLSClient"} {
+			for _, method := range []string{"Bind", "Unbind", "DisconnectRID", "SetTLSServer", "SetTLSClient", "CommonOptions"} {
 				expect(method, true)
 			}
-			for _, method := range []string{"Connect", "Disconnect", "ConnectionAttemptsSnapshot", "CommonOptions"} {
+			for _, method := range []string{"Connect", "Disconnect", "ConnectionAttemptsSnapshot"} {
 				expect(method, socket.outbound)
 			}
 			for _, method := range []string{"SetOption", "GetOption", "SetSockOpt", "GetSockOpt"} {

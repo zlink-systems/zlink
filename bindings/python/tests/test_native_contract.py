@@ -2,7 +2,9 @@ import ctypes
 import os
 from pathlib import Path
 
-from zlink._native import _zlink_native
+import pytest
+
+from zlink._runtime.handles.native_support import _native_extension
 from zlink._native.ffi import (
     ContextOption,
     ZLINK_COMPLETION_REQUEST,
@@ -73,8 +75,9 @@ def test_whole_message_and_completion_symbols_are_bound_directly():
         assert callable(getattr(native, name))
 
 
+@pytest.mark.skipif(_native_extension is None, reason="checks C extension exports")
 def test_native_extension_exposes_only_current_raw_bridges():
-    names = {name for name in dir(_zlink_native) if not name.startswith("__")}
+    names = {name for name in dir(_native_extension) if not name.startswith("__")}
     assert "dealer_recv_owner" not in names
     assert "TargetSendOp" in names
     assert "router_recv_owner" in names

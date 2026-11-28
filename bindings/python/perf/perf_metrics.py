@@ -37,6 +37,15 @@ def env_int(name, default):
     return _env_int(name, default)
 
 
+def resolve_multi_latency_duration(duration, *, cli_value=None):
+    latency = cli_value
+    if latency is None:
+        latency = os.environ.get("PERF_MULTI_LATENCY_DURATION_SECONDS") or duration
+    if not latency.isascii() or not latency.isdecimal() or not latency.lstrip("0"):
+        raise ValueError("--latency-duration must be a positive integer")
+    return latency
+
+
 def benchmark_run_id():
     run_id = _env_int("PERF_RUN_ID", 1)
     if run_id <= 0:

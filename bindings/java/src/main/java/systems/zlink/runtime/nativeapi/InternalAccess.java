@@ -290,12 +290,6 @@ public final class InternalAccess {
         return ContractAccess.messageSharedCopyOf(message);
     }
 
-    public static Message[] messageFromMessageVector(MemorySegment partsAddr,
-                                                 long count) {
-        return ContractAccess.nativeMessageMaterializeVector(partsAddr, count,
-            null, true);
-    }
-
     public static Message[] messageFromOwnedMessageVector(MemorySegment partsAddr,
                                                       long count) {
         if (count <= 0) {
@@ -316,7 +310,7 @@ public final class InternalAccess {
             throw failure;
         }
         return ContractAccess.nativeMessageMaterializeVector(partsAddr, count,
-            reusable, false);
+            reusable);
     }
 
     public static Message[] messageFromOwnedMessageVectorShared(

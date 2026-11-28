@@ -47,25 +47,20 @@ context-manager 프로토콜을 둘 다 지원한다.
 auto-high-water-mark telemetry 시점 스냅샷. 큰 keyword-only
 `__init__`을 가진 concrete class다(`Protocol`이 아님).
 
-**Options.** 생성자가 모든 필드를 keyword-only 인자로 받는다. 여러
-개는 향후 호환성을 위해 `None` 기본값을 받는다. 눈에 띄는 이름 중복:
-`auto_hwm_applied_sndhwm_bytes`와 `auto_hwm_applied_sndhwm`은 별개
-생성자 파라미터지만, 짧은 이름이 생략되면 `__init__`이 `_bytes` 값으로
-fallback한다(`_rcvhwm`, `_deferred_sndhwm`, `_deferred_rcvhwm`도 같은
-패턴) — instance를 읽는 caller는 두 attribute 이름 모두 같은 값을
-가진 걸 본다.
+**Options.** 생성자는 모든 필드를 keyword 인자로 받는다. 진단 필드에는
+`None` 기본값을 둘 수 있다.
 
 | 그룹 | Attribute |
 |---|---|
 | ABI identity | `abi_version`, `struct_size` |
-| Source/state | `source_kind`, `state_flags`/`detail_flags`(비트마스크), `is_ready()`(계산 method) |
-| Pending count | `snd_pending_msgs`, `rcv_pending_msgs` |
-| Auto-HWM 설정 | `auto_hwm_enabled`, `auto_hwm_profile`/`auto_hwm_role`/`auto_hwm_policy_class`, `auto_hwm_unit_budget_bytes`/`auto_hwm_socket_message_slots`, `auto_hwm_size_cap` |
-| Connection bucket | `auto_hwm_connection_bucket_enabled`, `auto_hwm_connection_bucket_count`/`_index`/`_hwm_4k`, `auto_hwm_connection_bucket_hysteresis_retained` |
-| Auto-HWM plan(byte) | `auto_hwm_effective_message_bytes`, `auto_hwm_planned_sndhwm_bytes`/`_rcvhwm_bytes`, `auto_hwm_applied_sndhwm_bytes`/`_rcvhwm_bytes`(과 alias `auto_hwm_applied_sndhwm`/`_rcvhwm`), `auto_hwm_effective_sndbuf`/`_rcvbuf` |
+| Source/state | `source_kind`(`MonitorSourceKind` 또는 알 수 없는 값의 정수), `state_flags`(`MonitorStateFlag`), `detail_flags`(`MonitorStatusDetail`), `is_ready()` |
+| Pending count | `snd_pending_msgs`, `rcv_pending_msgs`, `snd_pending_bytes`, `rcv_pending_bytes` |
+| Auto-HWM 설정 | `auto_hwm_enabled`, `auto_hwm_profile`/`auto_hwm_role`/`auto_hwm_policy_class` |
+| Auto-HWM plan(byte) | `auto_hwm_planned_sndhwm_bytes`/`_rcvhwm_bytes`, `auto_hwm_applied_sndhwm_bytes`/`_rcvhwm_bytes`, `auto_hwm_effective_sndbuf`/`_rcvbuf` |
 | Auto-HWM recalc | `auto_hwm_last_recalc_ms`, `auto_hwm_last_recalc_reason`, `auto_hwm_send_blocked_ratio_ppm` |
-| Auto-HWM deferred shrink | `auto_hwm_deferred_sndhwm_bytes`/`_rcvhwm_bytes`(과 alias), `auto_hwm_deferred_sndhwm_valid`/`_rcvhwm_valid`가 true일 때만 유효 |
+| Auto-HWM deferred shrink | `auto_hwm_deferred_sndhwm_bytes`/`_rcvhwm_bytes`, `auto_hwm_deferred_sndhwm_valid`/`_rcvhwm_valid`가 true일 때만 유효 |
 | In-flight/과금 | `snd_bytes_in_flight`, `rcv_bytes_in_flight`, `minimum_core_message_charge_bytes`, `oversize_message_admission_count`, `oversize_message_admission_max_bytes` |
+| 수신 흐름 | `flow_paused_connections`, `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`, `flow_pause_duration_ms` |
 
 **Completion result.** 해당 없음 — 순수 instance attribute에 더해 계산
 method `is_ready()`.
@@ -73,7 +68,7 @@ method `is_ready()`.
 **선택 기준.** `state_flags`를 직접 디코딩하는 대신 `is_ready()`를
 읽는다. socket의 실제 send/receive HWM이 설정한
 `CommonSocketOptions` 값(Sockets category)과 다른 이유를 진단할 땐
-connection-bucket과 auto-HWM-plan attribute를 사용한다.
+auto-HWM 계획과 적용값을 읽는다.
 
 ---
 
@@ -91,6 +86,9 @@ keyword-only `__init__`을 가진 concrete class다.
 | `value` | 에러 코드나 reconnect interval 같은 event별 값 |
 | `routing_id` | event가 제공할 때만 존재하는 peer routing id |
 | `local_addr` / `remote_addr` | event에 결부된 local/remote 주소 |
+| `connection_id` | 진단과 상관관계 확인에 쓰는 transport 연결 식별자 |
+| `transport_lane` | `TransportLane.APPLICATION` 또는 `TransportLane.COMPLETION`. 인식하지 못한 값은 정수로 반환한다. |
+| `flags` | 이벤트의 세부 상태를 나타내는 `MonitorEventFlag` |
 
 **Completion result.** 해당 없음 — monitor가 전달하는 실질적으로
 불변인 값(mutation을 막는 건 없지만 contract 어디도 그걸 요구하지
@@ -221,8 +219,8 @@ wait에서 multiplex하려면 `Poller.add_timer`로 등록한다. Timer 전달�
 
 | Enum | 사용처 | 값 |
 |---|---|---|
-| `MonitorEventMask`(`IntFlag`) | `MonitorEvent.event` | `CONNECTED`, `CONNECT_DELAYED`, `CONNECT_RETRIED`, `LISTENING`, `BIND_FAILED`, `ACCEPTED`, `ACCEPT_FAILED`, `CLOSED`, `CLOSE_FAILED`, `DISCONNECTED`, `MONITOR_STOPPED`, `HANDSHAKE_FAILED_NO_DETAIL`, `CONNECTION_READY`, `HANDSHAKE_FAILED_PROTOCOL`, `HANDSHAKE_FAILED_AUTH`, `PEER_WEIGHT_CHANGED`, `ALL` |
-| `PollEventFlag`(`IntFlag`) | `Poller.add_socket`/`modify_socket`/`add_fd`/`modify_fd`, `PollEvents.has_event(...)` | `POLLIN`, `POLLOUT`, `POLLERR`, `POLLPRI`, `POLLITEMS_DFLT`(이전 API의 기본 용량 상수 16), `POLLCOMPLETION`(호출자가 실행하는 `Poller.wait()`에서 completion을 처리하도록 소켓을 등록하는 플래그) |
+| `MonitorEventMask`(`IntFlag`) | `MonitorEvent.event` | `CONNECTED`, `CONNECT_DELAYED`, `CONNECT_RETRIED`, `LISTENING`, `BIND_FAILED`, `ACCEPTED`, `ACCEPT_FAILED`, `CLOSED`, `CLOSE_FAILED`, `DISCONNECTED`, `MONITOR_STOPPED`, `HANDSHAKE_FAILED_NO_DETAIL`, `CONNECTION_READY`, `HANDSHAKE_FAILED_PROTOCOL`, `HANDSHAKE_FAILED_AUTH`, `PEER_WEIGHT_CHANGED`, `SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`, `ALL` |
+| `PollEventFlag`(`IntFlag`) | `Poller.add_socket`/`modify_socket`/`add_fd`/`modify_fd`, `PollEvents.has_event(...)` | `POLLIN`, `POLLOUT`, `POLLERR`, `POLLPRI`, `POLLITEMS_DFLT`(이전 API의 기본 용량 상수 16), `POLLCOMPLETION`(호출자가 실행하는 `Poller.wait()`에서 completion을 처리하도록 소켓을 등록하는 플래그), `POLLROUTE`(ROUTER의 선택 route 변경), `POLLCONNECT`(outbound 연결 시도 변경) |
 | `PollSourceKind`(`IntEnum`) | `PollEvent.source_kind` | `SOCKET`, `FD`, `TIMER` |
 
 **선택 기준.** `MonitorEventMask`/`PollEventFlag`는 Python
