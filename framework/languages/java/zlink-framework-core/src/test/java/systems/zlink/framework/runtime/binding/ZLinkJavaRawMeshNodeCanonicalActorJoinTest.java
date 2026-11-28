@@ -13,6 +13,7 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
@@ -88,6 +89,7 @@ final class ZLinkJavaRawMeshNodeCanonicalActorJoinTest {
                                     2L))
                     .toCompletableFuture()
                     .join();
+            ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(1, reports.get());
             assertEquals(1, attempts.get());
             assertEquals(1, completed.get());

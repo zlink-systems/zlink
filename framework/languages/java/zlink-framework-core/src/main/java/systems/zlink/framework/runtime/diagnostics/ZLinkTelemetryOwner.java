@@ -115,6 +115,7 @@ public final class ZLinkTelemetryOwner {
             java.util.logging.Level level,
             String message,
             Throwable failure,
+            Object parameter,
             Instant observed,
             long threadId)
             implements Diagnostic {
@@ -126,6 +127,7 @@ public final class ZLinkTelemetryOwner {
             record.setInstant(observed);
             record.setLongThreadID(threadId);
             record.setThrown(failure);
+            if (parameter != null) record.setParameters(new Object[] {parameter});
             logger.log(record);
         }
     }
@@ -149,18 +151,38 @@ public final class ZLinkTelemetryOwner {
             java.util.logging.Level level,
             Supplier<String> message,
             Throwable failure) {
-        if (logger.isLoggable(level) && !retired(host)) {
-            PROCESS.admit(
-                    host,
-                    new JulRecord(
-                            logger,
-                            logger.getName(),
-                            level,
-                            message.get(),
-                            failure,
-                            Instant.now(),
-                            Thread.currentThread().threadId()));
-        }
+        if (logger.isLoggable(level) && !retired(host))
+            admitJul(host, logger, level, message.get(), failure, null);
+    }
+
+    public static void logParameter(
+            Host host,
+            java.util.logging.Logger logger,
+            java.util.logging.Level level,
+            String message,
+            Object parameter) {
+        if (logger.isLoggable(level) && !retired(host))
+            admitJul(host, logger, level, message, null, parameter);
+    }
+
+    private static void admitJul(
+            Host host,
+            java.util.logging.Logger logger,
+            java.util.logging.Level level,
+            String message,
+            Throwable failure,
+            Object parameter) {
+        PROCESS.admit(
+                host,
+                new JulRecord(
+                        logger,
+                        logger.getName(),
+                        level,
+                        message,
+                        failure,
+                        parameter,
+                        Instant.now(),
+                        Thread.currentThread().threadId()));
     }
 
     private static boolean retired(Host host) {

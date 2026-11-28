@@ -6,6 +6,7 @@ import systems.zlink.contracts.sockets.ConnectionAttemptState;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode.PeerAdmissionExpectation;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode.PeerRouteObservation;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
@@ -63,6 +64,7 @@ public final class ZLinkJavaDurableRequest<T> {
     private final BiConsumer<T, Throwable> terminal;
     private final CompletableFuture<Void> admission;
     private final Supplier<List<ConnectionAttempt>> connections;
+    private final ZLinkTelemetryOwner.Host telemetryHost;
     private Map<Long, Long> baseline;
     private PeerAdmissionExpectation baselineExpectation;
     private CompletionStage<?> pending;
@@ -78,7 +80,9 @@ public final class ZLinkJavaDurableRequest<T> {
             Operation<?> caller,
             BiConsumer<T, Throwable> terminal,
             CompletableFuture<Void> admission,
-            Supplier<List<ConnectionAttempt>> connections) {
+            Supplier<List<ConnectionAttempt>> connections,
+            ZLinkTelemetryOwner.Host telemetryHost) {
+        this.telemetryHost = telemetryHost;
         this.connections = connections;
         this.admission = admission;
         this.prepare = prepare;
@@ -151,7 +155,8 @@ public final class ZLinkJavaDurableRequest<T> {
                 operations,
                 requestAdmission,
                 connections,
-                ZLinkServiceOperationRegistry.prepareOperation(ZLinkServiceOperationIds.next()));
+                ZLinkServiceOperationRegistry.prepareOperation(ZLinkServiceOperationIds.next()),
+                null);
     }
 
     static <T> CompletionStage<T> request(
@@ -164,7 +169,8 @@ public final class ZLinkJavaDurableRequest<T> {
             ZLinkServiceOperationRegistry operations,
             CompletableFuture<Void> requestAdmission,
             Supplier<List<ConnectionAttempt>> connections,
-            Operation<T> caller) {
+            Operation<T> caller,
+            ZLinkTelemetryOwner.Host telemetryHost) {
         if (requestAdmission != null)
             caller.whenComplete(
                     (reply, failure) -> {
@@ -186,7 +192,8 @@ public final class ZLinkJavaDurableRequest<T> {
                             caller,
                             terminal,
                             requestAdmission,
-                            () -> {});
+                            () -> {},
+                            telemetryHost);
                     return null;
                 },
                 ignored -> {},
@@ -205,7 +212,8 @@ public final class ZLinkJavaDurableRequest<T> {
             Operation<?> caller,
             BiConsumer<T, Throwable> terminal,
             CompletableFuture<Void> admission,
-            Runnable abandon) {
+            Runnable abandon,
+            ZLinkTelemetryOwner.Host telemetryHost) {
         // A new request reads the observer's published route without entering its lane.
         // Only requests that need to wait allocate an observer and capture failure history.
         if (route.get().ready()) {
@@ -227,7 +235,8 @@ public final class ZLinkJavaDurableRequest<T> {
                 caller,
                 terminal,
                 admission,
-                abandon);
+                abandon,
+                telemetryHost);
     }
 
     private static <T> CompletionStage<?> waitForAdmission(
@@ -241,7 +250,8 @@ public final class ZLinkJavaDurableRequest<T> {
             Operation<?> caller,
             BiConsumer<T, Throwable> terminal,
             CompletableFuture<Void> admission,
-            Runnable abandon) {
+            Runnable abandon,
+            ZLinkTelemetryOwner.Host telemetryHost) {
         var request =
                 new ZLinkJavaDurableRequest<>(
                         prepare,
@@ -252,7 +262,8 @@ public final class ZLinkJavaDurableRequest<T> {
                         caller,
                         terminal,
                         admission,
-                        connections);
+                        connections,
+                        telemetryHost);
         request.abandon = abandon;
         caller.whenComplete((reply, failure) -> request.post(request::release));
         request.post(
@@ -409,7 +420,12 @@ public final class ZLinkJavaDurableRequest<T> {
             try {
                 observation.close();
             } catch (Exception failure) {
-                LOGGER.log(Level.WARNING, "durable request observer cleanup failed", failure);
+                ZLinkTelemetryOwner.log(
+                        telemetryHost,
+                        LOGGER,
+                        Level.WARNING,
+                        () -> "durable request observer cleanup failed",
+                        failure);
             }
             observation = null;
         }

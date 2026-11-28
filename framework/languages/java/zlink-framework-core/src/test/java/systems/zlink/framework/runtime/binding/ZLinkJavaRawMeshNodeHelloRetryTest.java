@@ -16,6 +16,7 @@ import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
@@ -349,6 +350,7 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                 assertTrue(remote.observePeerRoute(localRid).ready());
                 assertTrue(mutations.get() > 0, "actual admission mutates the injected source map");
                 assertEquals(0, offOwnerMutations.get());
+                ZLinkTelemetryTestFence.awaitIdle();
                 assertEquals(1, events.count.get());
                 assertEquals(0, events.ownerCallbacks.get());
                 assertEquals(
@@ -378,11 +380,9 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                 assertEquals(
                         ServiceWireConstants.COMMAND_REJECT,
                         receive(remotePort, remoteRouter, wire));
+                ZLinkTelemetryTestFence.awaitIdle();
                 assertEquals(1, events.warnings.get());
-                assertEquals(
-                        2,
-                        events.observedCallbacks.get(),
-                        "both synchronous log callbacks were observed");
+                assertEquals(2, events.observedCallbacks.get(), "both log callbacks were observed");
                 assertEquals(
                         0,
                         events.ownerCallbacks.get(),
@@ -609,6 +609,7 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                     0,
                     node.status().admittedPeerCount(),
                     "successful local ADMIT submission must not make the peer ready");
+            ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(0, readyEvents.count.get());
             assertFalse(node.isCanonicalRelocationTargetAdmitted(remoteRid, 1));
             assertFalse(node.observePeerRoute(remoteRid).ready());
@@ -676,6 +677,7 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                     .get(2, java.util.concurrent.TimeUnit.SECONDS);
             dispatchNext(node, port, router);
             assertEquals(1, node.status().admittedPeerCount());
+            ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(1, readyEvents.count.get());
             assertTrue(node.isCanonicalRelocationTargetAdmitted(remoteRid, 1));
             assertTrue(node.observePeerRoute(remoteRid).ready());
@@ -697,6 +699,7 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                     .get(2, java.util.concurrent.TimeUnit.SECONDS);
             dispatchNext(node, port, router);
             assertEquals(1, node.status().admittedPeerCount(), "duplicate ADMIT is idempotent");
+            ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(
                     1, readyEvents.count.get(), "duplicate ADMIT must not announce ready again");
             assertEquals(1, node.readyChannelMemberCount("orders"));

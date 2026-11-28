@@ -14,6 +14,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
@@ -340,6 +341,7 @@ final class ZLinkJavaRawMeshNodeHeaderAccessTest {
         }
 
         private void assertSingleFailure(RuntimeException failure) {
+            ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(1, failures.size());
             var report = failures.getFirst();
             assertEquals(Level.WARNING, report.getLevel());

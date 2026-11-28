@@ -41,6 +41,7 @@ import systems.zlink.contracts.sockets.XSubSocket;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
@@ -629,6 +630,7 @@ final class ZLinkJavaRawMeshNodePumpTest {
                 };
 
         ManagementReports() {
+            ZLinkTelemetryTestFence.awaitIdle();
             logger.addHandler(handler);
         }
 

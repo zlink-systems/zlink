@@ -12,6 +12,7 @@ import systems.zlink.framework.actors.ZLinkSessionBindingIdentity;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorJoinResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
@@ -1495,9 +1496,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure != null) {
-                                LOGGER.log(
+                                ZLinkTelemetryOwner.log(
+                                        owner.telemetryHost,
+                                        LOGGER,
                                         Level.WARNING,
-                                        "bound Session close failed: " + actor.actorId(),
+                                        () -> "bound Session close failed: " + actor.actorId(),
                                         failure);
                             }
                         });
@@ -2544,7 +2547,13 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         } catch (RuntimeException relayFailure) {
             try {
                 if (failure != null) failure.accept(relayFailure);
-                else LOGGER.log(Level.WARNING, "message follow relay failed", relayFailure);
+                else
+                    ZLinkTelemetryOwner.log(
+                            owner.telemetryHost,
+                            LOGGER,
+                            Level.WARNING,
+                            () -> "message follow relay failed",
+                            relayFailure);
             } finally {
                 terminalRelease.run();
             }
@@ -3874,9 +3883,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                         && !rejectedBeforeAdmission
                                         && (requestAdmission == null
                                                 || !requestAdmission.isCompletedExceptionally())) {
-                                    LOGGER.log(
+                                    ZLinkTelemetryOwner.log(
+                                            owner.telemetryHost,
+                                            LOGGER,
                                             Level.WARNING,
-                                            "actor message follow relay failed",
+                                            () -> "actor message follow relay failed",
                                             failure);
                                 }
                                 var request = actorRequests.remove(requestId);
@@ -4021,7 +4032,12 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                 && !rejectedBeforeAdmission
                                 && (requestAdmission == null
                                         || !requestAdmission.isCompletedExceptionally())) {
-                            LOGGER.log(Level.WARNING, "actor message follow relay failed", failure);
+                            ZLinkTelemetryOwner.log(
+                                    owner.telemetryHost,
+                                    LOGGER,
+                                    Level.WARNING,
+                                    () -> "actor message follow relay failed",
+                                    failure);
                         }
                     },
                     () -> {

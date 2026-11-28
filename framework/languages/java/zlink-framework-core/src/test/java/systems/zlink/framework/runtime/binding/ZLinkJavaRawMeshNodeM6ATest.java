@@ -23,6 +23,7 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
@@ -344,9 +345,11 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                                                 Duration.ofMillis(20),
                                                 null)
                                         .toCompletableFuture();
+                        ZLinkTelemetryTestFence.awaitIdle();
                         int beforeTruncated = protocolErrors.get();
                         int dropsBeforeTruncated = decodeDrops.get();
                         node.dispatch(receiveDecodeRecord(port, router));
+                        ZLinkTelemetryTestFence.awaitIdle();
                         assertEquals(beforeTruncated + 1, protocolErrors.get());
                         assertEquals(dropsBeforeTruncated + 1, decodeDrops.get());
                         awaitDecodeCompletion(peerPort, peer, dropped);
@@ -373,9 +376,11 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                         peerPort.send(peer, localRid, List.of(head))
                                 .toCompletableFuture()
                                 .get(2, TimeUnit.SECONDS);
+                        ZLinkTelemetryTestFence.awaitIdle();
                         int beforeOneWay = protocolErrors.get();
                         int dropsBeforeOneWay = decodeDrops.get();
                         node.dispatch(receiveDecodeRecord(port, router));
+                        ZLinkTelemetryTestFence.awaitIdle();
                         assertEquals(beforeOneWay + 1, protocolErrors.get());
                         assertEquals(dropsBeforeOneWay + 1, decodeDrops.get());
                     }

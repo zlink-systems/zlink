@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.binding;
 
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 
 import java.util.Objects;
@@ -30,16 +31,22 @@ final class ZLinkProcessExecutionLanes {
     }
 
     static Executor applicationLane() {
-        return new SerialLane(APPLICATION);
+        return applicationLane(null);
+    }
+
+    static Executor applicationLane(ZLinkTelemetryOwner.Host telemetryHost) {
+        return new SerialLane(APPLICATION, telemetryHost);
     }
 
     private static final class SerialLane implements Executor {
         private final Executor executor;
+        private final ZLinkTelemetryOwner.Host telemetryHost;
         private final ConcurrentLinkedQueue<Runnable> pending = new ConcurrentLinkedQueue<>();
         private final AtomicBoolean draining = new AtomicBoolean();
 
-        private SerialLane(Executor executor) {
+        private SerialLane(Executor executor, ZLinkTelemetryOwner.Host telemetryHost) {
             this.executor = executor;
+            this.telemetryHost = telemetryHost;
         }
 
         @Override
@@ -80,7 +87,12 @@ final class ZLinkProcessExecutionLanes {
                     try {
                         command.run();
                     } catch (RuntimeException failure) {
-                        LOGGER.log(Level.SEVERE, "application dispatch failed", failure);
+                        ZLinkTelemetryOwner.log(
+                                telemetryHost,
+                                LOGGER,
+                                Level.SEVERE,
+                                () -> "application dispatch failed",
+                                failure);
                     }
                 }
             } finally {

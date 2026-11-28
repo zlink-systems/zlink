@@ -309,7 +309,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         registration.codecs().freeze();
         ZLinkMessageSerializer serializer = callSerializer;
         ZLinkBackendAdapterOptions adapterOptions =
-                new ZLinkBackendAdapterOptions(options.defaultRequestTimeout());
+                new ZLinkBackendAdapterOptions(options.defaultRequestTimeout(), telemetryHost);
         ZLinkStreamCodec defaultStreamCodec = defaultStreamCodec(options);
         ZLinkHandlerActivator.MutableServices runtimeHandlers =
                 ZLinkHandlerActivator.services(handlerFactory);

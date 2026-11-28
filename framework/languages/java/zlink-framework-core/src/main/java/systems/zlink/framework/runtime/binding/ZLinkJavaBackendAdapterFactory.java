@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.binding;
 
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
@@ -37,12 +38,13 @@ public final class ZLinkJavaBackendAdapterFactory implements ZLinkBackendAdapter
 
     @Override
     public ZLinkMeshBackendAdapter createMeshAdapter(ZLinkBackendAdapterOptions options) {
-        return new ZLinkJavaMeshBackendAdapter(rawSpotStateLaneFactory);
+        ZLinkTelemetryOwner.prepare();
+        return new ZLinkJavaMeshBackendAdapter(rawSpotStateLaneFactory, options.telemetryHost());
     }
 
     @Override
     public ZLinkStreamBackendAdapter createStreamAdapter(ZLinkBackendAdapterOptions options) {
-        return new ZLinkJavaStreamBackendAdapter();
+        return new ZLinkJavaStreamBackendAdapter(options.telemetryHost());
     }
 
     @Override

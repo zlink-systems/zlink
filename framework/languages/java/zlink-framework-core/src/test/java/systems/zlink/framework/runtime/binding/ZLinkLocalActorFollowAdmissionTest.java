@@ -9,6 +9,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -203,6 +204,7 @@ final class ZLinkLocalActorFollowAdmissionTest {
                 }
                 assertEquals(
                         relay == Relay.NONE || relay == Relay.ABSENT ? 1 : 0, dispatches.get());
+                ZLinkTelemetryTestFence.awaitIdle();
                 assertEquals(relay == Relay.FAILURE_AFTER_ADMISSION ? 1 : 0, reports.get());
             } finally {
                 if (release.get() != null) release.get().run();

@@ -18,6 +18,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.channels.ZLinkChannelContentTypeFrame;
 import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
@@ -160,6 +161,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             ZLinkRequestFailureMapping.outgoing(ZLinkFrameworkErrorKind.UNAVAILABLE);
     private static final long USER_SPOT_TERMINAL_RETENTION_NANOS = Duration.ofMinutes(5).toNanos();
 
+    final ZLinkTelemetryOwner.Host telemetryHost;
     private final String meshName;
     private final ZLinkMeshMessageMetrics messageMetrics;
     private volatile ZLinkDispatchErrorReporter dispatchErrorReporter;
@@ -371,6 +373,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     ZLinkJavaRawMeshNode(Context context, String meshName, ZLinkStateLane spotStateLane) {
+        this(context, meshName, spotStateLane, null);
+    }
+
+    ZLinkJavaRawMeshNode(
+            Context context,
+            String meshName,
+            ZLinkStateLane spotStateLane,
+            ZLinkTelemetryOwner.Host telemetryHost) {
         this(
                 context,
                 meshName,
@@ -379,7 +389,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 ZLinkServiceLivenessRegistry.DEFAULT_PROBE_INTERVAL,
                 ZLinkServiceLivenessRegistry.DEFAULT_PEER_TIMEOUT,
                 ZLinkJavaRawServicePort.DEFAULT_RECEIVE_POLLER,
-                spotStateLane);
+                spotStateLane,
+                telemetryHost);
     }
 
     ZLinkJavaRawMeshNode(Context context, String meshName, LongSupplier currentTimeMillis) {
@@ -452,19 +463,42 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory,
             ZLinkStateLane spotStateLane) {
         this(
+                context,
+                meshName,
+                currentTimeMillis,
+                nanoTime,
+                livenessProbeInterval,
+                livenessPeerTimeout,
+                receivePollerFactory,
+                spotStateLane,
+                null);
+    }
+
+    private ZLinkJavaRawMeshNode(
+            Context context,
+            String meshName,
+            LongSupplier currentTimeMillis,
+            LongSupplier nanoTime,
+            Duration livenessProbeInterval,
+            Duration livenessPeerTimeout,
+            BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory,
+            ZLinkStateLane spotStateLane,
+            ZLinkTelemetryOwner.Host telemetryHost) {
+        this(
                 meshName,
                 currentTimeMillis,
                 nanoTime,
                 livenessProbeInterval,
                 livenessPeerTimeout,
                 createPort(context, nanoTime, receivePollerFactory),
-                ZLinkProcessExecutionLanes.applicationLane(),
+                ZLinkProcessExecutionLanes.applicationLane(telemetryHost),
                 null,
                 null,
                 null,
                 Map.of(),
                 ZLinkServiceTopologyRegistry::new,
-                spotStateLane);
+                spotStateLane,
+                telemetryHost);
     }
 
     private static ZLinkJavaRawServicePort createPort(
@@ -538,6 +572,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 topology,
                 selectedRoutes,
                 topologyFactory,
+                null,
                 null);
     }
 
@@ -555,7 +590,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             Map<RoutingId, Long> selectedRoutes,
             BiFunction<ZLinkServiceNodeDescriptor, ZLinkStateLane, ZLinkServiceTopologyRegistry>
                     topologyFactory,
-            ZLinkStateLane spotStateLane) {
+            ZLinkStateLane spotStateLane,
+            ZLinkTelemetryOwner.Host telemetryHost) {
+        this.telemetryHost = telemetryHost;
         if (meshName == null || meshName.isBlank())
             throw new IllegalArgumentException("meshName is required");
         this.meshName = meshName;
@@ -1752,9 +1789,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 .whenComplete(
                         (unused, failure) -> {
                             if (failure != null)
-                                LOGGER.log(
+                                ZLinkTelemetryOwner.log(
+                                        telemetryHost,
+                                        LOGGER,
                                         Level.WARNING,
-                                        "MeshNode state publication failed",
+                                        () -> "MeshNode state publication failed",
                                         failure);
                         });
     }
@@ -1855,9 +1894,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     try {
                         registration.close();
                     } catch (Exception cleanupFailure) {
-                        LOGGER.log(
+                        ZLinkTelemetryOwner.log(
+                                telemetryHost,
+                                LOGGER,
                                 Level.WARNING,
-                                "peer admission observer cleanup failed",
+                                () -> "peer admission observer cleanup failed",
                                 cleanupFailure);
                     }
                 });
@@ -5457,9 +5498,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     try {
                         registration.close();
                     } catch (Exception cleanupFailure) {
-                        LOGGER.log(
+                        ZLinkTelemetryOwner.log(
+                                telemetryHost,
+                                LOGGER,
                                 Level.WARNING,
-                                "Session owner route observer cleanup failed",
+                                () -> "Session owner route observer cleanup failed",
                                 cleanupFailure);
                     }
                 });
@@ -5851,7 +5894,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         try {
             return action.get();
         } catch (RuntimeException failure) {
-            LOGGER.log(Level.WARNING, "Service management failed", failure);
+            ZLinkTelemetryOwner.log(
+                    telemetryHost,
+                    LOGGER,
+                    Level.WARNING,
+                    () -> "Service management failed",
+                    failure);
             return null;
         }
     }
@@ -5965,7 +6013,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                         == ServiceWireConstants.COMMAND_LOGICAL_MULTICAST) break;
                     }
                 } catch (RuntimeException failure) {
-                    LOGGER.log(Level.WARNING, "Service record claim failed", failure);
+                    ZLinkTelemetryOwner.log(
+                            telemetryHost,
+                            LOGGER,
+                            Level.WARNING,
+                            () -> "Service record claim failed",
+                            failure);
                 }
                 return afterManagement;
             }
@@ -5989,7 +6042,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     try (scope) {
                         dispatch(record);
                     } catch (RuntimeException failure) {
-                        LOGGER.log(Level.WARNING, "Service record settlement failed", failure);
+                        ZLinkTelemetryOwner.log(
+                                telemetryHost,
+                                LOGGER,
+                                Level.WARNING,
+                                () -> "Service record settlement failed",
+                                failure);
                     } finally {
                         if (permit != null) permit.abandonReservation();
                     }
@@ -6588,7 +6646,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             boolean decoding,
             RuntimeException failure) {
         // Spec 04:222: claim and dispatch failures settle only their own record.
-        LOGGER.log(Level.WARNING, "Service record dispatch failed", failure);
+        ZLinkTelemetryOwner.log(
+                telemetryHost,
+                LOGGER,
+                Level.WARNING,
+                () -> "Service record dispatch failed",
+                failure);
         if (kind != null && decoding && failure instanceof IllegalArgumentException) {
             rejectProtocolRecord(
                     inbound,
@@ -6733,8 +6796,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private void rejectProtocolRecord(ZLinkJavaRawServicePort.Inbound inbound, String surface) {
-        LOGGER.log(
-                Level.WARNING, "ProtocolError: rejected service record from {0}", inbound.source());
+        ZLinkTelemetryOwner.logParameter(
+                telemetryHost,
+                LOGGER,
+                Level.WARNING,
+                "ProtocolError: rejected service record from {0}",
+                inbound.source());
         Long correlation =
                 inbound.frames().isEmpty()
                         ? null
@@ -6865,9 +6932,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure != null) {
-                                LOGGER.log(
+                                ZLinkTelemetryOwner.log(
+                                        telemetryHost,
+                                        LOGGER,
                                         Level.WARNING,
-                                        "Actor destroy command failed",
+                                        () -> "Actor destroy command failed",
                                         unwrap(failure));
                             }
                         });
@@ -6894,14 +6963,24 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             "Actor Left handler returned null");
             observeActorLeftCompletion(completion);
         } catch (RuntimeException failure) {
-            LOGGER.warning("Actor Left handler failed to start: " + failure);
+            ZLinkTelemetryOwner.log(
+                    telemetryHost,
+                    LOGGER,
+                    Level.WARNING,
+                    () -> "Actor Left handler failed to start: " + failure,
+                    null);
         }
     }
 
-    private static void observeActorLeftCompletion(CompletionStage<Void> completion) {
+    private void observeActorLeftCompletion(CompletionStage<Void> completion) {
         completion.exceptionally(
                 failure -> {
-                    LOGGER.log(Level.WARNING, "Actor Left handler failed:", unwrap(failure));
+                    ZLinkTelemetryOwner.log(
+                            telemetryHost,
+                            LOGGER,
+                            Level.WARNING,
+                            () -> "Actor Left handler failed:",
+                            unwrap(failure));
                     return null;
                 });
     }
@@ -6923,7 +7002,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         try {
             handler.handle(inbound.source(), notice);
         } catch (RuntimeException failure) {
-            LOGGER.log(Level.WARNING, "message follow maintenance handler failed", failure);
+            ZLinkTelemetryOwner.log(
+                    telemetryHost,
+                    LOGGER,
+                    Level.WARNING,
+                    () -> "message follow maintenance handler failed",
+                    failure);
         }
     }
 
@@ -6955,16 +7039,21 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 (ack, failure) -> {
                     if (failure != null || ack == null) {
                         Throwable cause = failure == null ? null : unwrap(failure);
-                        String diagnostic =
-                                "relocation-reply-relay-failed source="
-                                        + inbound.source()
-                                        + " error="
-                                        + (cause == null
-                                                ? "missing-ack"
-                                                : cause.getClass().getSimpleName()
-                                                        + ": "
-                                                        + String.valueOf(cause.getMessage()));
-                        LOGGER.warning(diagnostic);
+                        ZLinkTelemetryOwner.log(
+                                telemetryHost,
+                                LOGGER,
+                                Level.WARNING,
+                                () ->
+                                        "relocation-reply-relay-failed source="
+                                                + inbound.source()
+                                                + " error="
+                                                + (cause == null
+                                                        ? "missing-ack"
+                                                        : cause.getClass().getSimpleName()
+                                                                + ": "
+                                                                + String.valueOf(
+                                                                        cause.getMessage())),
+                                null);
                         return;
                     }
                     try {
@@ -7059,14 +7148,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 (ignored, failure) -> {
                     if (failure != null) {
                         Throwable cause = unwrap(failure);
-                        String diagnostic =
-                                "session-route-handler-failed source="
-                                        + inbound.source()
-                                        + " error="
-                                        + cause.getClass().getSimpleName()
-                                        + ": "
-                                        + String.valueOf(cause.getMessage());
-                        LOGGER.warning(diagnostic);
+                        ZLinkTelemetryOwner.log(
+                                telemetryHost,
+                                LOGGER,
+                                Level.WARNING,
+                                () ->
+                                        "session-route-handler-failed source="
+                                                + inbound.source()
+                                                + " error="
+                                                + cause.getClass().getSimpleName()
+                                                + ": "
+                                                + String.valueOf(cause.getMessage()),
+                                null);
                     }
                 });
     }
@@ -7100,15 +7193,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 (ack, failure) -> {
                     if (failure != null) {
                         Throwable cause = unwrap(failure);
-                        LOGGER.warning(
-                                "session-seal-handler-failed source="
-                                        + inbound.source()
-                                        + " request="
-                                        + inbound.requestSequence()
-                                        + " error="
-                                        + cause.getClass().getSimpleName()
-                                        + ": "
-                                        + cause.getMessage());
+                        ZLinkTelemetryOwner.log(
+                                telemetryHost,
+                                LOGGER,
+                                Level.WARNING,
+                                () ->
+                                        "session-seal-handler-failed source="
+                                                + inbound.source()
+                                                + " request="
+                                                + inbound.requestSequence()
+                                                + " error="
+                                                + cause.getClass().getSimpleName()
+                                                + ": "
+                                                + cause.getMessage(),
+                                null);
                         return;
                     }
                     if (ack == null) {
@@ -8700,7 +8798,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         try {
             handler.handle(inbound.source(), replacement);
         } catch (RuntimeException failure) {
-            LOGGER.log(Level.WARNING, "bound session replacement handler failed", failure);
+            ZLinkTelemetryOwner.log(
+                    telemetryHost,
+                    LOGGER,
+                    Level.WARNING,
+                    () -> "bound session replacement handler failed",
+                    failure);
         }
     }
 
@@ -8850,7 +8953,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     wire.encodeReject(ZLinkServiceM6AWireCodec.IDENTITY_MISMATCH_REJECT_REASON);
             return () -> {
                 finishSelectedRouteObservation(routeChanges);
-                LOGGER.warning(warning);
+                ZLinkTelemetryOwner.log(telemetryHost, LOGGER, Level.WARNING, () -> warning, null);
                 trySendAdmissionControl(sourceRid, List.of(reject));
                 if (newlyRejected) signalStateChanged(sourceRid);
             };
@@ -8918,8 +9021,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             finishSelectedRouteObservation(routeChanges);
             if (command == ServiceWireConstants.COMMAND_ADMIT) {
                 if (!previouslyReady) {
-                    LOGGER.info(
-                            "ZLINK_FRAMEWORK_PEER_READY mesh=" + meshName + " peer=" + sourceRid);
+                    ZLinkTelemetryOwner.log(
+                            telemetryHost,
+                            LOGGER,
+                            Level.INFO,
+                            () ->
+                                    "ZLINK_FRAMEWORK_PEER_READY mesh="
+                                            + meshName
+                                            + " peer="
+                                            + sourceRid,
+                            null);
                     signalStateChanged(sourceRid);
                 }
             }
@@ -9028,13 +9139,22 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             submitted.whenComplete(
                     (ignored, failure) -> {
                         if (failure != null) {
-                            LOGGER.log(
-                                    Level.WARNING, "peer admission control send failed", failure);
+                            ZLinkTelemetryOwner.log(
+                                    telemetryHost,
+                                    LOGGER,
+                                    Level.WARNING,
+                                    () -> "peer admission control send failed",
+                                    failure);
                         }
                     });
             return submitted;
         } catch (RuntimeException failure) {
-            LOGGER.log(Level.WARNING, "peer admission control send failed", failure);
+            ZLinkTelemetryOwner.log(
+                    telemetryHost,
+                    LOGGER,
+                    Level.WARNING,
+                    () -> "peer admission control send failed",
+                    failure);
             return CompletableFuture.failedFuture(failure);
         }
     }
@@ -9231,7 +9351,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             // connect would then become a second intent to the same listener.
             current.disconnect(endpoint);
         } catch (RuntimeException failure) {
-            LOGGER.log(Level.WARNING, "peer endpoint cleanup failed", failure);
+            ZLinkTelemetryOwner.log(
+                    telemetryHost,
+                    LOGGER,
+                    Level.WARNING,
+                    () -> "peer endpoint cleanup failed",
+                    failure);
         }
     }
 
@@ -9606,7 +9731,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 operations,
                 admission,
                 () -> connectionAttemptsFor(target),
-                caller);
+                caller,
+                telemetryHost);
     }
 
     private CompletionStage<List<byte[]>> requestApplication(
@@ -9695,7 +9821,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 caller,
                 terminal,
                 requestAdmission,
-                () -> Message.closeAll(frames));
+                () -> Message.closeAll(frames),
+                telemetryHost);
     }
 
     private record PeerCloseRequest(long connectionIntentId, String endpoint) {}
@@ -9714,9 +9841,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             try {
                                 current.disconnect(endpoint);
                             } catch (RuntimeException failure) {
-                                LOGGER.log(
+                                ZLinkTelemetryOwner.log(
+                                        telemetryHost,
+                                        LOGGER,
                                         Level.WARNING,
-                                        "not-required peer disconnect failed",
+                                        () -> "not-required peer disconnect failed",
                                         failure);
                             }
                         });
