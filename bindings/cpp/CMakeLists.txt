@@ -511,6 +511,7 @@ if(ZLINK_CPP_BUILD_TESTS)
 
   set(ZLINK_CPP_CONTRACT_TEST_SOURCES
     test_cpp_contract_message.cpp
+    test_cpp_contract_first_part.cpp
     test_cpp_contract_socket.cpp
     test_cpp_contract_request_reply.cpp
     test_cpp_contract_submit_result_terminal.cpp
