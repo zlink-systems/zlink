@@ -13,6 +13,9 @@ internal sealed class InMemoryRelocationStore : IZLinkRelocationRepository, IZLi
 {
     private readonly Dictionary<string, DateTimeOffset> _expirations = new(StringComparer.Ordinal);
 
+    internal Action? BeforeRepositoryPut { get; init; }
+    internal Action? OnRepositoryRead { get; init; }
+
     internal Dictionary<string, byte[]> Payloads { get; } = new(StringComparer.Ordinal);
 
     internal bool Contains(string reference) => Payloads.ContainsKey(reference);
@@ -105,6 +108,7 @@ internal sealed class InMemoryRelocationStore : IZLinkRelocationRepository, IZLi
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
+        BeforeRepositoryPut?.Invoke();
         var bytes = payload.ToArray();
         var reference = Convert.ToHexString(SHA256.HashData(bytes));
         return ValueTask.FromResult(Store(reference, bytes, retention));
@@ -118,6 +122,7 @@ internal sealed class InMemoryRelocationStore : IZLinkRelocationRepository, IZLi
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
+        BeforeRepositoryPut?.Invoke();
         var bytes = payload.ToArray();
         if (
             Payloads.TryGetValue(reference, out var current)
@@ -130,12 +135,15 @@ internal sealed class InMemoryRelocationStore : IZLinkRelocationRepository, IZLi
     public ValueTask<ZLinkRelocationReadResult> GetRelocationAsync(
         string reference,
         CancellationToken cancellationToken = default
-    ) =>
-        ValueTask.FromResult<ZLinkRelocationReadResult>(
+    )
+    {
+        OnRepositoryRead?.Invoke();
+        return ValueTask.FromResult<ZLinkRelocationReadResult>(
             Payloads.TryGetValue(reference, out var payload)
                 ? new ZLinkRelocationReadResult.Found(payload)
                 : new ZLinkRelocationReadResult.Missing()
         );
+    }
 
     public ValueTask<ZLinkRelocationRenewResult> RenewRelocationAsync(
         string reference,

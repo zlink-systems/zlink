@@ -380,6 +380,7 @@
         <Compile Include="Runtime/StandaloneActorRelocationPrecommitTests.StopDeadline.cs"/>
         <Compile Include="Runtime/RelocationCompletionRecordTests.cs"/>
         <Compile Include="Runtime/RelocationCompletionStoreTests.cs"/>
+        <Compile Include="Runtime/RelocationCompletionStoreTests.Publication.cs"/>
         <Compile Include="Runtime/AuthorityAggregateRelocationTests.cs"/>
         <Compile Include="Runtime/CanonicalActorAcceptedJournalTests.cs"/>
         <Compile Include="Runtime/CanonicalAuthorityAggregateGenerationTests.cs"/>

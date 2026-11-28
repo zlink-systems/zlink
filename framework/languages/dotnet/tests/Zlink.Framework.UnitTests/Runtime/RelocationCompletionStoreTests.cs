@@ -7,7 +7,7 @@ using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
-public sealed class RelocationCompletionStoreTests
+public sealed partial class RelocationCompletionStoreTests
 {
     private static readonly ZLinkAuthorityKey Key = new("zla1:a:actor");
     private static readonly ZLinkRelocationCompletionEntry First = new(
@@ -497,6 +497,8 @@ public sealed class RelocationCompletionStoreTests
             );
         }
 
+        internal Action? OnExchange { get; init; }
+
         internal Func<ZLinkAuthorityRelocation, ValueTask>? BeforeExchange { get; set; }
 
         public override async ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityAsync(
@@ -506,6 +508,7 @@ public sealed class RelocationCompletionStoreTests
             CancellationToken cancellationToken = default
         )
         {
+            OnExchange?.Invoke();
             Assert.Equal(Key, key);
             if (Snapshot.StoreVersion != expectedStoreVersion)
             {
