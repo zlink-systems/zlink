@@ -325,7 +325,7 @@ final class ZLinkProviderDescriptorRepository {
                                                                 true)) {
                                                     throw new ZLinkFrameworkException(
                                                             ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                            "Previous MeshNode owner lease is within its release wait");
+                                                            "MeshNode fixed RID claim is within its release wait");
                                                 }
                                                 long generation = 1;
                                                 ZLinkStoreCondition rowCondition;

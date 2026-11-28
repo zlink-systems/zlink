@@ -93,6 +93,7 @@ export function recvNativeError(error: unknown, fallbackMessage: string): RecvEr
 }
 
 export function submitNativeError(error: unknown, fallbackMessage: string): SubmitError {
+  if (error instanceof SubmitError) return error;
   const message = nativeErrorMessage(error, fallbackMessage);
   const errno = failureErrno(error);
   const nativeResult = failureResult(error);

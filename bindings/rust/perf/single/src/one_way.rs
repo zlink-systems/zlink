@@ -38,7 +38,8 @@ pub fn recv_until_stop(socket: &dyn zlink::Pollable, mut recv_one: impl FnMut() 
             Ok(0) => continue,
             Ok(_) => {}
             Err(error)
-                if error.native_errno() == libc::EINTR || error.native_errno() == libc::EAGAIN =>
+                if error.internal_errno() == libc::EINTR
+                    || error.internal_errno() == libc::EAGAIN =>
             {
                 continue;
             }

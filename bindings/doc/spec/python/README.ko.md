@@ -201,6 +201,21 @@ DEALER와 ROUTER request/reply는 Core routing metadata와 `ReplyToken`을 보�
 `routing_id`, `local_addr`, `remote_addr`, `connection_id`, `transport_lane`, `flags`는
 [공통 MonitorEvent 계약](../README.ko.md#monitorevent)의 필드 의미와 native layout을 따른다.
 
+## 시간 단위
+
+socket·context option은 Core option 값을 그대로 밀리초 정수로 받는다. request의 `timeout`은 Python 관례대로
+초 단위 `float`를 받는다. 이름에 `_ms` 접미사가 없는 API는 **굵게** 표시한다.
+
+| API | 단위 | 타입 | 비고 |
+|---|---|---|---|
+| `CommonSocketOptions.linger_ms`, `send_timeout_ms`, `receive_timeout_ms`, `connect_timeout_ms` | 밀리초 | `int` | Core option 값 그대로(`-1`은 Core 규칙대로 무한) |
+| `CommonSocketOptions.reconnect_interval_ms`, `reconnect_interval_max_ms`, `submit_retry_timeout_ms` | 밀리초 | `int` | Core option 값 그대로 |
+| `DealerSocketOptions.request_timeout_ms`, `RouterSocketOptions.request_timeout_ms` | 밀리초 | `int` | Core option 값 그대로 |
+| **`ContextOptions.auto_hwm_recalc_debounce`** | 밀리초 | `int` | Core `AUTO_HWM_RECALC_DEBOUNCE_MS` |
+| **`RequestOp.timeout(timeout)`** | 초 | `float` | `None`·`0`이면 socket의 `request_timeout_ms`를 쓴다(Core `timeout_ms == 0`). Core 범위(`uint32` ms)를 넘으면 `ValueError` |
+| `Poller.wait(events, timeout_ms)` | 밀리초 | `int` | |
+| `Timer.start(interval_ns, repeat_count)` | 나노초 | `int` | |
+
 ## Receive flow state
 
 `ReceiveFlowState`는 `RUNNING = 0`, `PAUSED = 1`인 `IntEnum`이다.

@@ -249,6 +249,8 @@ jobs:
         if: startsWith(matrix.target.name, 'linux-')
         uses: ./.github/actions/test-redis
 
+      # Sample contracts and ZoneWorld tests require their sample-specific builds.
+      # The C++ nightly job owns the live etcd conformance matrix.
       - name: Run Node framework release gate
         working-directory: framework/languages/node
         run: npm run verify:ci
@@ -287,6 +289,17 @@ jobs:
         if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
         working-directory: framework/languages/node
         run: bash scripts/verify_packaged_contract.sh
+
+      - name: Build and test Node framework perf
+        if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
+        working-directory: framework/languages/node/perf
+        run: |
+          npm --prefix .. run use:bindings-source
+          npm ci --no-audit --no-fund
+          export ZLINK_PERF_FRAMEWORK_VERSION="$(node -p 'require("../packages/framework/package.json").version')"
+          export ZLINK_PERF_PACKAGE_SOURCE=local
+          npm run build
+          node --test tests/{local-streams,message-flow-logging,perf}.test.cjs
 
       # The browser build rewrites the committed WebGL bundle, so the bundle
       # check inside the gate always sees a fresh file. A diff here means the

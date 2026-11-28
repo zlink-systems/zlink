@@ -10,6 +10,7 @@ from ..._native.ffi import ContextOption, ZlinkAutoHwmBudgetSnapshot, lib
 from ..handles.native_support import (
     _raise_result_error,
     _raise_zlink_error,
+    _validated_c_string_value,
     _validated_int32,
 )
 
@@ -132,7 +133,6 @@ class NativeContext:
 class NativeContextOptions:
     def __init__(self, context):
         self._context = context
-        self._thread_name_prefix = ""
 
     @property
     def io_threads(self):
@@ -160,25 +160,32 @@ class NativeContextOptions:
 
     @property
     def thread_name_prefix(self):
-        return self._thread_name_prefix
+        # Core limits the prefix to 16 bytes including NUL (core/doc/spec/core/01-context.ko.md:271).
+        raw = ctypes.create_string_buffer(16)
+        size = ctypes.c_size_t(len(raw))
+        native = lib()
+        rc = native.zlink_ctx_get_data(
+            self._context._handle,
+            int(ContextOption.THREAD_NAME_PREFIX),
+            raw,
+            ctypes.byref(size),
+        )
+        if rc != 0:
+            _raise_result_error(ConfigError, ConfigResult, rc, native.zlink_errno())
+        return raw.value.decode("utf-8", errors="replace")
 
     @thread_name_prefix.setter
     def thread_name_prefix(self, value):
-        if isinstance(value, str):
-            raw = value.encode("utf-8")
-        else:
-            raw = bytes(value)
-        rc = lib().zlink_ctx_set_data(
+        raw = _validated_c_string_value(value, field="thread_name_prefix")
+        native = lib()
+        rc = native.zlink_ctx_set_data(
             self._context._handle,
             int(ContextOption.THREAD_NAME_PREFIX),
             ctypes.c_char_p(raw),
-            len(raw),
+            len(raw) + 1,
         )
         if rc != 0:
-            _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
-        self._thread_name_prefix = (
-            value if isinstance(value, str) else raw.decode("utf-8", errors="replace")
-        )
+            _raise_result_error(ConfigError, ConfigResult, rc, native.zlink_errno())
 
     @property
     def auto_hwm_enabled(self):

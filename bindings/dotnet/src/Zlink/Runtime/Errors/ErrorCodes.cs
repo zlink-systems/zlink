@@ -52,6 +52,7 @@ internal static class ErrorCode
     internal static readonly int EBusy;
     internal static readonly int EAgain;
     internal static readonly int EBadf;
+    internal static readonly int EFault;
     internal static readonly int ENoent;
     internal static readonly int ESrch;
     internal static readonly int EIo;
@@ -91,6 +92,7 @@ internal static class ErrorCode
         EBusy = values["EBUSY"];
         EAgain = values["EAGAIN"];
         EBadf = values["EBADF"];
+        EFault = values["EFAULT"];
         ENoent = values["ENOENT"];
         ESrch = values["ESRCH"];
         EIo = values["EIO"];

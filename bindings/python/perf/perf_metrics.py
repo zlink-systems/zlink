@@ -37,6 +37,15 @@ def env_int(name, default):
     return _env_int(name, default)
 
 
+def resolve_multi_latency_duration(duration, *, cli_value=None):
+    latency = cli_value
+    if latency is None:
+        latency = os.environ.get("PERF_MULTI_LATENCY_DURATION_SECONDS") or duration
+    if not latency.isascii() or not latency.isdecimal() or not latency.lstrip("0"):
+        raise ValueError("--latency-duration must be a positive integer")
+    return latency
+
+
 def benchmark_run_id():
     run_id = _env_int("PERF_RUN_ID", 1)
     if run_id <= 0:
@@ -148,7 +157,7 @@ def payload_phase(data):
     return header["phase"]
 
 
-def stamp_payload(payload, phase=0, *, run_id=None, seq=None):
+def stamp_payload(payload, phase=0, *, run_id=None, seq=None, msg_size=None, sent_ts_ns=None):
     header_run_id = benchmark_run_id() if run_id is None else (run_id & 0xFFFFFFFF)
     header_seq = _next_seq() if seq is None else seq
     struct.pack_into(
@@ -158,9 +167,9 @@ def stamp_payload(payload, phase=0, *, run_id=None, seq=None):
         HEADER_MAGIC,
         header_run_id,
         int(phase),
-        len(payload),
+        len(payload) if msg_size is None else msg_size,
         int(header_seq),
-        int(time.monotonic_ns()),
+        time.monotonic_ns() if sent_ts_ns is None else sent_ts_ns,
     )
     return payload
 
@@ -275,7 +284,8 @@ def result_metrics(
 def print_result_lines(pattern, transport, msg_size, metrics):
     for name in ("throughput", "bandwidth", "latency", "latency_p95", "latency_p99"):
         precision = 6 if name.startswith("latency") else 3
-        value = f"{metrics[name]:.{precision}f}"
+        metric = metrics[name]
+        value = metric if isinstance(metric, str) else f"{metric:.{precision}f}"
         print(f"RESULT,current,{pattern},{transport},{msg_size},{name},{value}", flush=True)
 
 

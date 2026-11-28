@@ -21,7 +21,7 @@ fn main() {
     // --8<-- [start:doc]
     let ctx = Context::new().expect("context creation failed");
 
-    let stream = ctx.stream_socket().expect("stream socket failed");
+    let stream = ctx.create_stream_socket().expect("stream socket failed");
     stream
         .stream_options()
         .set_recv_mode(StreamRecvMode::Packet)
@@ -61,7 +61,7 @@ fn main() {
     assert_eq!(payload, b"hello-stream");
     let recv_str = std::str::from_utf8(payload).unwrap();
     println!(
-        "[stream/packet-recv] send: \"hello-stream\" → recv: \"{}\"",
+        "[stream/packet-recv] send: \"hello-stream\" -> recv: \"{}\"",
         recv_str
     );
     packet.close().expect("packet close failed");

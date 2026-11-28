@@ -10,7 +10,7 @@ if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
 else
   CORE_BUILD_DIR="${ZLINK_CPP_CORE_BUILD_DIR:-${ROOT_DIR}/core/build}"
 fi
-BUILD_DIR="${CPP_DIR}/build"
+BUILD_DIR="${CPP_DIR}/build-samples"
 
 CONFIGURE_ARGS=(
   -DZLINK_CORE_DIR=${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core}
