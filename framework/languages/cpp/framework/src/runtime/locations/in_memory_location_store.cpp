@@ -1067,7 +1067,7 @@ in_memory_location_repository_t::prepare_aggregate_core (aggregate_prepare_reque
               previous = participant.key.value;
               const auto authority = _authorities.find (participant.key.value);
               if (authority == _authorities.end ()
-                  || authority->second.store_version != participant.expected_store_version)
+                  || authority->second.store_version != participant.qualification_store_version ())
                   return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
           }
           placement_capacity_bundle_t inventory;
@@ -1149,7 +1149,7 @@ in_memory_location_repository_t::commit_aggregate (aggregate_fence_t fence,
           for (const auto &participant : aggregate->second.request.participants) {
               const auto authority = _authorities.find (participant.key.value);
               if (authority == _authorities.end ()
-                  || authority->second.store_version != participant.expected_store_version)
+                  || authority->second.store_version != participant.qualification_store_version ())
                   return completed (aggregate_commit_result_t::stale);
           }
           const object_creation_target_t target{
@@ -1853,6 +1853,7 @@ bool in_memory_location_repository_t::same_aggregate_request (
         const auto &l = left.participants[index];
         const auto &r = right.participants[index];
         if (l.key.value != r.key.value || l.expected_store_version != r.expected_store_version
+            || l.prepared_store_version != r.prepared_store_version
             || l.authority_payload != r.authority_payload
             || l.membership_mutation != r.membership_mutation
             || l.owner_transition != r.owner_transition)

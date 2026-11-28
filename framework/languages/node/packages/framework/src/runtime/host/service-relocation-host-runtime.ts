@@ -3142,11 +3142,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       if (failure !== undefined) throw failure.error;
     } catch (error) {
       if (
-        this.disposed &&
-        (error instanceof ServiceRelocationRuntimeStoppedError ||
-          (error instanceof ZLinkBackendResultError &&
-            error.result ===
-              (error.operation === 'request' ? RequestResult.Terminated : SubmitResult.Terminated)))
+        error instanceof ServiceRelocationAuthorityUnsettledAtStopError ||
+        (this.disposed &&
+          (error instanceof ServiceRelocationRuntimeStoppedError ||
+            (error instanceof ZLinkBackendResultError &&
+              error.result ===
+                (error.operation === 'request'
+                  ? RequestResult.Terminated
+                  : SubmitResult.Terminated))))
       )
         this.completeSourceRelocationMetric(relocationMetric, undefined, true);
       if (settlement === undefined || typeof settlement === 'string') throw error;
