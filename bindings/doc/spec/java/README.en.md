@@ -556,6 +556,7 @@ A typed socket contract adds only behavior meaningful for that socket type:
 - `SubSocket`: subscribe and subscription-event receive.
 - `XPubSocket`: publish and subscription-event receive.
 - `XSubSocket`: send and subscription control defined by the public binding contract.
+- `subscriptionAt(index)` on SUB and XSUB returns `Optional.empty()` when the index has no entry. The query rule is [the common Subscription Query](../README.en.md#subscription-query).
 - `StreamSocket`: RAW recv, PACKET recv, and stream send.
 
 The runtime makes one Core whole-message call per record and manages the native

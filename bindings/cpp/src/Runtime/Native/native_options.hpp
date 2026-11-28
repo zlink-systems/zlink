@@ -13,6 +13,8 @@ namespace zlink
 namespace detail
 {
 
+inline constexpr size_t default_option_buffer_size = 256u;
+
 template <typename Reader>
 inline int read_growing_string (Reader reader_, size_t initial_capacity_, std::string &value_)
 {
@@ -32,8 +34,7 @@ inline int read_growing_string (Reader reader_, size_t initial_capacity_, std::s
             return 0;
         }
 
-        // Core reports a short buffer as CONFIG_BUFFER_TOO_SMALL (subscription
-        // query) or CONFIG_INVALID_ARGUMENT (string option get).
+        // Core can report a short string option buffer as CONFIG_INVALID_ARGUMENT.
         if ((rc != ZLINK_CONFIG_BUFFER_TOO_SMALL && rc != ZLINK_CONFIG_INVALID_ARGUMENT)
             || cap == max_cap)
             return rc;
