@@ -1,4 +1,8 @@
-import { ZLinkMessageFlowDelivery } from '../../packages/framework/src/runtime/diagnostics/message-flow-delivery';
+import {
+  ZLinkMessageFlowDelivery,
+  type ZLinkDiagnosticRecord
+} from '../../packages/framework/src/runtime/diagnostics/message-flow-delivery';
+import diagnosticLog = require('../../packages/framework/src/runtime/diagnostics/diagnostic-log');
 import {
   commitAuthorityRelocation,
   encodeAuthorityAggregate
@@ -31,7 +35,7 @@ import { setImmediate as turn } from 'node:timers/promises';
 import { requestDurableService } from '../../packages/framework/src/runtime/foundation/durable-service-request';
 import { ZLinkBackendResultError } from '../../packages/framework/src/runtime/backend/runtime-values';
 import assert from 'node:assert/strict';
-import { test, afterEach } from 'node:test';
+import { test, afterEach, type TestContext } from 'node:test';
 import { RequestRuntime } from '../../packages/framework/src/runtime/foundation/request-runtime';
 import type { PendingOperation } from '../../packages/framework/src/runtime/foundation/operation-registry';
 import { frameworkErrorMappingFixture } from './framework-error-mapping-fixture';
@@ -2805,8 +2809,7 @@ test('ActorJoin source profile reaches the existing Message Follow terminal afte
 
 test('post-commit local cleanup failure preserves Accepted and is diagnosed once', async (t) => {
   const failure = new Error('local cleanup failed after target commit');
-  const diagnostics: unknown[][] = [];
-  t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+  const diagnostics = observeRelocationErrors(t);
   let attempts = 0;
   const harness = createActorJoinHostHarness({
     commitSource: async () => {
@@ -2818,9 +2821,8 @@ test('post-commit local cleanup failure preserves Accepted and is diagnosed once
     const result = await harness.relocate();
     assert.equal(String(result.actorRef.nodeRid), 'target');
     await harness.sourceLeaveIdle();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(diagnostics.length, 1);
-    assert.strictEqual(diagnostics[0]![1], failure);
+    await diagnostics.idle();
+    diagnostics.assertCleanupFailure([failure]);
     assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
     assert.equal(attempts, 1);
     const authority = await harness.location.readAuthority();
@@ -2834,8 +2836,7 @@ test('post-commit local cleanup failure preserves Accepted and is diagnosed once
 test('source retirement completes registry removal and reports all failed stages once', async (t) => {
   const leaveFailure = new Error('source leave failed');
   const retireFailure = new Error('source registry cleanup failed');
-  const diagnostics: unknown[][] = [];
-  t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+  const diagnostics = observeRelocationErrors(t);
   const harness = createActorJoinHostHarness({
     sourceLeaveFailure: leaveFailure,
     sourceRetirementFailure: retireFailure
@@ -2843,17 +2844,15 @@ test('source retirement completes registry removal and reports all failed stages
   try {
     await harness.relocate();
     await harness.sourceLeaveIdle();
-    // The retirement diagnostic follows the asynchronous manager completion.
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await diagnostics.idle();
     assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
-    assert.equal(diagnostics.length, 1);
-    assert.ok(diagnostics[0]![1] instanceof AggregateError);
-    assert.deepEqual((diagnostics[0]![1] as AggregateError).errors, [leaveFailure, retireFailure]);
+    diagnostics.assertCleanupFailure([leaveFailure, retireFailure]);
     assert.equal(await harness.deliverSourceLeaveAgain(), true);
     harness.completeSourceCleanup();
-    await Promise.resolve();
+    await harness.sourceLeaveIdle();
+    await diagnostics.idle();
     assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
-    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics.records.length, 1);
   } finally {
     await harness.dispose();
   }
@@ -2863,8 +2862,7 @@ test('post-commit source cleanup failure preserves Accepted and reports all fail
   const failure = new Error('source cleanup failed after target commit');
   const leaveFailure = new Error('source leave failed after target commit');
   const retirementFailure = new Error('source disposal failed after target commit');
-  const diagnostics: unknown[][] = [];
-  t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+  const diagnostics = observeRelocationErrors(t);
   let attempts = 0;
   const harness = createActorJoinHostHarness({
     sourceLeaveFailure: leaveFailure,
@@ -2879,15 +2877,9 @@ test('post-commit source cleanup failure preserves Accepted and reports all fail
     assert.equal(String(result.actorRef.nodeRid), 'target');
     assert.equal(attempts, 1);
     await harness.sourceLeaveIdle();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await diagnostics.idle();
     assert.equal(harness.events.filter((event) => event === 'source:removed').length, 1);
-    assert.equal(diagnostics.length, 1);
-    assert.ok(diagnostics[0]![1] instanceof AggregateError);
-    assert.deepEqual((diagnostics[0]![1] as AggregateError).errors, [
-      failure,
-      leaveFailure,
-      retirementFailure
-    ]);
+    diagnostics.assertCleanupFailure([failure, leaveFailure, retirementFailure]);
   } finally {
     await harness.dispose();
   }
@@ -4952,8 +4944,7 @@ for (const mode of ['explicit-failed', 'never-started', 'preserve', 'target'] as
   for (const cleanupFails of [false, true]) {
     test(`source relocation metrics and original error/${mode}/cleanup=${cleanupFails}`, async (t) => {
       const collector = createRuntimeMetricCollector();
-      const diagnostics: unknown[][] = [];
-      t.mock.method(console, 'error', (...args: unknown[]) => diagnostics.push(args));
+      const diagnostics = mode === 'target' ? observeRelocationErrors(t) : undefined;
       const original = new Error('synchronous creation refusal');
       const cleanup = new Error('source cleanup failed');
       const windowCleanup: unknown[] = [];
@@ -5036,13 +5027,13 @@ for (const mode of ['explicit-failed', 'never-started', 'preserve', 'target'] as
           await harness.waitForReadyAttempt(1);
           await harness.reachRestoreDeadline();
         }
-        if (mode === 'target') {
+        if (diagnostics !== undefined) {
           const result = await relocation;
           assert.equal(String(result.actorRef.nodeRid), 'target');
           await harness.sourceLeaveIdle();
-          await turn();
-          assert.equal(diagnostics.length, cleanupFails ? 1 : 0);
-          if (cleanupFails) assert.equal(diagnostics[0]![1], cleanup);
+          await diagnostics.idle();
+          if (cleanupFails) diagnostics.assertCleanupFailure([cleanup]);
+          else assert.equal(diagnostics.records.length, 0);
         } else
           await assert.rejects(relocation, (error) => {
             if (mode === 'never-started') assert.equal(error, original);
@@ -5220,5 +5211,81 @@ function observeRelocationWarnings(observe: (marker: string) => void): () => voi
   };
   return () => {
     prototype.submit = submit;
+  };
+}
+
+function observeRelocationErrors(t: TestContext) {
+  const marker = '[zlink.runtime.relocation.source_cleanup_failed]';
+  const producer = t.mock.method(diagnosticLog, 'logDiagnostic');
+  const records: ZLinkDiagnosticRecord[] = [];
+  const { port1: send, port2: receive } = new MessageChannel();
+  let acknowledge: (() => void) | undefined;
+  receive.on('message', (record: ZLinkDiagnosticRecord | null) => {
+    if (record !== null) {
+      records.push(record);
+      return;
+    }
+    const completed = acknowledge;
+    acknowledge = undefined;
+    completed?.();
+  });
+  t.after(() => {
+    send.close();
+    receive.close();
+  });
+  const prototype = ZLinkMessageFlowDelivery.prototype;
+  const submit = prototype.submit;
+  const observe: typeof submit = function (this: ZLinkMessageFlowDelivery, lease, record) {
+    if (
+      'marker' in record &&
+      record.level === 'error' &&
+      record.category === 'relocation' &&
+      record.marker !== '[zlink.runtime.relocation]'
+    ) {
+      send.postMessage(record);
+      return;
+    }
+    submit.call(this, lease, record);
+  };
+  t.mock.method(prototype, 'submit', observe);
+
+  return {
+    idle() {
+      // The fence follows all records already posted to the test sink.
+      return new Promise<void>((resolve) => {
+        acknowledge = resolve;
+        send.postMessage(null);
+      });
+    },
+    records,
+    assertCleanupFailure(failures: readonly Error[]) {
+      assert.equal(records.length, 1);
+      const record = records[0]!;
+      assert.equal(record.marker, marker);
+      const calls = producer.mock.calls.filter(
+        ({ arguments: [, , , submittedMarker] }) => submittedMarker === marker
+      );
+      assert.equal(calls.length, 1);
+      const error = calls[0]!.arguments[4]?.error;
+      const firstFailure = failures[0]!;
+      if (failures.length === 1) {
+        assert.strictEqual(error, firstFailure);
+        assert.deepEqual(record.error, {
+          errorType: firstFailure.name,
+          errorMessage: firstFailure.message
+        });
+      } else {
+        assert.ok(error instanceof AggregateError);
+        assert.equal(error.errors.length, failures.length);
+        failures.forEach((failure, index) => assert.strictEqual(error.errors[index], failure));
+        assert.deepEqual(record.error, {
+          errorType: 'AggregateError',
+          errorMessage: 'Actor source retirement failed.',
+          errorCauseType: firstFailure.name,
+          errorCauseMessage: firstFailure.message
+        });
+        assert.equal(record.detail?.failureCount, failures.length);
+      }
+    }
   };
 }
