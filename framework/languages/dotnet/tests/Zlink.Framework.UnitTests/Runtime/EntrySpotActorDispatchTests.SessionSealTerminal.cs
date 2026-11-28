@@ -38,7 +38,6 @@ public sealed partial class EntrySpotActorDispatchTests
         var blobs = new SchedulerProbeRelocationStore();
         var target = new SchedulerProbeTarget(
             () => authorityStore!,
-            new ZLinkProviderRelocationRepository(blobs),
             SchedulerProbePublishMode.Commit
         );
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(

@@ -227,80 +227,31 @@ public sealed partial class RelocationRuntimeTests
         Assert.Equal(2, authority.Events.Count(static item => item.Name == "cas"));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AggregateTargetRequiresAndReusesAcceptedOpaqueRoot(bool missingRoot)
+    [Fact]
+    public async Task AggregateTargetPublicationPreservesInventoryDigest()
     {
-        var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore();
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
+            authority
         );
-        var envelope = CreateEnvelope();
-        var participants = envelope
-            .Participants.Select(participant => new ZLinkAggregateRelocationParticipant(
-                participant,
-                $"v-{participant.AuthorityKey.Value}",
-                ZLinkAuthorityGenerationTransition.NewOwner,
-                new byte[] { 6 },
-                new byte[] { 7 }
-            ))
-            .ToArray();
-        var canonical = envelope with
-        {
-            InventoryDigest = ZLinkAggregateInventoryDigest.Compute(participants),
-        };
-        var source = await ZLinkRelocationTreeStore.PutAsync(
-            relocation,
-            canonical,
-            TimeSpan.FromHours(24),
-            CancellationToken.None
-        );
-        var putsBeforeTargetPrepare = relocation.Events.Count(static item => item.Name == "put");
-        var accepted = source.Root with
-        {
-            ExpiresAt = DateTimeOffset.UtcNow + TimeSpan.FromHours(24),
-            StoreNow = DateTimeOffset.UtcNow,
-        };
-        var request = new ZLinkAggregateRelocationRequest(
-            canonical.AggregateId,
-            canonical.AggregateGeneration,
-            1,
-            participants,
-            new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("aggregate-target")),
-            1,
-            new ZLinkCapacityVector(
-                1,
-                1,
-                new ZLinkSpotTypeCapacityDelta(ZLinkPlacementObjectKind.UserSpot, "room", 1)
-            ),
-            new ZLinkLocationOwnerToken("aggregate-target", 17),
-            AggregateSourceFence(),
-            canonical
+        var request = CreateAggregateRelocationRequest(CreateEnvelope());
+        var digest = ZLinkAggregateInventoryDigest.Compute(request.Participants);
+        var envelope = new ZLinkRelocationEnvelope(
+            request.AggregateId,
+            request.AggregateGeneration,
+            digest,
+            request.Participants.Select(participant => participant.Envelope).ToArray()
         );
 
-        if (missingRoot)
-        {
-            Assert.True(relocation.Payloads.Remove(accepted.Reference));
-            var error = await Assert.ThrowsAsync<ZLinkRelocationDataLostException>(() =>
-                coordinator.PublishAsync(request, CancellationToken.None, accepted).AsTask()
-            );
-            Assert.Contains(accepted.Reference, error.Message);
-            Assert.False(ZLinkLocationStoreFailure.IsIndeterminate(error, CancellationToken.None));
-            Assert.Equal(0, authority.PublishedCount);
-            return;
-        }
-
-        var published = await coordinator.PublishAsync(request, CancellationToken.None, accepted);
-
-        Assert.Equal(accepted.Reference, published.Relocation.Reference);
-        Assert.Equal(accepted.ChecksumCrc32c, published.Relocation.ChecksumCrc32c);
-        Assert.Equal(
-            putsBeforeTargetPrepare,
-            relocation.Events.Count(static item => item.Name == "put")
+        var published = await coordinator.PublishAsync(
+            request with
+            {
+                CanonicalEnvelope = envelope,
+            }
         );
+
+        Assert.Equal(digest, published.Envelope.InventoryDigest.ToArray());
+        Assert.Equal(request.Participants.Count, authority.PublishedCount);
     }
 }

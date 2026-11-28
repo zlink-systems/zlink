@@ -176,10 +176,10 @@ public sealed partial class RelocationRuntimeTests
         var target = new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("target"));
         var owner = new ZLinkLocationOwnerToken("target-owner", 1);
         var authorityPayload = CanonicalFixtureAuthorityPayload();
-        var payload = ZLinkSpotRetireTargetRuntime.BuildTargetReadyPayload(
+        var payload = ZLinkAggregateRelocationCoordinator.ProjectParticipantPayload(
             participant.ObjectKind,
             authorityPayload,
-            target.Rid,
+            target,
             1,
             owner,
             stage.Envelope.AggregateId
@@ -226,11 +226,11 @@ public sealed partial class RelocationRuntimeTests
         var target = new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("target"));
         var owner = new ZLinkLocationOwnerToken("target-owner", 1);
         var authorityPayload = CanonicalFixtureAuthorityPayload();
-        var payload = ZLinkSpotRetireTargetRuntime
-            .BuildTargetReadyPayload(
+        var payload = ZLinkAggregateRelocationCoordinator
+            .ProjectParticipantPayload(
                 participant.ObjectKind,
                 authorityPayload,
-                target.Rid,
+                target,
                 1,
                 owner,
                 stage.Envelope.AggregateId
@@ -1029,7 +1029,7 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Fact]
-    public void SpotStageIdempotencyDigestIncludesSourceFenceAndActorPayload()
+    public void SpotStageIdempotencyDigestIncludesSourceFenceAndTransferChecksum()
     {
         var request = new ZLinkCanonicalSpotStageContext(
             Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
@@ -1047,9 +1047,7 @@ public sealed partial class RelocationRuntimeTests
             "spot-1",
             "room",
             false,
-            "root-1",
-            17,
-            [new ZLinkCanonicalSpotActorDescriptor("actor-1", "player", new byte[] { 1, 2, 3 })]
+            17
         );
         var digest = ZLinkSpotRetireTargetRuntime.ComputeStageRequestDigest(request);
 
@@ -1079,65 +1077,11 @@ public sealed partial class RelocationRuntimeTests
                 ZLinkSpotRetireTargetRuntime.ComputeStageRequestDigest(
                     request with
                     {
-                        Actors =
-                        [
-                            request.Actors[0] with
-                            {
-                                AuthorityPayload = new byte[] { 1, 2, 4 },
-                            },
-                        ],
+                        PayloadChecksum = 18,
                     }
                 )
             )
         );
-    }
-
-    [Fact]
-    public async Task CanonicalTargetStagingKeepsSourceCasRecoveryOutsideThePublishedRoot()
-    {
-        var (stage, candidate) = CreateCanonicalPublishedReconciliationFixture();
-        var key = Assert.Single(stage.Envelope.Participants).AuthorityKey;
-        var source = candidate.Authorities[0].Snapshot with
-        {
-            StoreVersion = "source-cas-version",
-            Payload = CanonicalFixtureAuthorityPayload(),
-            AuthorityOwnerGeneration = stage.SourceAuthorityOwnerGeneration,
-        };
-        var store = new RecordingAuthorityStore();
-        store.Seed(key, source);
-        var request = new ZLinkCanonicalSpotStageContext(
-            stage.Envelope.AggregateId,
-            1,
-            1,
-            "mesh",
-            stage.SourceNodeRid.ToHex(),
-            1,
-            "source-owner",
-            1,
-            RoutingId.From("target").ToHex(),
-            1,
-            "target-owner",
-            1,
-            "room",
-            "Game.Room",
-            false,
-            "",
-            37,
-            []
-        );
-
-        var (envelope, recoveries) =
-            await ZLinkSpotRetireTargetRuntime.BindCanonicalAuthorityInventoryAsync(
-                store,
-                candidate.Envelope,
-                request,
-                CancellationToken.None
-            );
-        Assert.True(Assert.Single(envelope.Participants).RecoveryPayload.IsEmpty);
-        var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(recoveries[key].Span);
-        Assert.Equal(source.StoreVersion, recovery.ExpectedStoreVersion);
-        Assert.Equal(source.AuthorityOwnerGeneration, recovery.AuthorityOwnerGeneration);
-        Assert.Equal(source.Payload.ToArray(), recovery.AuthorityPayload.ToArray());
     }
 
     [Theory]
@@ -1171,10 +1115,10 @@ public sealed partial class RelocationRuntimeTests
             snapshot = snapshot with
             {
                 Relocation = null,
-                Payload = ZLinkSpotRetireTargetRuntime.BuildTargetReadyPayload(
+                Payload = ZLinkAggregateRelocationCoordinator.ProjectParticipantPayload(
                     participant.ObjectKind,
                     CanonicalFixtureAuthorityPayload(),
-                    descriptor.Rid,
+                    descriptor,
                     1,
                     owner,
                     stage.Envelope.AggregateId
@@ -1190,7 +1134,6 @@ public sealed partial class RelocationRuntimeTests
         );
         var sourcePublication = new ZLinkAggregateRelocationPublished(
             new ZLinkAggregateFence(stage.Envelope.AggregateId, 1),
-            new ZLinkRelocationStored("source-staging-root", 19, default, DateTimeOffset.UtcNow),
             stage.Envelope with
             {
                 Participants = [participant],
@@ -1247,7 +1190,6 @@ public sealed partial class RelocationRuntimeTests
         );
         var sourcePublication = new ZLinkAggregateRelocationPublished(
             new ZLinkAggregateFence(stage.Envelope.AggregateId, 1),
-            new ZLinkRelocationStored("source-staging-root", 19, default, DateTimeOffset.UtcNow),
             stage.Envelope
         );
         var owner = new ZLinkLocationOwnerToken(snapshot.OwnerId, snapshot.OwnerLeaseGeneration);
@@ -1400,7 +1342,7 @@ public sealed partial class RelocationRuntimeTests
         stage.AdmissionDrainTask = replay.Task;
         var fence = new ZLinkAggregateFence(
             stage.Envelope.AggregateId,
-            stage.Envelope.AggregateGeneration
+            stage.TargetAttemptGeneration
         );
         Assert.True(target.TryTrackStage(fence, stage));
 
@@ -1433,7 +1375,7 @@ public sealed partial class RelocationRuntimeTests
         Volatile.Write(ref stage.AuthorityPublished, 1);
         var fence = new ZLinkAggregateFence(
             stage.Envelope.AggregateId,
-            stage.Envelope.AggregateGeneration
+            stage.TargetAttemptGeneration
         );
         Assert.True(target.TryTrackStage(fence, stage));
 
@@ -1534,7 +1476,7 @@ public sealed partial class RelocationRuntimeTests
         var stage = CreateTargetStageForHeldJournal();
         var fence = new ZLinkAggregateFence(
             stage.Envelope.AggregateId,
-            stage.Envelope.AggregateGeneration
+            stage.TargetAttemptGeneration
         );
         Assert.True(target.TryTrackStage(fence, stage));
         var attempts = 0;
@@ -1573,95 +1515,6 @@ public sealed partial class RelocationRuntimeTests
                 CancellationToken.None
             )
         );
-    }
-
-    [Fact]
-    public async Task NormalizationResponseLossRetriesFinalRootDeletion()
-    {
-        var stage = CreateTargetStageForHeldJournal();
-        stage.RememberFinalRoot("completed-root", 17);
-        var authorityNormalized = false;
-        var deleted = new List<string>();
-
-        await Assert.ThrowsAsync<IOException>(() =>
-            ZLinkSpotRetireTargetRuntime
-                .ReleaseFinalRootAfterNormalizationAsync(
-                    stage,
-                    authorityAlreadyNormalized: false,
-                    () =>
-                    {
-                        authorityNormalized = true;
-                        return new ValueTask<ZLinkAggregateCommitResult>(
-                            Task.FromException<ZLinkAggregateCommitResult>(
-                                new IOException("normalization response lost")
-                            )
-                        );
-                    },
-                    reference =>
-                    {
-                        deleted.Add(reference);
-                        return ValueTask.CompletedTask;
-                    }
-                )
-                .AsTask()
-        );
-
-        Assert.True(authorityNormalized);
-        Assert.False(stage.Terminal.Task.IsCompleted);
-        Assert.Empty(deleted);
-
-        await ZLinkSpotRetireTargetRuntime.ReleaseFinalRootAfterNormalizationAsync(
-            stage,
-            authorityAlreadyNormalized: true,
-            commitNormalization: null,
-            reference =>
-            {
-                Assert.True(stage.Terminal.Task.IsCompletedSuccessfully);
-                deleted.Add(reference);
-                return ValueTask.CompletedTask;
-            }
-        );
-
-        Assert.Equal(["completed-root"], deleted);
-        Assert.Equal(("completed-root", 17U), stage.GetFinalRoot());
-    }
-
-    [Fact]
-    public void TargetStageTracksTheLatestVerifiedSuccessorRoot()
-    {
-        var stage = CreateTargetStageForHeldJournal();
-
-        stage.RememberFinalRoot("completed-root-1", 17);
-        stage.RememberFinalRoot("completed-root-2", 23);
-
-        Assert.Equal(("completed-root-2", 23U), stage.GetFinalRoot());
-    }
-
-    [Fact]
-    public async Task NormalizationGenerationExhaustionPreservesFinalRoot()
-    {
-        var stage = CreateTargetStageForHeldJournal();
-        stage.RememberFinalRoot("completed-root", 17);
-        var deleted = false;
-
-        await Assert.ThrowsAsync<ZLinkAuthorityGenerationExhaustedException>(() =>
-            ZLinkSpotRetireTargetRuntime
-                .ReleaseFinalRootAfterNormalizationAsync(
-                    stage,
-                    authorityAlreadyNormalized: false,
-                    static () =>
-                        ValueTask.FromResult(ZLinkAggregateCommitResult.GenerationExhausted),
-                    _ =>
-                    {
-                        deleted = true;
-                        return ValueTask.CompletedTask;
-                    }
-                )
-                .AsTask()
-        );
-
-        Assert.False(deleted);
-        Assert.Equal(("completed-root", 17U), stage.GetFinalRoot());
     }
 
     [Fact]
@@ -1781,7 +1634,7 @@ public sealed partial class RelocationRuntimeTests
         Volatile.Write(ref stage.AuthorityPublished, 1);
         var fence = new ZLinkAggregateFence(
             stage.Envelope.AggregateId,
-            stage.Envelope.AggregateGeneration
+            stage.TargetAttemptGeneration
         );
         Assert.True(target.TryTrackStage(fence, stage));
         var unknownFence = new ZLinkAggregateFence(Guid.NewGuid(), 1);
@@ -1914,7 +1767,10 @@ public sealed partial class RelocationRuntimeTests
         {
             var envelope = CreateEnvelope() with { AggregateId = Guid.NewGuid() };
             var stage = CreateTargetStageForHeldJournal() with { Envelope = envelope };
-            var fence = new ZLinkAggregateFence(envelope.AggregateId, envelope.AggregateGeneration);
+            var fence = new ZLinkAggregateFence(
+                envelope.AggregateId,
+                stage.TargetAttemptGeneration
+            );
             Assert.True(target.TryTrackStage(fence, stage));
             target.CompleteStage(stage, TargetStageTerminalOutcome.Completed);
         }
@@ -3523,8 +3379,14 @@ public sealed partial class RelocationRuntimeTests
         var restored = ZLinkRelocationEnvelopeCodec.Decode(encoded);
 
         Assert.Equal(10_000, restored.Participants.Count);
-        Assert.Equal("actor:bulk:0", restored.Participants[0].AuthorityKey.Value);
-        Assert.Equal("actor:bulk:9999", restored.Participants[^1].AuthorityKey.Value);
+        Assert.Equal(
+            ZLinkActorAuthorityPayloadCodec.AuthorityKey("bulk:0"),
+            restored.Participants[0].AuthorityKey
+        );
+        Assert.Equal(
+            ZLinkActorAuthorityPayloadCodec.AuthorityKey("bulk:9999"),
+            restored.Participants[^1].AuthorityKey
+        );
         Assert.Equal(envelope.InventoryDigest, restored.InventoryDigest);
     }
 
@@ -3778,12 +3640,10 @@ public sealed partial class RelocationRuntimeTests
     [Fact]
     public async Task AggregateRelocationPublishesWholeSpotParticipantsWithOneCommit()
     {
-        var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore();
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
+            authority
         );
         var envelope = CreateEnvelope();
         var request = new ZLinkAggregateRelocationRequest(
@@ -3825,17 +3685,11 @@ public sealed partial class RelocationRuntimeTests
                 read.Snapshot.Payload.ToArray()
             );
         }
-        var ordered = relocation
-            .Events.Concat(authority.Events)
-            .OrderBy(static item => item.Sequence)
-            .ToArray();
-        var prepareSequence = ordered.Single(static item => item.Name == "prepare").Sequence;
-        Assert.All(
-            ordered.Where(static item => item.Name == "put"),
-            item => Assert.True(item.Sequence < prepareSequence)
-        );
+        var prepareSequence = authority
+            .Events.Single(static item => item.Name == "prepare")
+            .Sequence;
         Assert.True(
-            ordered.Single(static item => item.Name == "commit").Sequence > prepareSequence
+            authority.Events.Single(static item => item.Name == "commit").Sequence > prepareSequence
         );
         Assert.Equal(
             ZLinkAggregateInventoryDigest.Compute(request.Participants),
@@ -3846,12 +3700,10 @@ public sealed partial class RelocationRuntimeTests
     [Fact]
     public async Task AggregateRelocationCoordinatorPublishesTenThousandParticipants()
     {
-        var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore();
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
+            authority
         );
         var envelope = CreateLargeEnvelope(10_000);
         var request = new ZLinkAggregateRelocationRequest(
@@ -3887,15 +3739,13 @@ public sealed partial class RelocationRuntimeTests
     [Fact]
     public async Task AggregatePrepareGenerationExhaustionIsImmediateAndStable()
     {
-        var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore
         {
             AggregatePrepareResult = new ZLinkAggregatePrepareResult.GenerationExhausted(),
         };
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
+            authority
         );
 
         await Assert.ThrowsAsync<ZLinkAuthorityGenerationExhaustedException>(() =>
@@ -3904,21 +3754,19 @@ public sealed partial class RelocationRuntimeTests
 
         Assert.Equal(1, authority.Events.Count(static item => item.Name == "prepare"));
         Assert.Equal(0, authority.PublishedCount);
-        Assert.Equal("delete", relocation.Events[^1].Name);
+        Assert.Contains(authority.Events, static item => item.Name == "abort");
     }
 
     [Fact]
     public async Task AggregateCommitGenerationExhaustionDoesNotRetry()
     {
-        var relocation = new RecordingRelocationStore();
         var authority = new RecordingAuthorityStore
         {
             AggregateCommitResult = ZLinkAggregateCommitResult.GenerationExhausted,
         };
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
+            authority
         );
         await Assert.ThrowsAsync<ZLinkAuthorityGenerationExhaustedException>(() =>
             coordinator.PublishAsync(CreateAggregateRelocationRequest(CreateEnvelope())).AsTask()
@@ -4014,7 +3862,7 @@ public sealed partial class RelocationRuntimeTests
             digest,
             [
                 new ZLinkRelocationParticipantEnvelope(
-                    new ZLinkAuthorityKey("spot:mesh:room"),
+                    ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("room"),
                     ZLinkPlacementObjectKind.UserSpot,
                     5,
                     11,
@@ -4033,7 +3881,7 @@ public sealed partial class RelocationRuntimeTests
                     ]
                 ),
                 new ZLinkRelocationParticipantEnvelope(
-                    new ZLinkAuthorityKey("actor:mesh:user-7"),
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey("user-7"),
                     ZLinkPlacementObjectKind.Actor,
                     8,
                     13,
@@ -4110,7 +3958,7 @@ public sealed partial class RelocationRuntimeTests
         for (var index = 0; index < participantCount; index++)
         {
             participants[index] = new ZLinkRelocationParticipantEnvelope(
-                new ZLinkAuthorityKey($"actor:bulk:{index}"),
+                ZLinkActorAuthorityPayloadCodec.AuthorityKey($"bulk:{index}"),
                 ZLinkPlacementObjectKind.Actor,
                 checked((ulong)index + 1),
                 checked((ulong)index + 1),

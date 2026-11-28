@@ -45,11 +45,9 @@ public sealed partial class RelocationRuntimeTests
             .ToArray();
         request = request with { Participants = participants };
         var authority = new RecordingAuthorityStore();
-        var blobs = new RecordingRelocationStore();
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             new AuditRuntimeFailureReporter(),
-            authority,
-            blobs
+            authority
         );
 
         if (spaceAfterReservation < 0)
@@ -58,7 +56,6 @@ public sealed partial class RelocationRuntimeTests
                 coordinator.PublishAsync(request).AsTask()
             );
             Assert.Empty(authority.Events);
-            Assert.Empty(blobs.Events);
             return;
         }
 
@@ -83,11 +80,9 @@ public sealed partial class RelocationRuntimeTests
         var stage = CreateTargetStageForHeldJournal();
         var request = CreateAggregateRelocationRequest(stage.Envelope);
         var authorityStore = new RecordingAuthorityStore();
-        var blobs = new RecordingRelocationStore();
         var coordinator = new ZLinkAggregateRelocationCoordinator(
             new AuditRuntimeFailureReporter(),
-            authorityStore,
-            blobs
+            authorityStore
         );
         await coordinator.PublishAsync(request);
         var key = request.Participants[0].Envelope.AuthorityKey;

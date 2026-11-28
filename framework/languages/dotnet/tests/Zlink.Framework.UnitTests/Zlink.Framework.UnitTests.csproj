@@ -90,6 +90,8 @@
         <Compile Include="Runtime/SpotRequestSourceDiscoveryTests.cs"/>
         <Compile Include="Runtime/SourceRequestOwnerContractTests.cs"/>
         <Compile Include="Runtime/HostRelocationSealStageTests.cs"/>
+        <Compile Include="Runtime/HostRelocationSealStageTests.Inventory.cs"/>
+        <Compile Include="Runtime/SpotRelocationInventoryTests.cs"/>
         <Compile Include="Runtime/SpotWideCompletionTests.cs"/>
         <Compile Include="Runtime/StartupStoreStallTests.cs"/>
         <Compile Include="Runtime/PreReadyLogicalMulticastTests.cs"/>
