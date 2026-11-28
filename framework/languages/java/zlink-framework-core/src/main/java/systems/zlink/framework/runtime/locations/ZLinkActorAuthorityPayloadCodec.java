@@ -33,6 +33,31 @@ public final class ZLinkActorAuthorityPayloadCodec {
             RoutingId nodeRid,
             long nodeGeneration) {}
 
+    public byte[] encodeRelocationTarget(
+            String stableType,
+            String actorId,
+            String targetSpotId,
+            long targetSpotGeneration,
+            int targetSpotKind,
+            String targetOwnerId,
+            long targetOwnerLeaseGeneration,
+            String meshName,
+            RoutingId targetNodeRid,
+            long targetNodeGeneration) {
+        return encode(
+                State.READY,
+                stableType,
+                actorId,
+                targetSpotId,
+                targetSpotGeneration,
+                targetSpotKind,
+                targetOwnerId,
+                targetOwnerLeaseGeneration,
+                meshName,
+                targetNodeRid,
+                targetNodeGeneration);
+    }
+
     public byte[] encode(
             State state,
             String stableType,

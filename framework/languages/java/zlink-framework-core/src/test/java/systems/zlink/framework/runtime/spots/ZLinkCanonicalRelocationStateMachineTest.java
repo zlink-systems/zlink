@@ -20,9 +20,8 @@ import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
-import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadMissing;
 import systems.zlink.framework.locations.ZLinkActivationConcurrency;
 import systems.zlink.framework.locations.ZLinkCapacityUsage;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
@@ -116,30 +115,47 @@ final class ZLinkCanonicalRelocationStateMachineTest {
         assertEquals(0, fixture.endpoint.published.get());
     }
 
-    @Test
-    void missingSealedInventoryFailsBeforeRestore() {
-        Fixture fixture = fixture();
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void markerlessActorRestoresOnlyWhenTheReconstructedInventoryMatches(boolean differentDigest) {
+        Fixture fixture =
+                fixture(
+                        new CountingEndpoint() {
+                            @Override
+                            public CompletionStage<ZLinkSpotRetireControl.TargetProfile>
+                                    applyTargetProfile(
+                                            ZLinkSpotRetireControl.TargetProfile profile,
+                                            java.util.function.Supplier<CompletionStage<Void>>
+                                                    awaitShellPublication) {
+                                return CompletableFuture.completedFuture(
+                                        differentDigest
+                                                ? new ZLinkSpotRetireControl.TargetProfile(
+                                                        profile.request(),
+                                                        profile.actorSpotGeneration() + 1,
+                                                        profile.actorSpotKind())
+                                                : profile);
+                            }
+                        });
         var root =
                 new ZLinkStoreKey(
                         "zlink:v11:aggregate-inventory:" + fixture.relocationId() + ":1:root");
-        fixture.locations()
-                .write(
-                        new ZLinkStoreWriteRequest(List.of(), List.of(new ZLinkStoreDelete(root))),
-                        () -> false)
-                .toCompletableFuture()
-                .join();
-        var failure =
-                assertThrows(
-                        java.util.concurrent.CompletionException.class,
-                        () ->
-                                fixture.source()
-                                        .stage(
-                                                fixture.targetRid(),
-                                                fixture.request(new byte[] {1}),
-                                                Duration.ofSeconds(2),
-                                                STAGE_DEADLINE)
-                                        .toCompletableFuture()
-                                        .join());
+        assertInstanceOf(
+                ZLinkStoreReadMissing.class,
+                fixture.locations().read(root, () -> false).toCompletableFuture().join());
+        var stage =
+                fixture.source()
+                        .stage(
+                                fixture.targetRid(),
+                                fixture.request(new byte[] {1}),
+                                Duration.ofSeconds(2),
+                                STAGE_DEADLINE)
+                        .toCompletableFuture();
+        if (!differentDigest) {
+            stage.join();
+            assertEquals(1, fixture.endpoint().staged.get());
+            return;
+        }
+        var failure = assertThrows(java.util.concurrent.CompletionException.class, stage::join);
         var result =
                 assertInstanceOf(
                         systems.zlink.framework.errors.ZLinkFrameworkException.class,
@@ -151,7 +167,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     }
 
     @Test
-    void directJoinRetryAttemptTwoReadsGenerationOneInventory() {
+    void directJoinRetryAttemptTwoUsesTheCapturedRelocation() {
         Fixture fixture = fixture();
         var request = fixture.request(new byte[] {1}, 2);
 

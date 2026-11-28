@@ -85,6 +85,11 @@ public record ZLinkAuthoritySnapshot(
                         == other.allocation.descriptorLifecycleGeneration();
     }
 
+    public boolean isMarkerlessActor() {
+        return aggregateGeneration == 0
+                && allocation.objectKind() == ZLinkPlacementObjectKind.ACTOR;
+    }
+
     public boolean relocationInProgress() {
         return relocation != null
                 || aggregateGeneration != 0

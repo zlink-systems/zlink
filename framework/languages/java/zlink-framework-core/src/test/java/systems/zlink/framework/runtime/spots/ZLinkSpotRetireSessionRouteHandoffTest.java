@@ -404,7 +404,9 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
         var representative = ZLinkAuthorityKeyCodec.spot(SPOT_ID);
         var inventory =
                 coordinator
-                        .readSealedInventory(fence, representative, NEVER)
+                        .readCapturedAuthority(fence.aggregateId(), representative, NEVER)
+                        .thenCompose(
+                                primary -> coordinator.readSealedInventory(fence, primary, NEVER))
                         .toCompletableFuture()
                         .get(5, TimeUnit.SECONDS);
         var participants =
