@@ -1,7 +1,7 @@
 {
   "fixture": "zlink.framework.admission-queue-messages",
   "version": 1,
-  "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:283",
+  "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#358-대기열-spot-등록과-node-간-메시지",
   "encoding": "Framework typed JSON (camelCase). dec = 64-bit integer as a decimal string; b64 = unpadded base64url. Unknown fields are ignored; a missing required field or a wrong type is a protocol error.",
   "spotType": "$zlink.AdmissionQueue",
   "messages": [
@@ -9,7 +9,7 @@
       "name": "enqueue-position",
       "packetName": "$zlink.admission-queue.enqueue",
       "kind": "request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:304",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#358-대기열-spot-등록과-node-간-메시지",
       "request": {
         "connection": {
           "nodeRid": "bm9kZS1h",
@@ -34,7 +34,7 @@
       "name": "enqueue-ticket",
       "packetName": "$zlink.admission-queue.enqueue",
       "kind": "request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:304",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#358-대기열-spot-등록과-node-간-메시지",
       "request": {
         "connection": {
           "nodeRid": "bm9kZS1h",
@@ -59,7 +59,7 @@
       "name": "report",
       "packetName": "$zlink.admission-queue.report",
       "kind": "request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:305",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#358-대기열-spot-등록과-node-간-메시지",
       "request": {
         "nodeRid": "bm9kZS1h",
         "nodeLifecycleGeneration": "7",
@@ -108,7 +108,7 @@
       "name": "report-no-global-limit",
       "packetName": "$zlink.admission-queue.report",
       "kind": "request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:305",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#358-대기열-spot-등록과-node-간-메시지",
       "request": {
         "nodeRid": "bm9kZS1h",
         "nodeLifecycleGeneration": "7",
@@ -129,7 +129,7 @@
       "name": "admit-permit",
       "packetName": "$zlink.admission-queue.admit-permit",
       "kind": "request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:306",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#358-대기열-spot-등록과-node-간-메시지",
       "request": {
         "nodeRid": "bm9kZS1h",
         "nodeLifecycleGeneration": "7",
@@ -150,7 +150,7 @@
       "name": "admit-permit-id-above-2-63",
       "packetName": "$zlink.admission-queue.admit-permit",
       "kind": "request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:306",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#358-대기열-spot-등록과-node-간-메시지",
       "request": {
         "nodeRid": "bm9kZS1h",
         "nodeLifecycleGeneration": "7",
@@ -171,7 +171,7 @@
       "name": "admit-permit-rejected",
       "packetName": "$zlink.admission-queue.admit-permit",
       "kind": "request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:306",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#358-대기열-spot-등록과-node-간-메시지",
       "request": {
         "nodeRid": "bm9kZS1h",
         "nodeLifecycleGeneration": "7",
@@ -191,7 +191,7 @@
       "name": "release-permit",
       "packetName": "$zlink.admission-queue.release-permit",
       "kind": "send",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:307",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#358-대기열-spot-등록과-node-간-메시지",
       "send": {
         "nodeRid": "bm9kZS1h",
         "nodeLifecycleGeneration": "7",

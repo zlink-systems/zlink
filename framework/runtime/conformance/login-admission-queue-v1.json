@@ -12,7 +12,7 @@
   "ticketVectors": [
     {
       "name": "current-key",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
@@ -37,7 +37,7 @@
     },
     {
       "name": "expired",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
@@ -62,7 +62,7 @@
     },
     {
       "name": "skew-boundary",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
@@ -87,7 +87,7 @@
     },
     {
       "name": "wrong-session",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
@@ -112,7 +112,7 @@
     },
     {
       "name": "other-node-same-session",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
@@ -137,7 +137,7 @@
     },
     {
       "name": "restarted-node-same-session",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
@@ -162,7 +162,7 @@
     },
     {
       "name": "other-stream-same-session",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
@@ -187,7 +187,7 @@
     },
     {
       "name": "wrong-epoch",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
@@ -212,7 +212,7 @@
     },
     {
       "name": "previous-key",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
@@ -237,7 +237,7 @@
     },
     {
       "name": "short-ticket",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
@@ -262,7 +262,7 @@
     },
     {
       "name": "wrong-version",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
         "previousKeyBase64Url": null,
@@ -287,7 +287,7 @@
     },
     {
       "name": "short-key",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:196",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
       "given": {
         "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHg",
         "previousKeyBase64Url": null,
@@ -314,7 +314,7 @@
   "queueScenarios": [
     {
       "name": "enqueue-idempotent",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:213",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "sessionRid": "a",
         "nodeRid": "n",
@@ -347,7 +347,7 @@
     },
     {
       "name": "same-session-rid-on-two-nodes-are-two-waiters",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:214",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "waiters": []
       },
@@ -397,7 +397,7 @@
     },
     {
       "name": "node-budget-and-fifo",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:195",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "reports": [
           {
@@ -436,7 +436,7 @@
     },
     {
       "name": "budget-capped-by-global-limit",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:219",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 2,
         "runningPermits": 1,
@@ -497,7 +497,7 @@
     },
     {
       "name": "stale-report-no-issuance",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:195",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "reportAgeMs": 3001,
         "waiting": [
@@ -515,7 +515,7 @@
     },
     {
       "name": "permit-granted-below-limit",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:217",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 2,
         "epoch": 42,
@@ -563,7 +563,7 @@
     },
     {
       "name": "permit-denied-at-limit",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:217",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 1,
         "epoch": 42,
@@ -599,7 +599,7 @@
     },
     {
       "name": "denied-ticket-invalidated-and-waiter-at-node-front",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:221",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 1,
         "epoch": 42,
@@ -668,7 +668,7 @@
     },
     {
       "name": "retry-with-invalidated-ticket-before-reissue-denied",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:222",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 1,
         "epoch": 42,
@@ -727,7 +727,7 @@
     },
     {
       "name": "permit-wrong-epoch-denied",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:217",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 5,
         "epoch": 42,
@@ -757,7 +757,7 @@
     },
     {
       "name": "permit-release-idempotent",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:221",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 1,
         "epoch": 42,
@@ -818,7 +818,7 @@
     },
     {
       "name": "permit-reclaimed-when-owner-lease-ends",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:223",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 1,
         "epoch": 42,
@@ -862,7 +862,7 @@
     },
     {
       "name": "permit-reclaimed-when-missing-from-report",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:226",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 2,
         "epoch": 42,
@@ -899,7 +899,7 @@
     },
     {
       "name": "late-grant-survives-earlier-report",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:226",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 1,
         "epoch": 42,
@@ -966,7 +966,7 @@
     },
     {
       "name": "lost-grant-reclaimed-after-request-timeout",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:226",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 1,
         "epoch": 42,
@@ -1034,7 +1034,7 @@
     },
     {
       "name": "out-of-order-grants-keep-unresolved-request",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:226",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 3,
         "epoch": 42,
@@ -1119,7 +1119,7 @@
     },
     {
       "name": "ticket-reuse-does-not-bypass-permit",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:227",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 1,
         "epoch": 42,
@@ -1162,7 +1162,7 @@
     },
     {
       "name": "estimated-wait",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:211",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {},
       "steps": [
         {
@@ -1193,7 +1193,7 @@
     },
     {
       "name": "delete-waiters",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:213",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "waiters": [
           "used",
@@ -1237,7 +1237,7 @@
     },
     {
       "name": "new-incarnation",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:170",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#351-대기열-spot과-epoch",
       "given": {
         "epoch": 42,
         "waiting": [
@@ -1263,7 +1263,7 @@
     },
     {
       "name": "position-skips-waiters-holding-a-ticket",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:248",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "waiting": [
           {
@@ -1311,7 +1311,7 @@
     },
     {
       "name": "vanished-node-holding-every-permit-reclaimed-on-report",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:234",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "globalLimit": 1,
         "epoch": 42,
@@ -1362,7 +1362,7 @@
   "nodeScenarios": [
     {
       "name": "invalid-ticket-missing",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:137",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
       "given": {
         "queueEnabled": true,
         "ticketState": "missing",
@@ -1384,7 +1384,7 @@
     },
     {
       "name": "invalid-ticket-bad-signature",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:137",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
       "given": {
         "queueEnabled": true,
         "ticketState": "bad-signature",
@@ -1406,7 +1406,7 @@
     },
     {
       "name": "invalid-ticket-expired",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:137",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
       "given": {
         "queueEnabled": true,
         "ticketState": "expired",
@@ -1428,7 +1428,7 @@
     },
     {
       "name": "invalid-ticket-wrong-epoch",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:137",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
       "given": {
         "queueEnabled": true,
         "ticketState": "wrong-epoch",
@@ -1450,7 +1450,7 @@
     },
     {
       "name": "no-report-response",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:170",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#351-대기열-spot과-epoch",
       "given": {
         "queueEnabled": true,
         "reportedEpoch": null,
@@ -1472,7 +1472,7 @@
     },
     {
       "name": "valid-ticket-stage-one",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:102",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#32-동작",
       "given": {
         "queueEnabled": true,
         "reportedEpoch": 42,
@@ -1490,7 +1490,7 @@
     },
     {
       "name": "global-limit-admit-permit-before-handler",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:218",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "queueEnabled": true,
         "globalLimit": 1,
@@ -1518,7 +1518,7 @@
     },
     {
       "name": "global-limit-permit-denied",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:217",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "queueEnabled": true,
         "globalLimit": 1,
@@ -1542,7 +1542,7 @@
     },
     {
       "name": "global-limit-spot-no-response",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:228",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "queueEnabled": true,
         "globalLimit": 1,
@@ -1570,7 +1570,7 @@
     },
     {
       "name": "no-global-limit-no-permit",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:215",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
       "given": {
         "queueEnabled": true,
         "globalLimit": null,
@@ -1591,7 +1591,7 @@
   "startupScenarios": [
     {
       "name": "single-mesh-name-omitted",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#350-2단계-설정",
       "given": {
         "queueEnabled": true,
         "meshNodes": [
@@ -1607,7 +1607,7 @@
     },
     {
       "name": "multiple-meshes-name-given",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:184",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#351-대기열-spot과-epoch",
       "given": {
         "queueEnabled": true,
         "meshNodes": [
@@ -1624,7 +1624,7 @@
     },
     {
       "name": "multiple-meshes-name-missing",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:179",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#350-2단계-설정",
       "given": {
         "queueEnabled": true,
         "meshNodes": [
@@ -1640,7 +1640,7 @@
     },
     {
       "name": "no-mesh-node",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:179",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#350-2단계-설정",
       "given": {
         "queueEnabled": true,
         "meshNodes": [],
@@ -1653,7 +1653,7 @@
     },
     {
       "name": "queue-disabled-ignores-mesh",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:175",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#350-2단계-설정",
       "given": {
         "queueEnabled": false,
         "meshNodes": [
@@ -1669,7 +1669,7 @@
     },
     {
       "name": "stream-name-over-255-bytes",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:179",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#350-2단계-설정",
       "given": {
         "queueEnabled": true,
         "meshNodes": [
@@ -1685,7 +1685,7 @@
     },
     {
       "name": "stream-name-255-bytes",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:179",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#350-2단계-설정",
       "given": {
         "queueEnabled": true,
         "meshNodes": [
@@ -1704,7 +1704,7 @@
   "connectorScenarios": [
     {
       "name": "shared-enqueue-and-callback-order",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:227",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#355-한-연결의-동시-인증-request",
       "given": {
         "requests": [
           "a",
@@ -1785,7 +1785,7 @@
     },
     {
       "name": "ticket-before-response-and-late-position",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:229",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#355-한-연결의-동시-인증-request",
       "given": {
         "requests": [
           "a"
@@ -1831,7 +1831,7 @@
     },
     {
       "name": "reregister-after-silence",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:219",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#354-순번-push와-재등록",
       "given": {
         "requests": [
           "a"
@@ -1858,7 +1858,7 @@
     },
     {
       "name": "conflicting-metadata",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:241",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#356-예약-이름과-metadata-충돌",
       "given": {
         "requests": [
           "a",
@@ -1884,7 +1884,7 @@
     },
     {
       "name": "malformed-response",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:157",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
       "given": {
         "requests": [
           "a",
@@ -1908,7 +1908,7 @@
     },
     {
       "name": "malformed-position-send",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:232",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#355-한-연결의-동시-인증-request",
       "given": {
         "requests": [
           "a",
@@ -1930,7 +1930,7 @@
     },
     {
       "name": "unsolicited-position-send",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:232",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#355-한-연결의-동시-인증-request",
       "given": {
         "requests": []
       },
@@ -1948,7 +1948,7 @@
     },
     {
       "name": "malformed-ticket-send",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:232",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#355-한-연결의-동시-인증-request",
       "given": {
         "requests": [
           "a",
@@ -1970,7 +1970,7 @@
     },
     {
       "name": "unsolicited-ticket-send",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:232",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#355-한-연결의-동시-인증-request",
       "given": {
         "requests": []
       },
@@ -1988,7 +1988,7 @@
     },
     {
       "name": "deadline-original",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:150",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
       "given": {
         "originalDeadlineMs": 400,
         "firstRejectionMs": 10,
@@ -2008,7 +2008,7 @@
     },
     {
       "name": "deadline-admission",
-      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md:150",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
       "given": {
         "originalDeadlineMs": 3000,
         "firstRejectionMs": 10,

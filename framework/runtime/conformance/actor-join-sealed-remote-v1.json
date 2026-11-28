@@ -5,7 +5,7 @@
   "ownerLanguages": {
     "cpp": "expected-failure-before-owner-fix",
     "dotnet": "enabled",
-    "java": "expected-failure-before-owner-fix",
+    "java": "enabled",
     "node": "enabled"
   },
   "expect": {

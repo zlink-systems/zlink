@@ -1115,7 +1115,8 @@ internal sealed class ZLinkActorRemoteJoiner(
                             ),
                         registration.Locations.Options.PollingInterval,
                         cancellationToken,
-                        () => sourceNode.Node.ObservePeerRoute(targetNodeRid)
+                        () => sourceNode.Node.ObservePeerRoute(targetNodeRid),
+                        runtime.ForceStopToken
                     )
                     .ConfigureAwait(false);
                 //  Relocation flow §4.4: a confirmed Preserve returns the retained
