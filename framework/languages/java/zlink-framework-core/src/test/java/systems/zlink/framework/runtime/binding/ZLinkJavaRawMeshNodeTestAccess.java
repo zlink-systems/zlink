@@ -2,11 +2,11 @@ package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceSpotFollow;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.SpotRouteFence;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
 import java.util.List;
 import java.util.concurrent.CompletionStage;
