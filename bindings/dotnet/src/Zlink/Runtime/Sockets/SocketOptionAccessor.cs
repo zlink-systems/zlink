@@ -8,6 +8,8 @@ namespace Systems.Zlink.Runtime.Sockets.Internal;
 
 internal sealed class SocketOptionAccessor
 {
+    internal const int DefaultOptionBufferSize = 256;
+
     private readonly SocketHandle _handle;
 
     public SocketOptionAccessor(SocketHandle handle)
@@ -118,7 +120,7 @@ internal sealed class SocketOptionAccessor
         return value;
     }
 
-    public byte[] GetBytes(SocketOption option, int initialSize = 256)
+    public byte[] GetBytes(SocketOption option, int initialSize = DefaultOptionBufferSize)
     {
         var handle = _handle.DangerousGetHandle();
         if (option == SocketOption.RoutingId)
@@ -172,7 +174,7 @@ internal sealed class SocketOptionAccessor
         }
     }
 
-    public string GetString(SocketOption option, int initialSize = 256)
+    public string GetString(SocketOption option, int initialSize = DefaultOptionBufferSize)
     {
         var bytes = GetBytes(option, initialSize);
         var len = Array.IndexOf(bytes, (byte)0);

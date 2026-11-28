@@ -265,8 +265,14 @@ if (sub.subscribe(msg)) { /* ... */ }
 | --- | --- |
 | `options` | `SubSocketOptions` |
 | `setSubscription(filter: string)` / `unsetSubscription(filter: string)` | topic filter를 추가/제거; 구독은 누적된다 |
-| `subscriptionAt(index: number)` | `SubscriptionEntry \| null` — 해당 index의 filter |
+| `subscriptionAt(index: number)` | `SubscriptionEntry \| null` — 해당 인덱스의 filter와 pattern 여부를 반환한다. 항목이 없으면 `null`을 반환한다. |
 | `subscribe(result: TopicMessage, flags?: RecvFlags)` | `result`를 다음 매칭 publish로 채움 |
+
+`subscriptionAt`은 바인딩의 버퍼로 Core를 한 번 호출한다. 빈 filter도 성공으로
+반환한다. `BUFFER_TOO_SMALL`일 때만 Core가 반환한 길이로 한 번 더 호출한다.
+`NOT_FOUND`는 항목 없음으로 반환한다. 다른 실패 결과를 받으면
+바인딩은 `ConfigError`를 던진다.
+조회 계약은 [공통 Subscription 조회](../../spec/README.ko.md#subscription-조회)를 따른다.
 
 `XSubSocket`은 아무것도 더하지 않는다 — 모든 member가 상속된 `SubSocket`
 표면 그대로다.

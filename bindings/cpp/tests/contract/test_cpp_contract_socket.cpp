@@ -728,8 +728,8 @@ void test_subscription_at_grows_on_core_buffer_too_small ()
     const std::string filter (300, 'f');
     subscriber.set_subscription (filter);
 
-    const zlink::subscription_filter_t entry = subscriber.subscription_at (0);
-    assert (entry.filter == filter);
+    const auto entry = subscriber.subscription_at (0);
+    assert (entry && entry->filter == filter);
     subscriber.close ();
 }
 

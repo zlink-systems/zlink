@@ -57,7 +57,7 @@ public class SocketSubscriptionContractTest {
 
         try (Context ctx = Zlink.createContext();
              SubSocket sub = ctx.createSubSocket()) {
-            String filter = "f".repeat(200);
+            String filter = "f".repeat(4096);
             sub.setSubscription(filter);
             assertEquals(filter, sub.subscriptionAt(0)
                 .map(SubscriptionEntry::filter).orElseThrow());
