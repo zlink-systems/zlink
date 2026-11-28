@@ -3,7 +3,6 @@
 #[path = "perf_common.rs"]
 mod common;
 
-use std::io::{self, BufRead};
 use std::time::{Duration, Instant};
 use zlink::{POLLIN, PollEvent, Poller, Received, RecvFlags, RecvResult};
 
@@ -12,7 +11,7 @@ fn main() {
     let settings = common::MultiSettings::from_env();
 
     let ctx = common::perf_server_context();
-    let server = ctx.dealer_socket().expect("dealer");
+    let server = ctx.create_dealer_socket().expect("dealer");
     // C parity: numeric HWM remains behind the manual-override gate.
     common::apply_multi_hwm(&server, &settings);
     server
@@ -37,28 +36,19 @@ fn main() {
     let endpoint = server.last_endpoint().expect("endpoint");
     common::print_ready(&endpoint);
 
-    let stdin = io::stdin();
-    let mut start_seen = false;
-    for line in stdin.lock().lines() {
-        let line = line.unwrap_or_default();
-        if line.trim() == format!("START,{}", args.msg_size) {
-            start_seen = true;
-            break;
-        }
-        if matches!(line.trim(), "STOP" | "QUIT") {
-            return;
-        }
-    }
-    if !start_seen {
+    if !common::wait_for_start_stdin(args.msg_size) {
         return;
     }
     ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
-    // C perf_multi_dealer_dealer_server.cpp run_receive_window(): poller POLLIN,
-    // perf_socket_poll(...,-1) signal-driven, drain non-blocking, count until
-    // the measure-seconds deadline. The wire stop token only wakes the poll; it
-    // does NOT anchor aggregation (the server deadline does).
-    let deadline = Instant::now() + Duration::from_secs(settings.duration_seconds.max(1));
+    let active_duration = Duration::from_secs(settings.duration_seconds.max(1));
+    let deadline = Instant::now() + active_duration;
+    let drain_limit = if args.msg_size >= 65_536 {
+        (active_duration * 2).max(Duration::from_secs(10))
+    } else {
+        active_duration.max(Duration::from_secs(2))
+    };
+    let drain_deadline = deadline + drain_limit;
     let mut latency_stats = common::LatencyStats::new();
     let mut active_count: u64 = 0;
     let mut auto_hwm_printed = false;
@@ -66,75 +56,51 @@ fn main() {
 
     let poller = Poller::new().expect("poller");
     poller.add_socket(&server, POLLIN, 0).expect("poller add");
-    let mut events = vec![PollEvent::default(); 1];
+    let mut events = [PollEvent::default()];
 
-    let mut record = |received: &Received, latency_stats: &mut common::LatencyStats| {
-        let data = common::message_payload(received.parts());
-        // Stop token (is_valid_active_message is false for it) only ends the
-        // window via the deadline; it is never counted.
-        if Instant::now() < deadline && common::is_valid_active_message(data, args.msg_size) {
-            active_count += 1;
-            if !auto_hwm_printed {
-                // A post-message snapshot observes the attached application
-                // pipe instead of the raw socket-option default.
-                common::print_multi_auto_hwm_detail(
-                    &server,
-                    "endpoint",
-                    &args.transport,
-                    args.msg_size,
-                    "dealer",
-                );
-                auto_hwm_printed = true;
-            }
-            if let Some(elapsed_ns) = common::elapsed_since_sent_ns(data) {
-                latency_stats.record_latency_sample_ns(elapsed_ns);
-            }
-        }
-    };
-
-    'outer: loop {
-        let remaining_ms = deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis()
-            .max(1) as i64;
-        match poller.wait(&mut events, remaining_ms) {
-            Ok(n) if n > 0 && events[0].is_readable() => {}
-            Ok(_) if Instant::now() < deadline => continue,
-            Ok(_) => break 'outer,
-            Err(err) => panic!("poller wait failed: {err}"),
-        }
-        // Drain everything currently queued without blocking.
-        loop {
-            match server.recv(&mut received, RecvFlags::DONT_WAIT) {
-                Ok(true) => {
-                    record(&received, &mut latency_stats);
-                }
-                Ok(false) => break,
-                Err(err) if err.code() == RecvResult::NoData => break,
-                Err(err) => panic!("recv failed: {err}"),
-            }
-        }
-        if Instant::now() >= deadline {
-            break 'outer;
-        }
-    }
-
-    // C drain_phase_until_idle(2.0s max, 50ms idle): UNCOUNTED tail drain so
-    // stale messages do not spill into the next size case.
-    let drain_deadline = Instant::now() + Duration::from_secs_f64(2.0);
-    let mut idle_deadline = Instant::now() + Duration::from_millis(50);
-    while Instant::now() < drain_deadline {
+    // Each sender submits one stop token after its pending sends settle.
+    let mut remaining_senders = settings.clients;
+    while remaining_senders > 0 {
+        let now = Instant::now();
+        assert!(
+            now < drain_deadline,
+            "dealer-dealer receive drain timed out"
+        );
         match server.recv(&mut received, RecvFlags::DONT_WAIT) {
             Ok(true) => {
-                idle_deadline = Instant::now() + Duration::from_millis(50);
-            }
-            Ok(false) | Err(_) => {
-                if Instant::now() >= idle_deadline {
-                    break;
+                if common::is_stop_message(received.parts()) {
+                    remaining_senders -= 1;
+                    continue;
                 }
-                common::poll_idle_until(idle_deadline, Duration::from_millis(1));
+                if now >= deadline {
+                    continue;
+                }
+                let data = common::message_payload(received.parts());
+                if !common::is_valid_active_message(data, args.msg_size) {
+                    continue;
+                }
+                active_count += 1;
+                if !auto_hwm_printed {
+                    common::print_multi_auto_hwm_detail(
+                        &server,
+                        "endpoint",
+                        &args.transport,
+                        args.msg_size,
+                        "dealer",
+                    );
+                    auto_hwm_printed = true;
+                }
+                if let Some(elapsed_ns) = common::elapsed_since_sent_ns(data) {
+                    latency_stats.record_latency_sample_ns(elapsed_ns);
+                }
+                continue;
             }
+            Ok(false) => {}
+            Err(err) if err.code() == RecvResult::NoData => {}
+            Err(err) => panic!("recv failed: {err}"),
         }
+        let wait_ms = common::poll_timeout_until(drain_deadline).min(10);
+        poller.wait(&mut events, wait_ms).expect("poller wait");
     }
 
     let stats = latency_stats.finish();
