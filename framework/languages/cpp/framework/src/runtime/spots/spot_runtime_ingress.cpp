@@ -98,6 +98,36 @@ void report_handoff_terminal_drop (const std::shared_ptr<detail::spot_node_build
         std::cerr << "zlink-cpp-handoff-terminal dropped reason=" << reason << '\n';
 }
 
+void report_actor_packet_rejection (const detail::spot_node_builder_state_t &state,
+                                    std::string_view actor_id,
+                                    std::string_view packet_name,
+                                    bool request,
+                                    std::exception_ptr error,
+                                    auto &&enrich)
+{
+    detail::dispatch_error_reporter_t (state.dispatch).report_lazy ([&] {
+        message_dispatch_error_event_t event{
+          .surface = dispatch_error_surface_t::spot_actor,
+          .message_kind =
+            request ? dispatch_message_kind_t::actor_request : dispatch_message_kind_t::actor_send,
+          .reason = dispatch_error_reason_t::stale_target,
+          .action = request ? dispatch_error_action_t::reply_error : dispatch_error_action_t::drop,
+          .packet_name = std::string (packet_name),
+          .actor_id = std::string (actor_id),
+          .exception = std::move (error),
+          .mesh_name = state.snapshot.name};
+        enrich (event);
+        return event;
+    });
+    runtime::runtime_metrics_t metrics (state.monitoring);
+    if (!request && metrics.enabled ())
+        metrics.counter ("zlink.mesh_node.messages.dropped", "{message}", 1,
+                         {{"mesh_name", state.snapshot.name},
+                          {"surface", "actor"},
+                          {"message_kind", "send"},
+                          {"reason", "stale_target"}});
+}
+
 runtime::messaging::message_parts_t
 handoff_reply_envelope (const runtime::messaging::envelope_header_t &request_header,
                         const result_t<zlink::message_t> &completed)
@@ -310,14 +340,40 @@ task_t<bool> settle_handoff_packet (std::shared_ptr<detail::spot_node_builder_st
 }
 
 void fail_handoff_backlog (const std::shared_ptr<detail::spot_node_builder_state_t> &state,
-                           std::vector<detail::handoff_packet_t> discarded)
+                           std::vector<detail::handoff_packet_t> discarded,
+                           const actor_ref_t *sealed_actor)
 {
     for (auto &packet : discarded) {
-        auto terminal = settle_handoff_packet (
-          state, packet.application_record, packet.is_request,
-          handoff_terminal_route (packet.metadata),
-          result_t<zlink::message_t>::failure (framework_error_kind_t::unavailable,
-                                               "Actor transfer ended before backlog replay"));
+        auto failure = result_t<zlink::message_t>::failure (
+          framework_error_kind_t::unavailable, sealed_actor
+                                                 ? "Actor Join completion failed"
+                                                 : "Actor transfer ended before backlog replay");
+        if (sealed_actor) {
+            report_actor_packet_rejection (
+              *state, sealed_actor->actor_id ().value (), packet.packet_name, packet.is_request,
+              failure.exception (), [&] (message_dispatch_error_event_t &event) {
+                  if (const auto rid =
+                        handoff_routing_id (packet.metadata, actor_handoff_source_node_key))
+                      event.source_rid = rid->to_hex ();
+                  else if (const auto *record = packet.application_record
+                                                  ? packet.application_record->identity ()
+                                                  : nullptr) {
+                      const auto *source = record->application_record
+                                             ? &record->application_record->source
+                                           : record->frozen_record ? &record->frozen_record->source
+                                                                   : nullptr;
+                      if (source && !source->node_routing_id.empty ())
+                          event.source_rid =
+                            zlink::routing_id_t::from (source->node_routing_id).to_hex ();
+                  }
+                  if (const auto corr = packet.metadata.find (actor_request_id_key);
+                      corr != packet.metadata.end ())
+                      event.correlation_id = corr->second;
+              });
+        }
+        auto terminal =
+          settle_handoff_packet (state, packet.application_record, packet.is_request,
+                                 handoff_terminal_route (packet.metadata), std::move (failure));
         detail::observe_task_completion (terminal, [state] (const result_t<bool> &result) {
             if (!result || !result.value ()) {
                 report_handoff_terminal_drop (state, "discarded_backlog_terminal_failed");
@@ -947,41 +1003,29 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                                      detail::message_flow_tracer_t (state_owner->dispatch).mode ())
                                  ? runtime::flow_context_t::current ()
                                  : std::optional<runtime::flow_value_t>{};
-    const auto report_actor_send_drop = [&] (std::exception_ptr error = {}) {
-        if (message_kind != stream_message_kind_t::send)
-            return;
-        detail::dispatch_error_reporter_t (state_owner->dispatch).report_lazy ([&] {
-            return message_dispatch_error_event_t{
-              .surface = dispatch_error_surface_t::spot_actor,
-              .message_kind = dispatch_message_kind_t::actor_send,
-              .reason = dispatch_error_reason_t::stale_target,
-              .action = dispatch_error_action_t::drop,
-              .packet_name = std::string (packet_name),
-              .actor_id = std::string (actor_ref.actor_id ().value ()),
-              .source_rid = inbound_source_node_rid.to_hex (),
-              .correlation_id = metadata.correlation_id,
-              .exception = std::move (error),
-              .flow_id = dispatch_flow ? std::make_optional (dispatch_flow->flow_id) : std::nullopt,
-              .flow_origin =
-                dispatch_flow ? std::make_optional (dispatch_flow->origin) : std::nullopt,
-              .mesh_name = state_owner->snapshot.name};
-        });
-        runtime::runtime_metrics_t metrics (state_owner->monitoring);
-        if (metrics.enabled ())
-            metrics.counter ("zlink.mesh_node.messages.dropped", "{message}", 1,
-                             {{"mesh_name", state_owner->snapshot.name},
-                              {"surface", "actor"},
-                              {"message_kind", "send"},
-                              {"reason", "stale_target"}});
+    const auto report_rejection = [&] (std::exception_ptr error = {}) {
+        report_actor_packet_rejection (
+          *state_owner, actor_ref.actor_id ().value (), packet_name,
+          message_kind == stream_message_kind_t::request, std::move (error),
+          [&] (message_dispatch_error_event_t &event) {
+              event.source_rid = inbound_source_node_rid.to_hex ();
+              event.correlation_id = metadata.correlation_id;
+              if (const auto corr = metadata.values.find (detail::actor_request_id_key);
+                  !event.correlation_id && corr != metadata.values.end ())
+                  event.correlation_id = corr->second;
+              if (dispatch_flow) {
+                  event.flow_id = dispatch_flow->flow_id;
+                  event.flow_origin = dispatch_flow->origin;
+              }
+          });
     };
     const auto reject_handoff_packet = [&] (detail::handoff_append_result_t admission) {
         if (admission == detail::handoff_append_result_t::join_completion_failed) {
             auto failure = result_t<std::optional<zlink::message_t>>::failure (
               framework_error_kind_t::unavailable, "Actor Join completion failed");
-            if (message_kind == stream_message_kind_t::send) {
-                report_actor_send_drop (failure.exception ());
+            report_rejection (failure.exception ());
+            if (message_kind == stream_message_kind_t::send)
                 return result_t<std::optional<zlink::message_t>>::success (zlink::message_t{});
-            }
             return failure;
         }
         return detail::result_access_t::failure<std::optional<zlink::message_t>> (
@@ -1094,7 +1138,8 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     auto project_actor_dispatch_state =
       [&] (const std::optional<spot_id_t> &found_location) -> result_t<actor_dispatch_plan_t> {
         if (!found_location) {
-            report_actor_send_drop ();
+            if (message_kind == stream_message_kind_t::send)
+                report_rejection ();
             return result_t<actor_dispatch_plan_t>::failure (
               framework_error_kind_t::not_found, "actor spot route disappeared before dispatch");
         }
@@ -1120,7 +1165,8 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         const auto context = _state->spot_contexts_by_id.find (std::string (plan.current_spot_id));
         if (context == _state->spot_contexts_by_id.end () || !context->second._state
             || !context->second._state->spot_instance) {
-            report_actor_send_drop ();
+            if (message_kind == stream_message_kind_t::send)
+                report_rejection ();
             return result_t<actor_dispatch_plan_t>::failure (
               framework_error_kind_t::not_found,
               "actor spot context is not registered. node="

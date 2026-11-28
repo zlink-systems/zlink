@@ -172,6 +172,106 @@ TEST (ActorMaintenanceJoin, LateRequestRequiresSuccessfulJoinCompletion)
         }
         EXPECT_EQ (state->lane.run ([&] { return state->actor_spot_ids.at (key); }).get (),
                    fw::spot_id_t (local_spot));
+        if (fail_completion) {
+            const auto native = state->native_node.lock ();
+            ASSERT_TRUE (native);
+            auto inventory = native->objects ().try_begin_maintenance_inventory ();
+            EXPECT_FALSE (inventory.result_for (std::chrono::milliseconds (100)))
+              << "host maintenance completed while the failed local Join owned its prefix";
+            release_join_seal.run ();
+            const auto settled = inventory.result_for (wait_budget);
+            ASSERT_TRUE (settled && *settled && settled->value ().has_value ());
+            ASSERT_TRUE (native->objects ().end_maintenance_inventory ().result ());
+        }
     }
+}
+
+TEST (ActorMaintenanceJoin, RemoteAcceptedCompletionFailureRejectsLateRequest)
+{
+    constexpr int late_payload = 17;
+    auto source_evidence = std::make_shared<observations_t> ();
+    auto target_evidence = std::make_shared<observations_t> ();
+    target_evidence->fail_completion = true;
+    target_evidence->completion_to_hold = 1;
+    target_evidence->joined_payloads = {late_payload};
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source, target;
+    release_callbacks_t release{*target_evidence};
+    configure (source, source_evidence, first_rid, store, relocations);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto source_services = source.app.advanced ().services ().build_provider ();
+    const auto id = fw::actor_id_t (actor_id);
+    ASSERT_TRUE (source_services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (id, actor_type)
+                   .timeout (wait_budget)
+                   .async ()
+                   .result ());
+
+    configure (target, target_evidence, second_rid, store, relocations);
+    target.start ();
+    ASSERT_TRUE (ready (target));
+    ASSERT_TRUE (
+      peer_ready (source_services.get_required<fw::route_mesh_runtime_t> (), second_rid));
+    auto target_services = target.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (set_published_placement_weight (source_services, 0, &target_services));
+    ASSERT_TRUE (target_services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (current_spot), room_type)
+                   .timeout (wait_budget)
+                   .async ()
+                   .result ());
+    ASSERT_TRUE (move_to (source_services.get_required<fw::actor_client_t> (), *target_evidence,
+                          current_spot, 1));
+    const auto completion = [&] {
+        std::lock_guard lock (target_evidence->mutex);
+        EXPECT_EQ (target_evidence->completion_owners.front (), second_rid);
+        return target_evidence->completions.front ();
+    }();
+    const auto *accepted = std::get_if<fw::actor_join_accepted_t> (&completion);
+    ASSERT_NE (accepted, nullptr);
+
+    const auto state =
+      fw::detail::mesh_node_runtime_t::registrations (target.app.advanced ().zlink ())
+        .front ()
+        ->spot_state;
+    scope_exit_t release_join_seal ([&] {
+        fw::detail::spot_node_runtime_t (state).cancel_local_actor_handoff (accepted->actor);
+    });
+    const auto delivery = state->lane
+                            .run ([&] {
+                                const auto &pending = state->pending_join_delivery_work;
+                                return pending.size () == 1 ? *pending.begin () : nullptr;
+                            })
+                            .get ();
+    ASSERT_TRUE (delivery);
+    target_evidence->release_completion.complete (fw::result_t<void>::success ());
+    ASSERT_TRUE (delivery->task ().result_for (wait_budget));
+    const auto closed =
+      state->actor_transfer_coordinator->wait_for_source_completions ().result_for (wait_budget);
+    EXPECT_TRUE (closed && *closed);
+    const auto started = std::chrono::steady_clock::now ();
+    const auto reply = target_services.get_required<fw::actor_client_t> ()
+                         .request (id, probe_t{late_payload})
+                         .timeout (wait_budget)
+                         .async<probe_t> ()
+                         .result ();
+    const auto elapsed = std::chrono::steady_clock::now () - started;
+    RecordProperty (
+      "request_ms",
+      static_cast<int> (std::chrono::duration_cast<std::chrono::milliseconds> (elapsed).count ()));
+    EXPECT_EQ (reply.error_kind (), fw::framework_error_kind_t::unavailable);
+    EXPECT_LT (elapsed, std::chrono::seconds (1));
+    {
+        std::lock_guard lock (target_evidence->mutex);
+        EXPECT_EQ (target_evidence->backlog_appends, 0);
+        EXPECT_TRUE (target_evidence->handled_payloads.empty ());
+    }
+    const auto key = std::string (actor_type) + ":" + actor_id;
+    EXPECT_FALSE (state->actor_transfer_coordinator->blocks_dispatch (key));
+    const auto discarded =
+      fw::detail::spot_node_runtime_t (state).discard_local_actor_async (accepted->actor).result ();
+    ASSERT_TRUE (discarded && discarded.value () && discarded.value ().value ());
+    EXPECT_FALSE (state->actor_transfer_coordinator->phase (key));
 }
 } // namespace zlink::framework::test::actor_maintenance_join

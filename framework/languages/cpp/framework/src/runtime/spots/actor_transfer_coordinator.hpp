@@ -42,11 +42,12 @@ enum class actor_move_phase_t
 {
     source_reserved,
     local,
-    local_completion_failed, // Keep the Join seal and reject new application ingress.
+    local_completion_failed,
     source_remote,
     target_pending,
     target_committing,
-    reconcile
+    reconcile,
+    remote_join_completion_sealed // Commit has ended. The Actor route owns the seal's lifetime.
 };
 
 struct pending_actor_admission_t
@@ -250,7 +251,11 @@ class actor_transfer_coordinator_t
                                        std::string transfer_id = {},
                                        bool pending_relocation_request = false);
     result_t<void> try_begin_local (const std::string &actor_key);
-    task_t<void> mark_local_completion_failed (std::string actor_key);
+    // A committed target returns the backlog it retired, including an empty
+    // backlog when no packet was retained. A local Join keeps its sealed prefix.
+    task_t<backlog_result_t> seal_failed_join_completion (std::string actor_key,
+                                                          std::string committed_handoff_id = {});
+    void retire_remote_join_seal (const std::string &actor_key);
     result_t<void> try_begin_source_remote (const std::string &actor_key,
                                             std::string transfer_id = {});
     std::vector<handoff_packet_t> cancel_move (const std::string &actor_key,
@@ -278,6 +283,8 @@ class actor_transfer_coordinator_t
     finish_move_replay (const std::string &actor_key,
                         std::function<void (std::vector<handoff_packet_t>)> accept_prefix = {},
                         std::string expected_source_transfer = {});
+    // Lifecycle operations are blocked by a move in progress. A committed
+    // target seal rejects application packets until its Actor route retires.
     bool blocks_dispatch (const std::string &actor_key) const;
     task_t<bool> blocks_dispatch_async (std::string actor_key) const;
     std::optional<actor_move_phase_t> phase (const std::string &actor_key) const;
@@ -475,7 +482,7 @@ class actor_transfer_coordinator_t
         // Location Store resolver lookup for the target's spot address.
         std::optional<reconcile_target_context_t> reconcile_context;
         bool pending_relocation_request_at_reservation = false;
-        std::chrono::steady_clock::time_point local_completion_sealed_at;
+        std::chrono::steady_clock::time_point join_completion_sealed_at;
     };
 
     static bool is_source_remote (const move_state_t &move) noexcept
@@ -521,6 +528,7 @@ class actor_transfer_coordinator_t
     void erase_move_on_lane (const std::string &actor_key);
 
     const move_state_t *blocking_move_on_lane (const std::string &actor_key) const;
+    bool has_blocking_transfer_on_lane (const std::string &actor_key) const;
     bool has_message_follow_route_on_lane (const std::string &actor_key) const;
     bool matches_source_reservation_on_lane (const std::string &actor_key,
                                              const std::string &transfer_id) const;
