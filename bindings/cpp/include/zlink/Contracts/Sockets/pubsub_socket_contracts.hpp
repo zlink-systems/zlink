@@ -36,7 +36,8 @@ class subscriber_socket_t : public socket_t
 
     [[nodiscard]] std::optional<subscription_filter_t> subscription_at (size_t index_);
 
-    bool subscription_at (size_t index_, std::string &filter_out_, bool *is_pattern_out_ = nullptr);
+    [[nodiscard]] bool
+    subscription_at (size_t index_, std::string &filter_out_, bool *is_pattern_out_ = nullptr);
 
     [[nodiscard]] topic_message_t subscribe ()
     {

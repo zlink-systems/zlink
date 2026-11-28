@@ -4,18 +4,15 @@ package systems.zlink.runtime.sockets;
 
 import systems.zlink.internal.ContractAccess;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.messaging.SubscriptionEntry;
 import systems.zlink.contracts.messaging.SubscriptionEvent;
 import systems.zlink.contracts.messaging.TopicMessage;
 import systems.zlink.contracts.sockets.RecvResult;
@@ -306,28 +303,6 @@ final class TopicPlane {
     void unsetSubscription(byte[] filter) {
         Objects.requireNonNull(filter, "filter");
         socket.setSubscriptionBytes(filter, 0, filter.length, false);
-    }
-
-    List<SubscriptionEntry> subscriptions() {
-        socket.ensureOpen();
-        ArrayList<SubscriptionEntry> out = new ArrayList<>();
-        int capacity = 64;
-        try (Arena arena = Arena.ofConfined()) {
-            for (long index = 0;; index++) {
-                MemorySegment lenInOut = arena.allocate(ValueLayout.JAVA_LONG);
-                MemorySegment isPatternOut = arena.allocate(
-                    ValueLayout.JAVA_INT);
-                byte[] filter = socket.subscriptionAt(index, lenInOut,
-                    isPatternOut, capacity);
-                if (filter == null) {
-                    break;
-                }
-                capacity = Math.max(capacity, filter.length);
-                out.add(SubscriptionEntry.fromBytes(filter,
-                    isPatternOut.get(ValueLayout.JAVA_INT, 0) != 0));
-            }
-        }
-        return List.copyOf(out);
     }
 
     private static SubscriptionEvent subscriptionEventFromNative(

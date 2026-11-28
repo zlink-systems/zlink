@@ -21,7 +21,7 @@
 
   <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
     <None Update="Native/subscription_at_shim.c" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../../../cpp/include/zlink_errno.h" Link="Native/zlink_errno.h"
+    <None Include="../../../../core/include/zlink_errno.h" Link="Native/zlink_errno.h"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
