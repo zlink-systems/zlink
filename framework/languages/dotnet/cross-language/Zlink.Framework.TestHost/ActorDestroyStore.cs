@@ -57,14 +57,13 @@ internal sealed class ActorDestroyStore(
             if (_createInProgress.Value && Interlocked.Exchange(ref _createObservedClosing, 1) == 0)
                 events.Write("createObservedClosing");
 
-            if (events.Scenario == "f")
-            {
-                var lease = await ReadLeaseAsync(cancellationToken);
-                if (lease == "valid" && Interlocked.Exchange(ref _observedValidLease, 1) == 0)
-                    events.Write("callerObservedClosingWithValidLease");
-                if (lease != "valid" && Interlocked.Exchange(ref _observedInvalidLease, 1) == 0)
-                    events.Write("callerObservedClosingForRelease");
-            }
+            if (
+                events.Scenario == "f"
+                && Volatile.Read(ref _observedValidLease) == 0
+                && await ReadLeaseAsync(cancellationToken) == "valid"
+                && Interlocked.Exchange(ref _observedValidLease, 1) == 0
+            )
+                events.Write("callerObservedClosingWithValidLease");
         }
         return result;
     }
@@ -143,6 +142,18 @@ internal sealed class ActorDestroyStore(
         {
             await delete.WaitAsync(cancellationToken);
         }
+        // The caller's release decision is this write, so observe the lease here, before
+        // submission, as the Java and Node hosts do. An authority read can precede the
+        // Framework's own lease read and miss the expiry.
+        if (
+            !events.Owner
+            && deleting
+            && original is not null
+            && events.Scenario == "f"
+            && await ReadLeaseAsync(cancellationToken) != "valid"
+            && Interlocked.Exchange(ref _observedInvalidLease, 1) == 0
+        )
+            events.Write("callerObservedClosingForRelease");
 
         var result = await inner.WriteAsync(request, cancellationToken);
         if (result is ZLinkStoreWriteResult.Applied committed)
