@@ -23,7 +23,9 @@ import systems.zlink.contracts.messaging.SubscriptionEntry;
 import systems.zlink.contracts.messaging.SubscriptionEvent;
 import systems.zlink.contracts.messaging.TopicMessage;
 import systems.zlink.contracts.errors.CloseResult;
+import systems.zlink.contracts.errors.ConfigResult;
 import systems.zlink.contracts.errors.ZlinkCloseException;
+import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
@@ -45,6 +47,7 @@ import java.util.Optional;
  */
 final class NativeSocketRuntime implements AutoCloseable {
     static final int DEFAULT_IO_BUFFER_SIZE = 8192;
+    private static final int SUBSCRIPTION_FILTER_BUFFER_SIZE = 256;
     private final SocketCore socketCore;
     private final TopicPlane topicPlane;
     private final ReceivePlane receivePlane;
@@ -543,10 +546,6 @@ final class NativeSocketRuntime implements AutoCloseable {
         topicPlane.unsetSubscription(filter);
     }
 
-    public List<SubscriptionEntry> subscriptions() {
-        return topicPlane.subscriptions();
-    }
-
     int send(byte[] data, int offset, int length, int sendFlags) {
         Objects.requireNonNull(data, "data");
         validateRange(data.length, offset, length, "data");
@@ -896,35 +895,31 @@ final class NativeSocketRuntime implements AutoCloseable {
         return receivePlane.pendingFrameCount();
     }
 
-    byte[] subscriptionAt(long index, MemorySegment lenInOut,
-                          MemorySegment isPatternOut, int initialCapacity) {
-        int capacity = Math.max(initialCapacity, 0);
-        while (true) {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment filterOut = capacity == 0 ? MemorySegment.NULL
-                    : arena.allocate(capacity);
-                lenInOut.set(ValueLayout.JAVA_LONG, 0, capacity);
-                isPatternOut.set(ValueLayout.JAVA_INT, 0, 0);
-                int rc = Native.subscriptionAt(handle, index, filterOut, lenInOut,
-                    isPatternOut);
-                if (rc == 0) {
-                    int actual = toIntLength(lenInOut.get(ValueLayout.JAVA_LONG, 0));
-                    if (actual == 0)
-                        return new byte[0];
-                    byte[] out = new byte[actual];
-                    MemorySegment.copy(filterOut, 0, MemorySegment.ofArray(out), 0,
-                        actual);
-                    return out;
-                }
-                if (rc == systems.zlink.contracts.errors.ConfigResult.NOT_FOUND.value())
-                    return null;
-                if (rc == systems.zlink.contracts.errors.ConfigResult.BUFFER_TOO_SMALL.value()) {
-                    capacity = toIntLength(lenInOut.get(ValueLayout.JAVA_LONG, 0));
-                    continue;
-                }
-                throw new systems.zlink.contracts.errors.ZlinkConfigException(
-                    systems.zlink.contracts.errors.ConfigResult.fromValue(rc), Native.errno());
+    Optional<SubscriptionEntry> subscriptionAt(int index) {
+        if (index < 0)
+            throw new IndexOutOfBoundsException("subscription index " + index);
+        ensureOpen();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment filter = arena.allocate(SUBSCRIPTION_FILTER_BUFFER_SIZE);
+            MemorySegment length = arena.allocate(ValueLayout.JAVA_LONG);
+            MemorySegment pattern = arena.allocate(ValueLayout.JAVA_INT);
+            length.set(ValueLayout.JAVA_LONG, 0, filter.byteSize());
+
+            int result = Native.subscriptionAt(handle, index, filter, length, pattern);
+            if (result == ConfigResult.BUFFER_TOO_SMALL.value()) {
+                filter = arena.allocate(length.get(ValueLayout.JAVA_LONG, 0));
+                result = Native.subscriptionAt(handle, index, filter, length, pattern);
             }
+
+            if (result == ConfigResult.NOT_FOUND.value())
+                return Optional.empty();
+            if (result != ConfigResult.OK.value())
+                throw new ZlinkConfigException(ConfigResult.fromValue(result), Native.errno());
+
+            int actualLength = toIntLength(length.get(ValueLayout.JAVA_LONG, 0));
+            byte[] bytes = filter.asSlice(0, actualLength).toArray(ValueLayout.JAVA_BYTE);
+            return Optional.of(SubscriptionEntry.fromBytes(bytes,
+                pattern.get(ValueLayout.JAVA_INT, 0) != 0));
         }
     }
 
