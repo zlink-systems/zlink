@@ -49,7 +49,7 @@ The typed options facade shared by every socket type, reached via `socket.common
 ```rust
 let options = socket.common_options();
 options.set_send_high_water_mark(100_000)?;
-options.set_linger(Duration::from_secs(1))?;
+options.set_linger(Some(Duration::from_secs(1)))?;
 options.set_submit_retry_mode(SubmitRetryMode::LocalFailure)?;
 ```
 
@@ -57,11 +57,11 @@ options.set_submit_retry_mode(SubmitRetryMode::LocalFailure)?;
 
 | Member | Meaning |
 | --- | --- |
-| `linger()` / `set_linger(Duration)` | upper bound on how long `close()` waits for pending sends to flush |
+| `linger()` / `set_linger(Option<Duration>)` | upper bound on how long `close()` waits for pending sends to flush; `None` waits indefinitely, `Some(Duration::ZERO)` does not wait |
 | `send_high_water_mark()` / `set_send_high_water_mark(u64)` | outbound accounted-byte HWM; `0` means unlimited |
 | `receive_high_water_mark()` / `set_receive_high_water_mark(u64)` | inbound accounted-byte HWM; `0` means unlimited |
-| `send_timeout()` / `set_send_timeout(Duration)` | upper bound on how long a blocking send waits |
-| `receive_timeout()` / `set_receive_timeout(Duration)` | upper bound on how long a blocking receive waits |
+| `send_timeout()` / `set_send_timeout(Option<Duration>)` | upper bound on how long a blocking send waits; `None` waits indefinitely, `Some(Duration::ZERO)` returns at once when it would block |
+| `receive_timeout()` / `set_receive_timeout(Option<Duration>)` | upper bound on how long a blocking receive waits; `None` waits indefinitely, `Some(Duration::ZERO)` returns at once |
 | `immediate()` / `set_immediate(bool)` | whether a send requires a live connection now, instead of queueing until one exists |
 | `rid_duplicate_policy()` / `set_rid_duplicate_policy(RidDuplicatePolicy)` | what happens when a peer reuses an existing routing id |
 | `connect_timeout()` / `set_connect_timeout(Duration)` | upper bound on how long connect handshake waits |

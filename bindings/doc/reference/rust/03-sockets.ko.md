@@ -53,7 +53,7 @@ option facade.
 ```rust
 let options = socket.common_options();
 options.set_send_high_water_mark(100_000)?;
-options.set_linger(Duration::from_secs(1))?;
+options.set_linger(Some(Duration::from_secs(1)))?;
 options.set_submit_retry_mode(SubmitRetryMode::LocalFailure)?;
 ```
 
@@ -61,11 +61,11 @@ options.set_submit_retry_mode(SubmitRetryMode::LocalFailure)?;
 
 | Member | 의미 |
 | --- | --- |
-| `linger()` / `set_linger(Duration)` | `close()`가 대기 중인 send를 flush하기 위해 기다리는 상한 |
+| `linger()` / `set_linger(Option<Duration>)` | `close()`가 대기 중인 send를 flush하기 위해 기다리는 상한. `None`은 무기한, `Some(Duration::ZERO)`는 기다리지 않음 |
 | `send_high_water_mark()` / `set_send_high_water_mark(u64)` | outbound accounted-byte HWM; `0`은 무제한 |
 | `receive_high_water_mark()` / `set_receive_high_water_mark(u64)` | inbound accounted-byte HWM; `0`은 무제한 |
-| `send_timeout()` / `set_send_timeout(Duration)` | blocking send가 기다리는 상한 |
-| `receive_timeout()` / `set_receive_timeout(Duration)` | blocking receive가 기다리는 상한 |
+| `send_timeout()` / `set_send_timeout(Option<Duration>)` | blocking send가 기다리는 상한. `None`은 무기한, `Some(Duration::ZERO)`는 막히면 즉시 반환 |
+| `receive_timeout()` / `set_receive_timeout(Option<Duration>)` | blocking receive가 기다리는 상한. `None`은 무기한, `Some(Duration::ZERO)`는 즉시 반환 |
 | `immediate()` / `set_immediate(bool)` | send가 지금 당장 살아있는 연결을 요구하는지, 아니면 연결이 생길 때까지 큐잉하는지 |
 | `rid_duplicate_policy()` / `set_rid_duplicate_policy(RidDuplicatePolicy)` | peer가 기존 routing id를 재사용할 때 벌어지는 일 |
 | `connect_timeout()` / `set_connect_timeout(Duration)` | connect handshake가 기다리는 상한 |
