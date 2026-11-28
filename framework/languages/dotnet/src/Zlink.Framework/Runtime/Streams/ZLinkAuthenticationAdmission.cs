@@ -25,15 +25,12 @@ internal sealed class ZLinkAuthenticationAdmission(ZLinkAuthenticationAdmissionO
             )
         );
 
-    internal bool TryAdmit(ZlinkStreamHeader header, out Lease? lease)
-    {
-        lease = null;
-        if (
-            header.Kind != ZlinkStreamMessageKind.Request
-            || !string.Equals(header.Name, options.PacketName, StringComparison.Ordinal)
-        )
-            return true;
+    internal bool IsAuthentication(ZlinkStreamHeader header) =>
+        header.Kind == ZlinkStreamMessageKind.Request
+        && string.Equals(header.Name, options.PacketName, StringComparison.Ordinal);
 
+    internal Lease? TryAcquire(ulong queueEpoch)
+    {
         int current;
         do
         {
@@ -41,17 +38,18 @@ internal sealed class ZLinkAuthenticationAdmission(ZLinkAuthenticationAdmissionO
             if (current >= options.Limit)
             {
                 ZLinkRuntimeMetrics.RecordAuthenticationAdmissionRejection();
-                return false;
+                return null;
             }
         } while (Interlocked.CompareExchange(ref _inFlight, current + 1, current) != current);
 
-        lease = new Lease(this);
-        return true;
+        return new Lease(this, queueEpoch);
     }
 
-    internal sealed class Lease(ZLinkAuthenticationAdmission owner) : IZLinkSerialTerminalRelease
+    internal sealed class Lease(ZLinkAuthenticationAdmission owner, ulong queueEpoch)
+        : IZLinkSerialTerminalRelease
     {
         private ZLinkAuthenticationAdmission? _owner = owner;
+        internal ulong QueueEpoch { get; } = queueEpoch;
 
         public void Release()
         {

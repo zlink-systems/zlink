@@ -1415,10 +1415,10 @@ PYTHON
 
   local redis_port setup_port sender_port owner_port
   read -r redis_port setup_port sender_port owner_port <<<"$(free_port 4)"
-  # Node source -> .NET target Join does not finish on main (#5046), so the
-  # setup node that performs the Join into a .NET owner is a Java source.
+  # Node setup does not finish Join into .NET (#5046) or Java; use Java
+  # setup for those owners to exercise the sealed completion contract.
   local setup_lang=node
-  [[ "${owner}" == dotnet ]] && setup_lang=java
+  [[ "${owner}" == dotnet || "${owner}" == java ]] && setup_lang=java
   local setup_rid=${setup_lang}-user-spot-join-source
   local sender_rid="${sender}-late-actor-sender"
   local owner_rid="${owner}-user-spot-join-target"
@@ -1451,8 +1451,7 @@ PYTHON
   touch "${start_file}"
   assert_source_actor_create "${setup_events}" "${setup_rid}" "${owner_rid}"
   wait_for_line "${setup_events}" 'user-spot-join-request-reply|accepted=true' 60
-  # Only a Node setup and owner log the canonical command 28; the Java setup
-  # used for a .NET owner does not.
+  # The Java setup used for .NET and Java owners does not log command 28.
   if [[ "${setup_lang}" == node ]]; then
     wait_for_canonical_actor_join "${owner_events}.flow"
   fi

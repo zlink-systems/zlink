@@ -1505,7 +1505,7 @@ public final class ZLinkAggregateRelocationCoordinator {
     public record TargetIngressAuthority(
             Supplier<Prepared> prepared, Supplier<Published> committed) {}
 
-    /** Confirms that the exact target attempt owns this route before application admission. */
+    /** Checks the exact target attempt's authority. */
     public CompletionStage<Boolean> confirmTargetIngress(
             TargetIngressAuthority stage,
             ZLinkAggregateFence fence,

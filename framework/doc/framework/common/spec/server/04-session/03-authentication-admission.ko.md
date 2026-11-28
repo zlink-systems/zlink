@@ -2,7 +2,7 @@
 
 > 대상: STREAM session을 쓰는 서버 Framework와 Stream Connector
 > 이슈: #4546
-> 공통 fixture: `framework/runtime/conformance/login-admission-v1.json`
+> 공통 fixture: `framework/runtime/conformance/login-admission-v1.json`(1단계), `login-admission-queue-v1.json`·`admission-queue-messages-v1.json`(2단계)
 
 로그인이 한꺼번에 몰리면 인증 handler와 그 뒤의 DB 조회·Actor 생성이 같이 몰린다. 이 문서는 그 순간 폭주에서
 인증 handler와 그 뒤의 자원을 지키는 입장 제한을 정한다. 1단계는 node별 동시 인증 한도이고, 2단계는 그 위에
@@ -208,7 +208,7 @@ Connector는 다음과 같이 처리한다.
 #### 3.5.3 Node 보고와 ticket 발급
 
 - 2단계가 켜진 node는 1초마다 대기열 Spot에 `NodeReport` Spot request를 보낸다. 내용은 node RID, 1단계 한도, 현재
-  처리 중 수, 직전 보고 뒤 사용된 ticket의 SessionRid 목록, 직전 보고 뒤 끝난 대기 session의 SessionRid 목록, 전역 상한이 있을 때 쥐고 있는 permit ID 목록과 끝난 요청의 연속 최대 순번(아래)이다.
+  처리 중 수, 직전 보고 뒤 사용된 ticket의 연결 식별(STREAM 등록 이름과 SessionRid) 목록, 직전 보고 뒤 끝난 대기 session의 연결 식별 목록, 전역 상한이 있을 때 쥐고 있는 permit ID 목록과 끝난 요청의 연속 최대 순번(아래)이다.
   Spot은 그 Response로 현재 epoch를 돌려준다. 이 보고는 Framework 내부 Spot 메시지이고 client wire가 아니다.
 - Spot은 3초 안에 받은 보고만 유효로 본다. 유효 보고가 없는 node의 session에는 ticket을 내지 않는다.
 - 대기자는 연결 식별(node RID, node lifecycle generation, STREAM 등록 이름, SessionRid)로 기록하고, node 보고의 사용·종료
@@ -322,6 +322,10 @@ Connector는 다음과 같이 처리한다.
 ## 4. 시험
 
 - 공통 fixture `login-admission-v1.json`의 서버 시나리오 12개와 connector 시나리오 11개를 네 언어가 실행한다.
+- 2단계 공통 fixture 두 개를 네 언어가 실행한다. `login-admission-queue-v1.json`: ticket 벡터 12개(§3.5.2), 대기열
+  Spot 시나리오 22개, node 시나리오 10개, startup 시나리오 7개(§3.5.0), connector 시나리오 11개.
+  `admission-queue-messages-v1.json`: node 간 메시지 유효 8개와 무효 9개(§3.5.8). 각 언어 시험은 항목 수를 정확히
+  확인한다.
 - 네 언어 서버 × 네 언어 connector 교차언어 contract test: 한도 초과 시 handler 미실행, 거절 결과의 code와
   `$zlink.admission.retryAfterMs`, connector 자동 재시도 뒤 성공, 거절된 request의 Actor·Location Store·permit 미사용.
 - Fixture validator 통과는 runtime 통과가 아니다. 각 언어 runtime 시험은 fixture에 없는 다음도 확인한다: 거절된

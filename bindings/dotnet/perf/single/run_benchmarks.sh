@@ -71,6 +71,13 @@ IO_THREADS=""
 SNDTIMEO_MS=""
 RCVTIMEO_MS=""
 AUTO_HWM_PROFILE=""
+OUTPUT_FILE=""
+SINGLE_HWM="${PERF_SINGLE_HWM:-}"
+SINGLE_SNDHWM="${PERF_SINGLE_SNDHWM:-}"
+SINGLE_RCVHWM="${PERF_SINGLE_RCVHWM:-}"
+SINGLE_SNDBUF="${PERF_SINGLE_SNDBUF:-${PERF_SNDBUF:-}}"
+SINGLE_RCVBUF="${PERF_SINGLE_RCVBUF:-${PERF_RCVBUF:-}}"
+ALLOW_MANUAL_SOCKET_OVERRIDES="${PERF_SINGLE_ALLOW_MANUAL_SOCKET_OVERRIDES:-${PERF_ALLOW_MANUAL_SOCKET_OVERRIDES:-0}}"
 SECONDS=0
 SHOW_TOTAL_TIME=0
 
@@ -157,15 +164,16 @@ Options:
   --build-dir PATH      Accepted for policy compatibility.
   --reuse-build         Reuse existing build output.
   --clean-build         Remove project bin/obj before build.
-  --output PATH         Unsupported; exits with an error instead of ignoring PATH.
+  --output PATH         Tee console logs to a file.
   --pin-cpu             Pin benchmark process to CPU 0 on Linux.
   --io-threads N        Context I/O threads.
-  --hwm N               Unsupported; exits with an error.
-  --send-hwm N          Unsupported; exits with an error.
-  --recv-hwm N          Unsupported; exits with an error.
-  --buf SIZE            Unsupported; exits with an error.
-  --sndbuf SIZE         Unsupported; exits with an error.
-  --rcvbuf SIZE         Unsupported; exits with an error.
+  --hwm N               Debug-only PERF_SINGLE_HWM override.
+                        Requires PERF_SINGLE_ALLOW_MANUAL_SOCKET_OVERRIDES=1.
+  --send-hwm N          Debug-only PERF_SINGLE_SNDHWM override.
+  --recv-hwm N          Debug-only PERF_SINGLE_RCVHWM override.
+  --buf SIZE            Debug-only override for both PERF_SINGLE_SNDBUF and PERF_SINGLE_RCVBUF.
+  --sndbuf SIZE         Debug-only PERF_SINGLE_SNDBUF override (e.g. 64b, 1k, 64k).
+  --rcvbuf SIZE         Debug-only PERF_SINGLE_RCVBUF override (e.g. 64b, 1k, 64k).
   --sndtimeo N          Send timeout ms.
   --rcvtimeo N          Receive timeout ms.
   --send-timeout-ms N   Alias of --sndtimeo.
@@ -534,8 +542,8 @@ while [[ $# -gt 0 ]]; do
       CLEAN_BUILD=1
       ;;
     --output)
-      echo "--output is not supported by the dotnet single runner." >&2
-      exit 1
+      OUTPUT_FILE="${2:-}"
+      shift
       ;;
     --pin-cpu)
       PIN_CPU=1
@@ -556,9 +564,30 @@ while [[ $# -gt 0 ]]; do
       AUTO_HWM_PROFILE="${2:-}"
       shift
       ;;
-    --hwm|--send-hwm|--recv-hwm|--buf|--sndbuf|--rcvbuf)
-      echo "$1 is not supported by the dotnet single runner." >&2
-      exit 1
+    --hwm)
+      SINGLE_HWM="${2:-}"
+      shift
+      ;;
+    --send-hwm)
+      SINGLE_SNDHWM="${2:-}"
+      shift
+      ;;
+    --recv-hwm)
+      SINGLE_RCVHWM="${2:-}"
+      shift
+      ;;
+    --buf)
+      SINGLE_SNDBUF="${2:-}"
+      SINGLE_RCVBUF="${2:-}"
+      shift
+      ;;
+    --sndbuf)
+      SINGLE_SNDBUF="${2:-}"
+      shift
+      ;;
+    --rcvbuf)
+      SINGLE_RCVBUF="${2:-}"
+      shift
       ;;
     --results-dir)
       RESULTS_ROOT="${2:-}"
@@ -699,10 +728,39 @@ fi
 if [[ -n "${AUTO_HWM_PROFILE}" ]]; then
   EMIT_ENV+=("PERF_CTX_AUTO_HWM_PROFILE=${AUTO_HWM_PROFILE}")
 fi
+if [[ -n "${SINGLE_HWM}${SINGLE_SNDHWM}${SINGLE_RCVHWM}${SINGLE_SNDBUF}${SINGLE_RCVBUF}" ]]; then
+  if [[ "${ALLOW_MANUAL_SOCKET_OVERRIDES}" != "1" ]]; then
+    echo "Error: single manual HWM/SNDBUF/RCVBUF overrides are debug-only." >&2
+    echo "Set PERF_SINGLE_ALLOW_MANUAL_SOCKET_OVERRIDES=1 to use --hwm/--send-hwm/--recv-hwm/--buf/--sndbuf/--rcvbuf." >&2
+    exit 1
+  fi
+  EMIT_ENV+=("PERF_SINGLE_ALLOW_MANUAL_SOCKET_OVERRIDES=1")
+fi
+if [[ -n "${SINGLE_HWM}" ]]; then
+  EMIT_ENV+=("PERF_SINGLE_HWM=${SINGLE_HWM}")
+fi
+if [[ -n "${SINGLE_SNDHWM}" ]]; then
+  EMIT_ENV+=("PERF_SINGLE_SNDHWM=${SINGLE_SNDHWM}")
+fi
+if [[ -n "${SINGLE_RCVHWM}" ]]; then
+  EMIT_ENV+=("PERF_SINGLE_RCVHWM=${SINGLE_RCVHWM}")
+fi
+if [[ -n "${SINGLE_SNDBUF}" ]]; then
+  EMIT_ENV+=("PERF_SINGLE_SNDBUF=${SINGLE_SNDBUF}")
+fi
+if [[ -n "${SINGLE_RCVBUF}" ]]; then
+  EMIT_ENV+=("PERF_SINGLE_RCVBUF=${SINGLE_RCVBUF}")
+fi
 
 set +e
-env "${EMIT_ENV[@]}" python3 "${EMITTER}" "${EMIT_ARGS[@]}"
-status=$?
+if [[ -n "${OUTPUT_FILE}" ]]; then
+  mkdir -p "$(dirname "${OUTPUT_FILE}")"
+  env "${EMIT_ENV[@]}" python3 "${EMITTER}" "${EMIT_ARGS[@]}" | tee "${OUTPUT_FILE}"
+  status=${PIPESTATUS[0]}
+else
+  env "${EMIT_ENV[@]}" python3 "${EMITTER}" "${EMIT_ARGS[@]}"
+  status=$?
+fi
 set -e
 
 SHOW_TOTAL_TIME=1

@@ -39,6 +39,7 @@ public final class RelocationUserSpot implements ZLinkSpot<RelocationActor> {
     @Override
     public void configure() {
         context.handlers().addHandler(UserSpotProbeHandler.class);
+        context.handlers().addHandler(UserSpotLateSendHandler.class);
     }
 
     @Override

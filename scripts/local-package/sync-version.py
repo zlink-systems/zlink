@@ -351,12 +351,6 @@ FRAMEWORK_SCALAR_FIELDS = (
         rf'(providers\.provider \{{ ")(?P<version>{SEMVER})(" \}})',
     ),
     FrameworkField(
-        "plugins/network-sync/server/Server/Zlink.NetworkSync.Server.csproj",
-        "dotnet",
-        "network-sync server plugin package Version",
-        rf"(<Version>)(?P<version>{SEMVER})(</Version>)",
-    ),
-    FrameworkField(
         "framework/languages/dotnet/quickstart/Directory.Packages.props",
         "dotnet",
         "Zlink.Framework quickstart PackageVersion fields",

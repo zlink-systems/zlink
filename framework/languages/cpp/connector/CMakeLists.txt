@@ -41,6 +41,7 @@ add_library(zlink_stream_connector ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   core/src/runtime/calls/zlink_stream_calls.cpp
   core/src/runtime/connector_runtime.cpp
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src/runtime/codecs/json_profile_engine.cpp
+  core/src/runtime/protocol/admission_queue_codec.cpp
   core/src/runtime/protocol/compression/lz4_compression_codec.cpp
   core/src/runtime/protocol/framing/frame_codec.cpp
   core/src/runtime/protocol/framing.cpp

@@ -47,6 +47,12 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "8.0.x"
+      # Restore Zlink.Framework from this checkout: the plugin depends on the repository VERSION,
+      # which is published only by the release (same source as release-dotnet.yml).
+      - name: Prepare local packages
+        run: |
+          source_dir=$(bash ../../../scripts/local-package/dotnet/build-framework-wsl.sh)
+          echo "RestoreAdditionalProjectSources=$source_dir" >> "$GITHUB_ENV"
       - name: Build server plugin
         run: dotnet build Server --nologo
       - name: Check format

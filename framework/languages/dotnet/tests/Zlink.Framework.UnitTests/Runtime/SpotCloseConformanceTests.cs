@@ -38,13 +38,13 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public async Task Context_Close_record_not_started_before_queue_close_joins_the_committed_Close(
+    public async Task Context_Close_during_finalization_joins_the_committed_Close(
         bool cancelJoined,
         bool failOwner
     )
     {
         using var flow = ClosingFlow(
-            nameof(Context_Close_record_not_started_before_queue_close_joins_the_committed_Close),
+            nameof(Context_Close_during_finalization_joins_the_committed_Close),
             cancelJoined,
             failOwner ? 1 : 0
         );
@@ -59,24 +59,11 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         }
         ZLinkSpotActivation? activation = null;
         host.State.OnInstanceInitializing = context => activation = (ZLinkSpotActivation)context;
-        var selected = new TaskCompletionSource<(int Pending, bool Committed, bool Stopped)>(
-            TaskCreationOptions.RunContinuationsAsynchronously
-        );
         host.State.OnInstanceClosing = _ =>
         {
-            var gate = ZLinkSerialTurn.Current!.ExecutionGate!;
-            // Submit during finalization and observe the record on the gate.
-            // The consumer can finish before this cancellation callback returns.
+            // The owner retains its transaction while it stops the old activation.
             activation!.StopToken.Register(() =>
             {
-                gate.ConsumerSelected = () =>
-                    selected.TrySetResult(
-                        (
-                            gate.LifecyclePendingCount,
-                            activation.HasCommittedClose,
-                            activation.ExecutionStatus == ZLinkObjectExecutionStatus.Stopped
-                        )
-                    );
                 host.State.JoinedContextCloseTask = catalog
                     .CloseFromContextAsync(activation, cancellation.Token)
                     .AsTask();
@@ -107,13 +94,6 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         }
         else
             Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
-        var observed = await selected.Task.WaitAsync(Wait);
-        output.WriteLine(
-            $"Unstarted record: pendingAtSelection={observed.Pending}, committed={observed.Committed}, stopped={observed.Stopped}"
-        );
-        Assert.Equal(1, observed.Pending);
-        Assert.True(observed.Committed);
-        Assert.True(observed.Stopped);
         var joined = host.State.JoinedContextCloseTask!;
         if (cancelJoined)
         {
@@ -150,6 +130,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         output.WriteLine($"Message flow file: {flowPath}");
         using var cancellation = new CancellationTokenSource();
         await using var host = await SpotCloseHost.StartAsync();
+        var catalog = host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Catalog;
         IZLinkInstanceSpotContext? context = null;
         host.State.OnInstanceInitializing = current => context = current;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -164,38 +145,173 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             $"context-close-cancellation-{Guid.NewGuid():N}"
         );
         await entered.Task.WaitAsync(Wait);
+        Task<bool> owner;
+        Task<bool> joined;
         try
         {
-            host.State.ContextCloseTask = context!.CloseAsync(cancellation.Token).AsTask();
-            host.State.JoinedContextCloseTask = context.CloseAsync(cancellation.Token).AsTask();
+            owner = context!.CloseAsync(cancellation.Token).AsTask();
+            joined = context.CloseAsync(cancellation.Token).AsTask();
             if (cancelJoined)
+            {
+                Assert.Equal(1, await catalog.CloseTransactionCountAsync());
                 cancellation.Cancel();
+                var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                    joined.WaitAsync(Wait)
+                );
+                Assert.Equal(cancellation.Token, error.CancellationToken);
+                Assert.False(owner.IsCompleted);
+            }
         }
         finally
         {
             release.SetResult();
         }
         await initializing;
-        Assert.True(await host.State.ContextCloseTask!.WaitAsync(Wait));
-        var joined = host.State.JoinedContextCloseTask!;
-        if (cancelJoined)
+        Assert.True(await owner.WaitAsync(Wait));
+        if (!cancelJoined)
+            Assert.True(await joined.WaitAsync(Wait));
+        Assert.Equal(1, host.State.OnClosingCalls);
+        Assert.Equal(0, host.Runtime.SnapshotOperationAdmissions().ActiveCount);
+        Assert.Equal(0, await catalog.CloseTransactionCountAsync());
+    }
+
+#if DEBUG
+    [Fact]
+    public async Task Context_Close_join_preserves_cancellation_after_the_incarnation_stops()
+    {
+        using var flow = ClosingFlow(
+            nameof(Context_Close_join_preserves_cancellation_after_the_incarnation_stops),
+            false,
+            0
+        );
+        using var cancellation = new CancellationTokenSource();
+        await using var host = await SpotCloseHost.StartAsync();
+        var catalog = host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Catalog;
+        var spotId = $"close-join-after-stop-{Guid.NewGuid():N}";
+        ZLinkSpotActivation? activation = null;
+        ZLinkSerialExecutionQueue? gate = null;
+        host.State.OnInstanceInitializing = context => activation = (ZLinkSpotActivation)context;
+        host.State.OnInstanceClosing = _ => gate = ZLinkSerialTurn.Current!.ExecutionGate;
+        await host.RequestInstanceAsync(spotId);
+        Assert.NotNull(activation);
+
+        ZLinkStateLane? catalogLane = null;
+        ZLinkStateLane.WorkObserver.Value = (_, lane) => catalogLane = lane;
+        try
         {
+            await catalog.CloseTransactionCountAsync();
+        }
+        finally
+        {
+            ZLinkStateLane.WorkObserver.Value = null;
+        }
+        Assert.NotNull(catalogLane);
+
+        host.Store.HoldAuthorityDeleteFor = spotId;
+        host.Store.HoldAfterAuthorityDelete = true;
+        var finalizing = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseFinalization = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseCatalog = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var joinSubmitted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var stopped = new TaskCompletionSource<ZLinkObjectExecutionStatus>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var releaseStopCallbacks = new ManualResetEventSlim();
+        Task<bool> owner;
+        ZLinkStateLane.WorkObserver.Value = (_, lane) =>
+        {
+            if (ReferenceEquals(lane, activation._lane))
+                finalizing.TrySetResult();
+        };
+        try
+        {
+            owner = catalog.CloseFromContextAsync(activation, CancellationToken.None).AsTask();
+        }
+        finally
+        {
+            ZLinkStateLane.WorkObserver.Value = null;
+        }
+
+        Task? heldActivation = null;
+        Task? heldCatalog = null;
+        CancellationTokenRegistration stopRegistration = default;
+        try
+        {
+            await host.Store.AuthorityDeleteHeld.Task.WaitAsync(Wait);
+            // Allow the owner to publish the end of the lifecycle work, then hold its stop.
+            heldActivation = activation
+                ._lane.RunAsync(async () => await releaseFinalization.Task)
+                .AsTask();
+            host.Store.ReleaseAuthorityDelete.TrySetResult();
+            await finalizing.Task.WaitAsync(Wait);
+            Assert.NotNull(gate);
+            Assert.Equal(ZLinkObjectExecutionStatus.Allowed, activation.ExecutionStatus);
+
+            heldCatalog = catalogLane.RunAsync(async () => await releaseCatalog.Task).AsTask();
+            var joined = catalog.CloseFromContextAsync(activation, cancellation.Token).AsTask();
+            gate.GateOperation = operation =>
+            {
+                // A posted lifecycle record must reach the catalog yield. A direct join
+                // owns no lifecycle record and can already be waiting for the result.
+                if (
+                    operation == ZLinkSerialGateOperation.Release
+                    && (gate.LifecyclePendingCount == 0 || catalogLane.QueuedWorkCount != 0)
+                )
+                    joinSubmitted.TrySetResult();
+            };
+            await gate.RunOnSharedGateAsync(static () => true).AsTask().WaitAsync(Wait);
+            await joinSubmitted.Task.WaitAsync(Wait);
+            Assert.False(joined.IsCompleted);
+            output.WriteLine(
+                $"Before stop: lifecycle pending={gate.LifecyclePendingCount}, catalog queued={catalogLane.QueuedWorkCount}"
+            );
+
+            // Run before the suspended record's stop callbacks so its resume can report
+            // the stopped incarnation while the owner still holds the shared transaction.
+            stopRegistration = activation.StopToken.Register(() =>
+            {
+                stopped.TrySetResult(activation.ExecutionStatus);
+                if (!releaseStopCallbacks.Wait(Wait))
+                    throw new TimeoutException(
+                        "The Close test did not release the stop callbacks."
+                    );
+            });
+            releaseFinalization.TrySetResult();
+            Assert.Equal(ZLinkObjectExecutionStatus.Stopped, await stopped.Task.WaitAsync(Wait));
+            cancellation.Cancel();
+            releaseCatalog.TrySetResult();
             var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                 joined.WaitAsync(Wait)
             );
             Assert.Equal(cancellation.Token, error.CancellationToken);
         }
-        else
-            Assert.True(await joined.WaitAsync(Wait));
+        finally
+        {
+            if (gate is not null)
+                gate.GateOperation = null;
+            host.Store.ReleaseAuthorityDelete.TrySetResult();
+            releaseFinalization.TrySetResult();
+            releaseCatalog.TrySetResult();
+            releaseStopCallbacks.Set();
+            await stopRegistration.DisposeAsync();
+            if (heldActivation is not null)
+                await heldActivation.WaitAsync(Wait);
+            if (heldCatalog is not null)
+                await heldCatalog.WaitAsync(Wait);
+            Assert.True(await owner.WaitAsync(Wait));
+        }
         Assert.Equal(1, host.State.OnClosingCalls);
-        Assert.Equal(0, host.Runtime.SnapshotOperationAdmissions().ActiveCount);
-        Assert.Equal(
-            0,
-            await host
-                .Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName)
-                .Catalog.CloseTransactionCountAsync()
-        );
+        Assert.Equal(0, await catalog.CloseTransactionCountAsync());
     }
+#endif
 
     [Theory]
     [InlineData(false)]
@@ -273,7 +389,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             gate = ZLinkSerialTurn.Current!.ExecutionGate!;
             gate.GateOperation = operation =>
             {
-                // The owner has yielded at Closing CAS; the joining call may not be posted yet.
+                // The owner has yielded at Closing CAS; the second call may not have arrived yet.
                 if (
                     operation == ZLinkSerialGateOperation.Release
                     && host.Store.PutHeld.Task.IsCompleted
@@ -289,7 +405,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         {
             await host.RequestInstanceAsync(spotId, "close-twice");
             await ownerYielded.Task.WaitAsync(Wait);
-            // The request reply confirms that both Close calls have posted their lifecycle records.
+            // The request reply confirms both Close submissions while the owner is still in the lane.
             // Put remains held, so the owner cannot commit before this observation.
             var observed = (
                 Pending: gate!.LifecyclePendingCount,
@@ -299,7 +415,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             output.WriteLine(
                 $"Before commit after both Close submissions: pending={observed.Pending}, sealed={observed.Sealed}, committed={observed.Committed}"
             );
-            Assert.Equal(2, observed.Pending);
+            Assert.Equal(1, observed.Pending);
             Assert.True(observed.Sealed);
             Assert.False(observed.Committed);
             Assert.False(host.State.JoinedContextCloseTask!.IsCompleted);
@@ -813,11 +929,37 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             ),
             "messages.flow"
         );
+        var timeline = new FailureTimeline(
+            "warmReply",
+            "dropRecorded",
+            "listenerReceived",
+            "waitStarted",
+            "waitEnded"
+        );
+        string? observedSpotId = null;
+        // Observe the completed drop before the existing file listener handles it.
+        using var dropObserver = new ActivityListener
+        {
+            ShouldListenTo = activitySource =>
+                activitySource.Name == ZLinkTelemetry.ActivitySourceName,
+            ActivityStopped = activity =>
+            {
+                if (
+                    Volatile.Read(ref observedSpotId) is { } id
+                    && IsDrop(activity)
+                    && Equals(activity.GetTagItem("spot_id"), id)
+                )
+                    timeline.Mark("dropRecorded");
+            },
+        };
+        ActivitySource.AddActivityListener(dropObserver);
         using var flow = new TestHostMessageFlowListener(flowPath);
         await using var host = await SpotCloseHost.StartAsync();
         await host.RequestInstanceAsync($"factory-warm-{Guid.NewGuid():N}");
+        timeline.Mark("warmReply");
         await using var source = await StartPeerAsync(host, registerInstanceFactory: false);
         var spotId = $"factory-failed-{Guid.NewGuid():N}";
+        Volatile.Write(ref observedSpotId, spotId);
         var activities = new ConcurrentBag<Activity>();
         var diagnostic = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -831,15 +973,11 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             ActivityStopped = activity =>
             {
                 if (
-                    (
-                        activity.OperationName == "zlink.dispatch_error"
-                        || (
-                            activity.OperationName == "zlink.message_flow"
-                            && Equals(activity.GetTagItem("phase"), "dropped")
-                        )
-                    ) && Equals(activity.GetTagItem("spot_id"), spotId)
+                    (activity.OperationName == "zlink.dispatch_error" || IsDrop(activity))
+                    && Equals(activity.GetTagItem("spot_id"), spotId)
                 )
                 {
+                    timeline.Mark("listenerReceived");
                     activities.Add(activity);
                     diagnostic.TrySetResult();
                 }
@@ -849,35 +987,57 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         host.State.OnReinitialize = _ =>
             throw new ZLinkFrameworkException(kind, "Instance factory failed.");
         var flowId = Systems.Zlink.Stream.Connector.Runtime.Protocol.ZlinkStreamFlowId.Create();
-        if (request)
+        try
         {
-            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                source.RequestInstanceAsync(spotId)
+            if (request)
+            {
+                var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                    source.RequestInstanceAsync(spotId)
+                );
+                Assert.Equal(kind, failure.Kind);
+            }
+            else
+            {
+                using (ZLinkFlowContext.EnterExisting(flowId, ZLinkFlowOrigin.Inbound))
+                    await source.SendInstanceAsync(spotId, "factory-failed");
+            }
+            timeline.Mark("waitStarted");
+            try
+            {
+                await diagnostic.Task.WaitAsync(Wait);
+            }
+            finally
+            {
+                timeline.Mark("waitEnded");
+            }
+            var record = Assert.Single(activities);
+            Assert.Equal(
+                request ? "zlink.dispatch_error" : "zlink.message_flow",
+                record.OperationName
             );
-            Assert.Equal(kind, failure.Kind);
+            Assert.Equal("instance_spot", record.GetTagItem("surface"));
+            Assert.Equal(request ? reason : "activation_rejected", record.GetTagItem("reason"));
+            if (request)
+                Assert.Equal("reply_error", record.GetTagItem("action"));
+            else
+            {
+                Assert.Equal("dropped", record.GetTagItem("phase"));
+                Assert.Equal("dropped", record.GetTagItem("outcome"));
+                Assert.Equal(flowId, record.GetTagItem("flow_id"));
+                Assert.Equal("inbound", record.GetTagItem("flow_origin"));
+            }
+            Assert.Equal(request ? "request" : "send", record.GetTagItem("message_kind"));
+            Assert.Equal(nameof(ZLinkFrameworkException), record.GetTagItem("error_type"));
+            Assert.Equal("Instance factory failed.", record.GetTagItem("error_message"));
         }
-        else
+        catch (Exception error) when (FailureTimeline.IsTimingFailure(error))
         {
-            using (ZLinkFlowContext.EnterExisting(flowId, ZLinkFlowOrigin.Inbound))
-                await source.SendInstanceAsync(spotId, "factory-failed");
+            throw timeline.Rethrow(error);
         }
-        await diagnostic.Task.WaitAsync(Wait);
-        var record = Assert.Single(activities);
-        Assert.Equal(request ? "zlink.dispatch_error" : "zlink.message_flow", record.OperationName);
-        Assert.Equal("instance_spot", record.GetTagItem("surface"));
-        Assert.Equal(request ? reason : "activation_rejected", record.GetTagItem("reason"));
-        if (request)
-            Assert.Equal("reply_error", record.GetTagItem("action"));
-        else
-        {
-            Assert.Equal("dropped", record.GetTagItem("phase"));
-            Assert.Equal("dropped", record.GetTagItem("outcome"));
-            Assert.Equal(flowId, record.GetTagItem("flow_id"));
-            Assert.Equal("inbound", record.GetTagItem("flow_origin"));
-        }
-        Assert.Equal(request ? "request" : "send", record.GetTagItem("message_kind"));
-        Assert.Equal(nameof(ZLinkFrameworkException), record.GetTagItem("error_type"));
-        Assert.Equal("Instance factory failed.", record.GetTagItem("error_message"));
+
+        static bool IsDrop(Activity activity) =>
+            activity.OperationName == "zlink.message_flow"
+            && Equals(activity.GetTagItem("phase"), "dropped");
     }
 
     [Theory]

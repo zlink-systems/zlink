@@ -4,6 +4,10 @@ from pathlib import Path
 
 from zlink._native import _zlink_native
 from zlink._native.ffi import (
+    ContextOption,
+    ZLINK_COMPLETION_REQUEST,
+    ZLINK_COMPLETION_SEND,
+    ZLINK_COMPLETION_WRITABLE,
     ZlinkCompletion,
     ZlinkMonitorEvent,
     ZlinkMonitorStatus,
@@ -18,6 +22,21 @@ from zlink._native.ffi import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "zlink"
+
+
+def test_context_option_codes_match_core_abi():
+    assert int(ContextOption.IO_THREADS) == 1
+    assert int(ContextOption.MAX_SOCKETS) == 2
+    assert int(ContextOption.CTX_OPT_BLOCKY) == 10
+    assert int(ContextOption.AUTO_HWM_PROFILE) == 17
+    assert int(ContextOption.AUTO_HWM_MEMORY_LIMIT_BYTES) == 19
+    assert int(ContextOption.AUTO_HWM_CORE_BUDGET_BYTES) == 21
+
+
+def test_completion_kind_codes_match_core_abi():
+    kinds = (ZLINK_COMPLETION_SEND, ZLINK_COMPLETION_REQUEST, ZLINK_COMPLETION_WRITABLE)
+    assert kinds == (1, 2, 3)
+    assert all(isinstance(kind, int) for kind in kinds)
 
 
 def test_ffi_layouts_are_the_core_0_17_layouts():

@@ -33,11 +33,7 @@ final class NativeSubSocket extends NativeSocketBase implements SubSocket {
     }
 
     public Optional<SubscriptionEntry> subscriptionAt(int index) {
-        if (index < 0)
-            throw new IndexOutOfBoundsException("subscription index " + index);
-        var entries = runtime().subscriptions();
-        return index < entries.size() ? Optional.of(entries.get(index))
-          : Optional.empty();
+        return runtime().subscriptionAt(index);
     }
     public boolean subscribe(TopicMessage result, RecvFlags flags) { return runtime().subscribe(result, ReceiveFlag.fromValue(flags.value())); }
     @Override public SubSocketOptions options() { return options; }
