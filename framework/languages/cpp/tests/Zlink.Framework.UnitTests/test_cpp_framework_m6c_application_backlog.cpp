@@ -132,7 +132,7 @@ void test_stateful_application_queue_accepts_active_backlog (test_context_t &tes
           return zlink::framework::task_t<bool> (
             zlink::framework::result_t<bool>::success (materialized));
       },
-      [&] (const std::vector<object_ref_t> &targets) {
+      [&] (const std::vector<object_ref_t> &targets, const auto &) {
           lifecycle_committed = targets == std::vector<object_ref_t>{restore_target};
           const auto [claim_error, claimed] =
             progressive_restore.try_claim (restore_target, turn_domain_t::application);
@@ -223,7 +223,7 @@ void test_stateful_application_queue_accepts_active_backlog (test_context_t &tes
           ++aggregate_materialized;
           return zlink::framework::task_t<bool> (zlink::framework::result_t<bool>::success (true));
       },
-      [&] (const std::vector<object_ref_t> &) {
+      [&] (const std::vector<object_ref_t> &, const auto &) {
           ++aggregate_commit_count;
           return true;
       },

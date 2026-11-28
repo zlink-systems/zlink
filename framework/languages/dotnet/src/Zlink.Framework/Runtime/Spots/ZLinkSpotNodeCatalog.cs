@@ -2285,6 +2285,16 @@ internal sealed class ZLinkSpotNodeCatalog(
             return new CloseAuthority(CloseAuthorityState.Kept);
         var snapshot = found.Snapshot;
         ThrowIfOtherIncarnation(spotId, activation.ObjectGeneration, snapshot.ObjectGeneration);
+        if (
+            snapshot.Relocation is { Target: { } target } publication
+            && ZLinkAuthorityRelocation.MatchesCommittedTarget(
+                snapshot,
+                publication.RelocationId,
+                target.AttemptGeneration
+            )
+        )
+            throw CloseMoving($"User Spot '{spotId}' authority is still settling relocation.");
+
         var userDecoded = ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
             snapshot.Payload.Span,
             out var authority

@@ -18,7 +18,7 @@ class ReadmeAlignmentTests(unittest.TestCase):
         self.assertIn("ref_count", readme)
         self.assertIn("StreamPacket", readme)
         self.assertIn("ReplyToken", readme)
-        self.assertIn("CompletionKind", readme)
+        self.assertIn("`REQUEST` record", readme)
         self.assertIn("WRITABLE", readme)
         self.assertIn("POLLCOMPLETION", readme)
         self.assertIn("pull-only", readme)

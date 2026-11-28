@@ -161,17 +161,22 @@ public sealed partial class EntrySpotActorDispatchTests
                 var spot = Assert.IsType<RelocatedRoomSpot>(activation.Spot);
                 Assert.Empty(spot.Deliveries);
                 var replies = new List<ulong>();
-                await activation.ReplayAcceptedJobsAsync(
-                    stage
+                var deliveries = new List<Task>();
+                foreach (
+                    var job in stage
                         .SpotParticipant.AcceptedJobs.Concat(stage.SnapshotHeldRecords())
-                        .ToArray(),
-                    "entry",
-                    seal,
-                    0,
-                    (job, journal, reply, _) =>
-                    {
-                        if (reply is not null)
+                        .OrderBy(static job => job.AcceptedSequence)
+                )
+                {
+                    var journal = ZLinkSpotActivation.DecodeRelocationReplayRecord(job, "entry");
+                    Assert.Equal("v", journal.Metadata.Values["k"]);
+                    Assert.Equal("source-room", journal.SpotId);
+                    var delivery = activation.AdmitAcceptedReplayJob(
+                        job,
+                        "entry",
+                        (reply, _) =>
                         {
+                            Assert.NotNull(reply);
                             Assert.Equal(RoutingId.From("source"), journal.SourceNodeRid);
                             Assert.Equal(new MeshOperationId(1UL << 63, 37), journal.OperationId);
                             Assert.Equal(41UL, journal.RequestSequence);
@@ -188,13 +193,21 @@ public sealed partial class EntrySpotActorDispatchTests
                                     .Value
                             );
                             replies.Add(journal.ReplyRouteId);
+                            return ValueTask.CompletedTask;
                         }
-                        Assert.Equal("v", journal.Metadata.Values["k"]);
-                        Assert.Equal("source-room", journal.SpotId);
-                        return ValueTask.CompletedTask;
-                    },
-                    ct
+                    );
+                    if (delivery is not null)
+                        deliveries.Add(delivery);
+                }
+                Assert.Empty(spot.Deliveries);
+                Assert.True(
+                    await activation.OpenRelocationTargetAdmissionAsync(
+                        seal,
+                        static () => { },
+                        static () => ValueTask.CompletedTask
+                    )
                 );
+                await Task.WhenAll(deliveries).WaitAsync(TimeSpan.FromSeconds(30), ct);
                 Assert.Equal(new[] { "send", "request" }, spot.Deliveries);
                 Assert.Equal(new[] { 41UL }, replies);
             }

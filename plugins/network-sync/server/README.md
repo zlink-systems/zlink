@@ -13,3 +13,11 @@
 ## Verification
 
 `dotnet test Simulation.Tests` and `dotnet test Server.Tests` (Server.Tests needs Redis at `ZLINK_REDIS_TEST_ENDPOINT`, default `127.0.0.1:6379`). CI is `.github/workflows/network-sync-server.yml`.
+
+From `plugins/network-sync/server`, build and test against packages made from this checkout. Set `NUGET_PACKAGES` to a fresh directory if the same package versions are already cached:
+
+```bash
+source_dir=$(bash ../../../scripts/local-package/dotnet/build-framework-wsl.sh)
+export RestoreAdditionalProjectSources="$source_dir"
+dotnet build Server && dotnet test Server.Tests
+```
