@@ -628,6 +628,7 @@ provider_location_repository_t::compare_exchange_authority_core (
             co_return co_await authority_conflict (row_key, std::move (current));
         auto observed = co_await resolve_authority_async (row_key, *found);
         auto snapshot = std::move (observed.snapshot);
+        const auto before_aggregate = snapshot.aggregate;
         if (observed.participation) {
             // A subsequent target attempt changes only the representative relocation field.
             const auto *next =
@@ -780,6 +781,16 @@ provider_location_repository_t::compare_exchange_authority_core (
             write_request.mutations.push_back (
               store_put_t{row_key, encode_authority (snapshot), std::nullopt});
         }
+        const bool cancelling_capture =
+          put && put->replace_aggregate && !*put->replace_aggregate && before_aggregate
+          && before_aggregate->relocation && before_aggregate->relocation->phase == "prepared"
+          && snapshot.allocation.object_kind != placement_object_kind_t::actor;
+        if (cancelling_capture) {
+            const auto &id = before_aggregate->relocation->relocation_id;
+            write_request.conditions.push_back (
+              missing_condition (key_aggregate (aggregate_inventory::key_suffix (
+                id, aggregate_inventory::sealed_inventory_generation))));
+        }
         if (snapshot.allocation.object_kind == placement_object_kind_t::actor) {
             const auto membership_failure = co_await append_user_membership_conditions (
               old_member, snapshot.payload, write_request);
@@ -799,8 +810,9 @@ provider_location_repository_t::compare_exchange_authority_core (
           operation_deadline.value_or (std::chrono::steady_clock::time_point::max ()));
         const auto *applied = std::get_if<store_write_applied_t> (&written);
         if (!applied) {
-            if (co_await conflict_qualification_unchanged (row_key, found->value.version,
-                                                           qualification_owner, std::nullopt))
+            if (!cancelling_capture
+                && co_await conflict_qualification_unchanged (row_key, found->value.version,
+                                                              qualification_owner, std::nullopt))
                 continue;
             co_return co_await authority_conflict (row_key, co_await _store.read (row_key));
         }
@@ -1702,6 +1714,11 @@ provider_location_repository_t::prepare_aggregate_core (aggregate_prepare_reques
         co_return aggregate_prepare_conflict_t{};
     }
 
+    if (!co_await write_inventory (fence, request.participants, inventory)) {
+        (void) co_await abort_aggregate (fence, cancellation);
+        co_return aggregate_prepare_conflict_t{};
+    }
+
     placement_capacity_bundle_t total;
     for (std::size_t index = 0; index != request.participants.size (); ++index) {
         if (cancellation.stop_requested ())
@@ -1790,11 +1807,6 @@ provider_location_repository_t::prepare_aggregate_core (aggregate_prepare_reques
         (void) co_await abort_aggregate (fence, cancellation);
         co_return aggregate_prepare_conflict_t{};
     }
-    if (!co_await write_inventory (fence, request.participants, inventory)) {
-        (void) co_await abort_aggregate (fence, cancellation);
-        co_return aggregate_prepare_conflict_t{};
-    }
-
     auto qualified = descriptor;
     while (qualified) {
         if (cancellation.stop_requested ())
@@ -1974,8 +1986,10 @@ provider_location_repository_t::abort_aggregate (aggregate_fence_t fence,
     if (!matches_aggregate_fence (record, fence))
         co_return aggregate_abort_result_t::stale;
     const auto state = record.at (location_record_fields::state).get<std::string> ();
-    if (state == aggregate_status::aborted)
+    if (state == aggregate_status::aborted) {
+        (void) co_await finish_aggregate (fence);
         co_return aggregate_abort_result_t::already_aborted;
+    }
     const auto target = decode_aggregate_target (record);
     std::optional<store_version_condition_t> attempt;
     if (fence.relocation_attempt) {
@@ -2012,11 +2026,117 @@ provider_location_repository_t::read_aggregate_participants (aggregate_fence_t f
     const auto *found = std::get_if<store_found_t> (&current);
     if (found) {
         const auto record = parse_json (found->value.bytes);
-        if (matches_aggregate_fence (record, fence))
-            co_return co_await read_inventory (
+        if (matches_aggregate_fence (record, fence)) {
+            auto inventory = co_await read_inventory (
               fence, record.at (location_record_fields::inventoryDigestSha256).get<std::string> ());
+            const auto &state = record.at (location_record_fields::state);
+            if (!inventory
+                && (state == aggregate_status::preparing || state == aggregate_status::prepared))
+                throw framework_exception_t (framework_error_kind_t::data_lost,
+                                             "Active aggregate inventory is missing or corrupt");
+            co_return inventory;
+        }
     }
     co_return std::nullopt;
+}
+
+task_t<bool> provider_location_repository_t::delete_inventory_record (const store_key_t &key)
+{
+    const auto read = co_await _store.read (key);
+    const auto *row = std::get_if<store_found_t> (&read);
+    if (!row)
+        co_return true;
+    store_write_request_t erase{{version_condition (key, row->value.version)},
+                                {store_delete_t{key}}};
+    if (std::holds_alternative<store_write_applied_t> (co_await write_async (std::move (erase))))
+        co_return true;
+    co_return std::holds_alternative<store_missing_t> (co_await _store.read (key));
+}
+
+task_t<bool> provider_location_repository_t::collect_terminal_inventory (
+  const aggregate_fence_t &fence, const json_t &reference, std::vector<store_key_t> &children)
+{
+    const auto key = key_inventory_page (fence, reference);
+    const auto read = co_await _store.read (key);
+    const auto *page = std::get_if<store_found_t> (&read);
+    // A deleted page follows all its children and every authority it named.
+    if (!page)
+        co_return true;
+    if (aggregate_inventory::digest_hex (page->value.bytes)
+        != reference.at (location_record_fields::sha256).get_ref<const std::string &> ())
+        co_return false;
+    const auto body = parse_json (page->value.bytes);
+    for (const auto &child : body.at (location_record_fields::children))
+        if (!co_await collect_terminal_inventory (fence, child, children))
+            co_return false;
+    for (const auto &entry : body.at (location_record_fields::entries)) {
+        const auto row_key =
+          key_authority (entry.at (location_record_fields::authorityKey).get<std::string> ());
+        const auto current = co_await _store.read (row_key);
+        if (const auto *row = std::get_if<store_found_t> (&current)) {
+            const auto snapshot =
+              decode_authority (row->value.bytes, row->value.version, row->value.store_now);
+            if (snapshot.aggregate
+                && matches_aggregate_marker (snapshot.aggregate->encoded, fence, entry)) {
+                auto resolved = co_await resolve_authority_async (row_key, *row);
+                if (resolved.participation)
+                    co_return false;
+                if (resolved.snapshot.aggregate && resolved.snapshot.aggregate->relocation
+                    && resolved.snapshot.aggregate->relocation->relocation_id
+                         == aggregate_inventory::uuid (fence.aggregate_id))
+                    resolved.snapshot.aggregate.reset ();
+                store_write_request_t materialize{
+                  {version_condition (row_key, row->value.version)},
+                  {store_put_t{row_key, encode_authority (resolved.snapshot), std::nullopt}}};
+                if (!std::holds_alternative<store_write_applied_t> (
+                      co_await write_async (std::move (materialize))))
+                    co_return false;
+            }
+        }
+        const auto index = entry.at (location_record_fields::index).get<std::size_t> ();
+        children.push_back (key_inventory_payload (fence, index));
+        children.push_back (key_inventory_membership (fence, index));
+    }
+    children.push_back (key);
+    co_return true;
+}
+
+task_t<bool> provider_location_repository_t::finish_aggregate (aggregate_fence_t fence)
+{
+    const auto key = key_aggregate (fence);
+    const auto read = co_await _store.read (key);
+    const auto *aggregate = std::get_if<store_found_t> (&read);
+    if (aggregate) {
+        const auto body = parse_json (aggregate->value.bytes);
+        const auto &state = body.at (location_record_fields::state);
+        if (!matches_aggregate_fence (body, fence)
+            || (state != aggregate_status::committed && state != aggregate_status::aborted))
+            co_return false;
+    }
+    const auto root_key = key_inventory_root (fence);
+    const auto root_read = co_await _store.read (root_key);
+    if (const auto *root = std::get_if<store_found_t> (&root_read)) {
+        const auto manifest = parse_json (root->value.bytes);
+        const auto &digest =
+          manifest.at (location_record_fields::digestSha256).get_ref<const std::string &> ();
+        auto digest_input = manifest;
+        digest_input.erase (location_record_fields::digestSha256);
+        if (detail::sha256_hex (digest_input.dump ()) != digest
+            || (fence.inventory_digest && digest != hex (fence.inventory_digest->value)))
+            co_return false;
+        std::vector<store_key_t> children;
+        for (const auto &page : manifest.at (location_record_fields::topPages))
+            if (!co_await collect_terminal_inventory (fence, page, children))
+                co_return false;
+        for (const auto &record : children)
+            if (!co_await delete_inventory_record (record))
+                co_return false;
+        if (!co_await delete_inventory_record (root_key))
+            co_return false;
+    }
+    if (!aggregate)
+        co_return true;
+    co_return co_await delete_inventory_record (key);
 }
 
 task_t<bool> provider_location_repository_t::seal_relocation_inventory (

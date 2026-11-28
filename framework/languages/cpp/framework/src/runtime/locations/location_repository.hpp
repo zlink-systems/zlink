@@ -856,6 +856,7 @@ class location_repository_t
     commit_aggregate (aggregate_fence_t fence, std::stop_token cancellation = {}) = 0;
     virtual task_t<aggregate_abort_result_t>
     abort_aggregate (aggregate_fence_t fence, std::stop_token cancellation = {}) = 0;
+    virtual task_t<bool> finish_aggregate (aggregate_fence_t) { co_return false; }
     virtual task_t<std::optional<std::vector<aggregate_participant_t>>>
     read_aggregate_participants (aggregate_fence_t fence, std::stop_token cancellation = {})
     {

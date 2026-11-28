@@ -353,8 +353,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                                      fence.expected_store_version, fence.source_node_routing_id,
                                      fence.source_node_generation))
                 return false;
-            const auto result = preserve_source (key, *snapshot);
-            return std::holds_alternative<authority_stored_t> (result);
+            return cancel_source (key, *snapshot, fence);
         }
         catch (const std::exception &) {
             return false;
@@ -495,6 +494,14 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                 if (!*live)
                     return {relocation_authority_t::source_lease_expired, {}};
                 const auto &snapshot = std::get<authority_snapshot_t> (read);
+                if (primary.kind != object_kind_t::actor && snapshot.aggregate
+                    && snapshot.aggregate->encoded.contains (location_record_fields::aggregateId)) {
+                    if (cancel_source (key, snapshot, fence))
+                        return {relocation_authority_t::source_preserved, {}};
+                    return source_settlement_of (
+                      infrastructure_result ([&] { return _store->read_authority (key); }).value (),
+                      fence, primary);
+                }
                 const auto exchanged = preserve_source (key, snapshot);
                 if (std::holds_alternative<authority_stored_t> (exchanged))
                     return {relocation_authority_t::source_preserved, {}};
@@ -712,6 +719,29 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                                                               std::move (preserved));
                })
           .value ();
+    }
+
+    bool cancel_source (const authority_key_t &key,
+                        const authority_snapshot_t &snapshot,
+                        const relocation_authority_fence_t &source)
+    {
+        if (source.kind == object_kind_t::actor)
+            return std::holds_alternative<authority_stored_t> (preserve_source (key, snapshot));
+        auto fence = sealed_inventory_fence (source.relocation);
+        const auto &marker = snapshot.aggregate->encoded;
+        if (snapshot.aggregate->relocation->phase == "prepared") {
+            const auto &target = marker.at (location_record_fields::relocation).at ("target");
+            fence.relocation_attempt = aggregate_relocation_attempt_t{
+              key, authority_aggregate_codec::number (target, "attemptGeneration")};
+            const auto aborted =
+              infrastructure_result ([&] { return _store->abort_aggregate (fence); }).value ();
+            if (aborted != aggregate_abort_result_t::stale)
+                return infrastructure_result ([&] { return _store->finish_aggregate (fence); })
+                  .value ();
+        }
+        if (!std::holds_alternative<authority_stored_t> (preserve_source (key, snapshot)))
+            return false;
+        return infrastructure_result ([&] { return _store->finish_aggregate (fence); }).value ();
     }
 
     static bool same_owner (const location_owner_token_t &left,
@@ -1155,6 +1185,13 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
             current.push_back (std::move (placement));
         }
         return {aggregate_publish_status_t::committed, fence, std::move (current)};
+    }
+
+    bool finish (aggregate_relocation_fence_t fence) override
+    {
+        return infrastructure_result (
+                 [&] { return _store->finish_aggregate (fence.durable_fence); })
+          .value ();
     }
 
     void abort (aggregate_relocation_fence_t fence) override

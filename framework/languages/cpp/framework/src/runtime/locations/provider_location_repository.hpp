@@ -256,6 +256,8 @@ class provider_location_repository_t final : public location_repository_t
     task_t<aggregate_abort_result_t> abort_aggregate (aggregate_fence_t fence,
                                                       std::stop_token cancellation = {}) override;
 
+    task_t<bool> finish_aggregate (aggregate_fence_t fence) override;
+
     task_t<std::optional<std::vector<aggregate_participant_t>>>
     read_aggregate_participants (aggregate_fence_t fence,
                                  std::stop_token cancellation = {}) override;
@@ -301,6 +303,11 @@ class provider_location_repository_t final : public location_repository_t
     task_t<std::optional<store_version_condition_t>>
     aggregate_attempt_condition (const aggregate_fence_t &fence,
                                  const object_creation_target_t &target);
+
+    task_t<bool> collect_terminal_inventory (const aggregate_fence_t &fence,
+                                             const json_t &reference,
+                                             std::vector<store_key_t> &children);
+    task_t<bool> delete_inventory_record (const store_key_t &key);
 
     task_t<bool> put_inventory_record (store_key_t key, std::vector<std::byte> bytes);
 

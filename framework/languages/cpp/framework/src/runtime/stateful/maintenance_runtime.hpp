@@ -343,6 +343,7 @@ class aggregate_authority_port_t
                                                 inventory_digest_t inventory_digest,
                                                 relocation_authority_fence_t source_fence) = 0;
     virtual aggregate_publish_result_t commit (aggregate_relocation_fence_t fence) = 0;
+    virtual bool finish (aggregate_relocation_fence_t) { return true; }
     virtual void abort (aggregate_relocation_fence_t fence) = 0;
 };
 

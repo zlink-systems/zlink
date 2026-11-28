@@ -1477,6 +1477,7 @@ task_t<void> public_host_runtime_t::complete_relocation_target_when_delivered (
 {
     using publication_t = std::pair<stateful::object_ref_t, protocol::relocation_prepare_t>;
     std::optional<publication_t> publication;
+    std::optional<stateful::aggregate_relocation_fence_t> aggregate;
     const auto terminal = co_await _relocation_session_terminal_lane.run_task ([&] {
         const auto found = _relocation_target_attempts.find (key);
         if (found == _relocation_target_attempts.end ())
@@ -1497,6 +1498,7 @@ task_t<void> public_host_runtime_t::complete_relocation_target_when_delivered (
         if (_relocation_authority && attempt.targets.size () == 1
             && attempt.targets.front ().kind == stateful::object_kind_t::actor)
             publication.emplace (attempt.targets.front (), attempt.prepare);
+        aggregate = attempt.authority_fence;
         attempt.phase = relocation_target_phase_t::releasing_publication;
         attempt.captured_requests.clear ();
         return attempt.terminal;
@@ -1505,6 +1507,9 @@ task_t<void> public_host_runtime_t::complete_relocation_target_when_delivered (
         co_return;
 
     try {
+        if (aggregate && !_aggregate_relocation_authority->finish (*aggregate))
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "Relocation target could not materialize the aggregate");
         if (publication
             && !_relocation_authority->finish_relocation (publication->first, publication->second))
             throw framework_exception_t (framework_error_kind_t::unavailable,
