@@ -12,6 +12,8 @@ perf_dir_text = str(PERF_DIR)
 if perf_dir_text not in sys.path:
     sys.path.insert(0, perf_dir_text)
 
+from perf_multi_measurement import MAX_BURST_PER_SENDER, latency_duration, wait_ms
+
 from perf_stop_token import (
     STOP_TOKEN,
     is_stop_token,
@@ -376,11 +378,10 @@ def resolve_multi_timeout_seconds(duration_seconds, pattern, transport, msg_size
         return override
     size = max(int(msg_size), 64)
     duration = max(float(duration_seconds), 1.0)
-    if pattern == "STREAM":
-        return max(45, int(duration * 3.0) + 20)
-    if transport in {"tls", "wss"} and size >= 131072:
-        return max(90, int(duration * 6.0) + 30)
-    return max(45, int(duration * 3.0) + 20)
+    paced = 2 * latency_duration(duration)
+    if transport in {"tls", "wss"} and size >= 131072 and pattern != "STREAM":
+        return max(90, int(duration * 6.0 + paced) + 30)
+    return max(45, int(duration * 3.0 + paced) + 20)
 
 
 def configure_multi_tls_server(target, transport):
@@ -515,13 +516,6 @@ async def send_routed(
 class MultiSendTurnCoordinator:
     """Own one shared completion-poller turn for all client senders."""
 
-    __slots__ = (
-        "_completion_events",
-        "_completion_poller",
-        "_next",
-        "_pending",
-    )
-
     def __init__(self, completion_poller, completion_events, socket_count):
         if socket_count <= 0:
             raise ValueError("socket_count must be positive")
@@ -529,63 +523,91 @@ class MultiSendTurnCoordinator:
         self._completion_events = completion_events
         self._pending = [None] * socket_count
         self._next = 0
+        self._burst = 0
+        self._deadline = float("inf")
+        self._schedule = None
+        self.accepted = 0
+
+    def _record_admission(self, due):
+        now = time.monotonic()
+        if self._schedule is not None:
+            self._schedule.admit(due, now)
+        elif now < self._deadline:
+            self.accepted += 1
 
     def _submit_round(self, active_deadline, submit):
         zlink_mod = _require_zlink()
+        self._deadline = active_deadline
         submitted = 0
-        start = self._next
-        self._next = (start + 1) % len(self._pending)
-        for offset in range(len(self._pending)):
-            if time.perf_counter() >= active_deadline:
+        visited = 0
+        while visited < len(self._pending):
+            now = time.monotonic()
+            if now >= active_deadline or (
+                self._schedule is not None and not self._schedule.due(now)
+            ):
                 break
-            index = (start + offset) % len(self._pending)
-            if self._pending[index] is not None:
+            index = self._next
+            if self._pending[index] is not None or self._burst >= MAX_BURST_PER_SENDER:
+                self._next = (self._next + 1) % len(self._pending)
+                self._burst = 0
+                visited += 1
                 continue
+            due = self._schedule.reserve() if self._schedule is not None else None
             submission = submit(index)
+            self._burst += 1
             submitted += 1
             if submission.result == zlink_mod.SubmitResult.OK:
-                continue
-            if submission.result != zlink_mod.SubmitResult.BACKPRESSURED:
-                raise RuntimeError(
-                    f"multi send returned submit result {submission.result}"
-                )
-            self._pending[index] = submission.admitted
+                self._record_admission(due)
+            elif submission.result == zlink_mod.SubmitResult.BACKPRESSURED:
+                self._pending[index] = submission.admitted, due
+            else:
+                raise RuntimeError(f"multi send returned submit result {submission.result}")
         return submitted
 
     def _resume_ready(self):
-        for index, admission in enumerate(self._pending):
-            if admission is None or not admission.done():
+        for index, pending in enumerate(self._pending):
+            if pending is None:
                 continue
-            self._pending[index] = None
-            admission.result()
+            admission, due = pending
+            if admission.done():
+                admission.result()
+                self._pending[index] = None
+                self._record_admission(due)
 
-    def poll_once(self, dispatch=None):
-        ready_count = safe_poll(
-            self._completion_poller, self._completion_events, 0
-        )
+    def poll_once(self, dispatch=None, timeout=0):
+        ready_count = safe_poll(self._completion_poller, self._completion_events, timeout)
+        self._resume_ready()
         if dispatch is not None and ready_count:
             dispatch(ready_count)
-        self._resume_ready()
         return ready_count
 
     def has_pending(self):
         return any(admission is not None for admission in self._pending)
 
-    async def run(self, active_deadline, submit, *, dispatch=None, drain_timeout_ms):
-        """Run fair send rounds, then drain only outstanding admissions."""
+    async def run(
+        self, active_deadline, submit, *, dispatch=None, drain_timeout_ms, schedule=None
+    ):
+        """Drive shared sends and public completion polling for one phase."""
+        self._schedule = schedule
 
-        while time.perf_counter() < active_deadline:
-            self._submit_round(active_deadline, submit)
-            self.poll_once(dispatch)
+        while time.monotonic() < active_deadline:
+            progressed = self._submit_round(active_deadline, submit)
+            now = time.monotonic()
+            until = active_deadline
+            if schedule is not None and not schedule.due(now):
+                until = min(until, schedule.next())
+            self.poll_once(dispatch, 0 if progressed else wait_ms(now, until))
             await asyncio.sleep(0)
 
-        drain_deadline = active_deadline + max(1, drain_timeout_ms) / 1000.0
+        drain_deadline = active_deadline + drain_timeout_ms / 1000
         while self.has_pending():
-            if time.perf_counter() >= drain_deadline:
+            now = time.monotonic()
+            if now >= drain_deadline:
                 raise TimeoutError("multi send admission drain timed out")
-            self.poll_once(dispatch)
+            self.poll_once(dispatch, wait_ms(now, drain_deadline))
             await asyncio.sleep(0)
         self.poll_once(dispatch)
+        return self.accepted
 
 
 class RoutedReplySender:
