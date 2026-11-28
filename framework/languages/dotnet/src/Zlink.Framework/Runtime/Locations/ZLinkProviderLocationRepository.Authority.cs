@@ -481,6 +481,9 @@ internal sealed partial class ZLinkProviderLocationRepository
             if (AuthorityObservedAsync is { } observed)
                 await observed(key, meta is null ? null : applied.PutVersions[metaKey].Value)
                     .ConfigureAwait(false);
+            if (aggregateFence is { } abortedFence)
+                await RemoveSealedInventoryAsync(abortedFence, cancellationToken)
+                    .ConfigureAwait(false);
             return meta is null
                 ? new ZLinkAuthorityCompareExchangeResult.Deleted(
                     current.Version.Value,

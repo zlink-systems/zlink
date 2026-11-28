@@ -885,6 +885,8 @@ public sealed partial class RelocationBehaviorConformanceTests
         );
         Assert.Equal(ZLinkFrameworkRelocationOutcome.Relocated, relocated.Outcome);
 
+        await locationStore.AssertNoAggregateInventoryAsync();
+
         var shutdown = await lifecycle
             .ShutdownAsync(TimeSpan.FromSeconds(30))
             .AsTask()
@@ -3257,6 +3259,18 @@ internal sealed class RecordingLocationStore(
 {
     private readonly ZLinkProviderLocationRepository _reader = new(inner);
 
+    private const string InventoryPrefix = "zlink:v11:aggregate-inventory:";
+    private readonly ConcurrentQueue<ZLinkStoreKey> _inventoryWrites = new();
+
+    internal async Task AssertNoAggregateInventoryAsync()
+    {
+        var inventory = Assert.IsType<ZLinkStoreScanResult.Page>(
+            await ScanAsync(new ZLinkStoreScanRequest(InventoryPrefix, null, 1))
+        );
+        Assert.Empty(inventory.Value.Items);
+        Assert.Empty(_inventoryWrites);
+    }
+
     internal Guid? HeldSourceAbort { get; set; }
     internal TaskCompletionSource SourceAbortWriteStarted { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -3324,6 +3338,14 @@ internal sealed class RecordingLocationStore(
             }
         }
         var result = await inner.WriteAsync(request, cancellationToken);
+        if (result is ZLinkStoreWriteResult.Applied)
+        {
+            foreach (var put in request.Mutations.OfType<ZLinkStoreMutation.Put>())
+            {
+                if (put.Key.Value.StartsWith(InventoryPrefix, StringComparison.Ordinal))
+                    _inventoryWrites.Enqueue(put.Key);
+            }
+        }
         if (result is ZLinkStoreWriteResult.Applied && trace.ActorId is { } actorId)
         {
             var read = await _reader.ReadAuthorityAsync(

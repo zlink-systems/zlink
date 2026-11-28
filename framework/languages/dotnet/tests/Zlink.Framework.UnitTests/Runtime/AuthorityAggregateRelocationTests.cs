@@ -182,27 +182,31 @@ public sealed class AuthorityAggregateRelocationTests
             actual.GetProperty("coordinator").GetProperty("expectedStoreVersion").GetString()
         );
 
-        var fence = new ZLinkAggregateFence(relocationId, root.AggregateGeneration);
-        var targetRepository = new ZLinkProviderLocationRepository(provider);
-        var targetCoordinator = new ZLinkStandaloneActorRelocationPrecommitCoordinator(
-            targetRepository
-        );
-        await targetCoordinator.VerifyCapturedInventoryAsync(
-            captured,
-            root,
-            prepare,
+        await store.RemoveSealedInventoryAsync(
+            new ZLinkAggregateFence(relocationId, root.AggregateGeneration),
             CancellationToken.None
         );
-
-        var mutationKey = ZLinkAggregateInventory.ParticipantKey(
-            "zlink:v11:",
-            fence,
-            0,
-            membership: true
+        var targetRepository = new ZLinkProviderLocationRepository(provider);
+        ZLinkStandaloneActorRelocationPrecommitCoordinator.VerifyCapturedInventory(
+            captured,
+            key,
+            prepare.Coordinator.ExpectedAuthorityStoreVersion
         );
+
+        var changed = JsonNode.Parse(row.Value.Bytes.Span)!.AsObject();
+        changed["payload"] = Convert.ToBase64String(new byte[] { 255 });
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
             await provider.WriteAsync(
-                new ZLinkStoreWriteRequest([], [new ZLinkStoreMutation.Delete(mutationKey)])
+                new ZLinkStoreWriteRequest(
+                    [],
+                    [
+                        new ZLinkStoreMutation.Put(
+                            rowKey,
+                            JsonSerializer.SerializeToUtf8Bytes(changed),
+                            null
+                        ),
+                    ]
+                )
             )
         );
         var registration = new ZLinkFrameworkRegistration();
@@ -213,7 +217,7 @@ public sealed class AuthorityAggregateRelocationTests
                 .StageTargetAsync(prepare, root, prepare.SourceNodeRid, CancellationToken.None)
                 .AsTask()
         );
-        Assert.Contains(mutationKey.Value, failure.Message, StringComparison.Ordinal);
+        Assert.Contains("differs from its captured inventory", failure.Message);
         Assert.Empty(targetRuntime.SnapshotPendingAttemptNames());
 
         var state = captured.Relocation!.Project(captured.Payload, root.AggregateGeneration).State;

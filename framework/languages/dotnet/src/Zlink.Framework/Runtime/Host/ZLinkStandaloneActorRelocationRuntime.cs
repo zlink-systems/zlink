@@ -2009,9 +2009,11 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             );
 
         var precommit = new ZLinkStandaloneActorRelocationPrecommitCoordinator(authorityStore);
-        await precommit
-            .VerifyCapturedInventoryAsync(current.Snapshot, envelope, prepare, cancellationToken)
-            .ConfigureAwait(false);
+        ZLinkStandaloneActorRelocationPrecommitCoordinator.VerifyCapturedInventory(
+            current.Snapshot,
+            participant.AuthorityKey,
+            prepare.Coordinator.ExpectedAuthorityStoreVersion
+        );
 
         if (
             current.Snapshot.Relocation?.Target is { } previous

@@ -20,7 +20,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
     internal static bool IsDirectTransferReference(string reference, uint checksumCrc32c) =>
         checksumCrc32c == 0 && StringComparer.Ordinal.Equals(reference, DirectTransferReference);
 
-    internal async ValueTask<ZLinkAuthoritySnapshot> BeginPreparingAsync(
+    internal ValueTask<ZLinkAuthoritySnapshot> BeginPreparingAsync(
         ZLinkAuthoritySnapshot source,
         ZLinkActorAuthorityPayload sourceAuthority,
         Guid relocationId,
@@ -56,37 +56,27 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             RelocationReference = DirectTransferReference,
         };
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(sourceAuthority.ActorId);
-        var digest = await store
-            .SealAggregateInventoryAsync(
-                ZLinkAggregateInventory.RelocationFence(relocationId),
-                [
-                    ZLinkDirectRelocationInventory.Participant(
-                        key,
-                        source.StoreVersion,
-                        source.Payload
-                    ),
-                ],
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+        var digest = ZLinkDirectRelocationInventory.Digest(
+            key,
+            source.StoreVersion,
+            source.Payload
+        );
         var relocation = ZLinkAuthorityRelocation.FromState(relocationId, state, digest);
-        return await StoreAsync(
-                key,
-                source,
-                new ZLinkAuthorityMutation.Put(
-                    source.Payload,
-                    ZLinkAuthorityGenerationTransition.Preserve,
-                    null,
-                    null
-                )
-                {
-                    Relocation = relocation,
-                },
-                current =>
-                    Matches(current, relocationId, phase: 1, source, target: null, attempt: 0),
-                cancellationToken
+        return StoreAsync(
+            key,
+            source,
+            new ZLinkAuthorityMutation.Put(
+                source.Payload,
+                ZLinkAuthorityGenerationTransition.Preserve,
+                null,
+                null
             )
-            .ConfigureAwait(false);
+            {
+                Relocation = relocation,
+            },
+            current => Matches(current, relocationId, phase: 1, source, target: null, attempt: 0),
+            cancellationToken
+        );
     }
 
     internal async ValueTask<ZLinkAuthoritySnapshot> CaptureAsync(
@@ -130,33 +120,21 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask VerifyCapturedInventoryAsync(
+    internal static void VerifyCapturedInventory(
         ZLinkAuthoritySnapshot captured,
-        ZLinkRelocationEnvelope envelope,
-        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-        CancellationToken cancellationToken
+        ZLinkAuthorityKey key,
+        string expectedStoreVersion
     )
     {
-        if (
-            captured.Relocation is not { } relocation
-            || !HoldsTargetCommitFence(captured, envelope, prepare, acceptReplacement: true)
-        )
+        if (captured.Relocation is not { } relocation)
             throw DataLost("Standalone Actor relocation has no captured inventory.");
-        var inventory = await store
-            .ReadAggregateInventoryAsync(
-                ZLinkAggregateInventory.RelocationFence(envelope.AggregateId),
-                relocation.SourceInventorySha256,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        if (
-            inventory.Count != 1
-            || inventory[0].Entry.AuthorityKey != envelope.Participants.Single().AuthorityKey.Value
-            || inventory[0].Entry.ExpectedStoreVersion
-                != prepare.Coordinator.ExpectedAuthorityStoreVersion
-            || inventory[0].Entry.OwnerTransition != "newOwner"
-            || !inventory[0].Payload.Span.SequenceEqual(captured.Payload.Span)
-        )
+
+        var digest = ZLinkDirectRelocationInventory.Digest(
+            key,
+            expectedStoreVersion,
+            captured.Payload
+        );
+        if (digest != relocation.SourceInventorySha256)
             throw DataLost("Standalone Actor relocation differs from its captured inventory.");
     }
 
@@ -473,27 +451,13 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             )
             .ConfigureAwait(false);
         if (result is ZLinkAuthorityCompareExchangeResult.Stored stored)
-        {
-            await RemoveSourceInventoryAsync(captured, cancellationToken).ConfigureAwait(false);
             return stored.Snapshot;
-        }
         if (result is ZLinkAuthorityCompareExchangeResult.Conflict)
             return null;
         throw new InvalidOperationException(
             "Authority Store rejected the standalone Actor source Preserve."
         );
     }
-
-    private ValueTask RemoveSourceInventoryAsync(
-        ZLinkAuthoritySnapshot source,
-        CancellationToken cancellationToken
-    ) =>
-        source.Relocation is { } relocation
-            ? store.RemoveSealedInventoryAsync(
-                ZLinkAggregateInventory.RelocationFence(relocation.RelocationId),
-                cancellationToken
-            )
-            : ValueTask.CompletedTask;
 
     internal async ValueTask<ZLinkAuthoritySnapshot> AbortSourceAsync(
         ZLinkAuthorityKey key,
@@ -561,11 +525,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                 )
                 .ConfigureAwait(false);
             if (result is ZLinkAuthorityCompareExchangeResult.Stored stored)
-            {
-                await RemoveSourceInventoryAsync(found.Snapshot, cancellationToken)
-                    .ConfigureAwait(false);
                 return stored.Snapshot;
-            }
             if (result is not ZLinkAuthorityCompareExchangeResult.Conflict)
                 throw new InvalidOperationException(
                     "Authority Store rejected standalone Actor precommit abort."
@@ -644,11 +604,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     )
                     .ConfigureAwait(false);
             if (result is ZLinkAuthorityCompareExchangeResult.Stored stored)
-            {
-                await RemoveSourceInventoryAsync(found.Snapshot, cancellationToken)
-                    .ConfigureAwait(false);
                 return stored.Snapshot;
-            }
             if (result is not ZLinkAuthorityCompareExchangeResult.Conflict)
                 throw new InvalidOperationException(
                     "Authority Store rejected standalone Actor Preparing abort."

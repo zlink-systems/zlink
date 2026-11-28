@@ -154,16 +154,6 @@ public sealed class StandaloneActorRelocationPrecommitTests
             CancellationToken.None
         );
 
-        var sealedActor = Assert.Single(
-            await store.ReadAggregateInventoryAsync(
-                ZLinkAggregateInventory.RelocationFence(relocationId),
-                preparing.Relocation!.SourceInventorySha256,
-                CancellationToken.None
-            )
-        );
-        Assert.Equal(abandoned.Payload.ToArray(), sealedActor.Payload.ToArray());
-        Assert.Equal("[]"u8.ToArray(), sealedActor.Mutation.ToArray());
-
         var envelope = ZLinkCanonicalActorRelocationWriter.CreateInitial(
             ZLinkStandaloneActorRelocationRuntime.CreateImmutableRoot(
                 preparing,
@@ -175,6 +165,10 @@ public sealed class StandaloneActorRelocationPrecommitTests
                 default
             ),
             applicationVersion: 1
+        );
+        Assert.Equal(
+            Convert.ToHexString(envelope.InventoryDigest.Span).ToLowerInvariant(),
+            preparing.Relocation!.SourceInventorySha256
         );
         lossyStore.LoseNextResponse();
         var captured = await coordinator.CaptureAsync(preparing, envelope, CancellationToken.None);
@@ -200,11 +194,10 @@ public sealed class StandaloneActorRelocationPrecommitTests
         );
         Assert.NotEqual(captured.StoreVersion, prepare.Coordinator.ExpectedAuthorityStoreVersion);
 
-        await coordinator.VerifyCapturedInventoryAsync(
+        ZLinkStandaloneActorRelocationPrecommitCoordinator.VerifyCapturedInventory(
             captured,
-            envelope,
-            prepare,
-            CancellationToken.None
+            key,
+            prepare.Coordinator.ExpectedAuthorityStoreVersion
         );
 
         var prepared = await coordinator.PrepareTargetAsync(
@@ -1789,25 +1782,6 @@ public sealed class StandaloneActorRelocationPrecommitTests
         private int _failReads;
 
         internal void FailNextReads(int count) => Interlocked.Exchange(ref _failReads, count);
-
-        public override ValueTask RemoveSealedInventoryAsync(
-            ZLinkAggregateFence fence,
-            CancellationToken cancellationToken
-        ) => inner.RemoveSealedInventoryAsync(fence, cancellationToken);
-
-        public override ValueTask<string> SealAggregateInventoryAsync(
-            ZLinkAggregateFence fence,
-            IReadOnlyList<ZLinkAggregateParticipant> participants,
-            CancellationToken cancellationToken
-        ) => inner.SealAggregateInventoryAsync(fence, participants, cancellationToken);
-
-        public override ValueTask<
-            IReadOnlyList<ZLinkAggregateInventory.Participant>
-        > ReadAggregateInventoryAsync(
-            ZLinkAggregateFence fence,
-            string digest,
-            CancellationToken cancellationToken
-        ) => inner.ReadAggregateInventoryAsync(fence, digest, cancellationToken);
 
         public override ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
             ZLinkAuthorityKey key,

@@ -213,7 +213,6 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                     {
                         await ReleaseUnreferencedRootAsync(relocation?.Completion?.Reference)
                             .ConfigureAwait(false);
-                        await RemoveDirectInventoryAsync().ConfigureAwait(false);
                         return observed.Snapshot;
                     }
                     if (
@@ -227,7 +226,6 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                 {
                     await ReleaseUnreferencedRootAsync(relocation?.Completion?.Reference)
                         .ConfigureAwait(false);
-                    await RemoveDirectInventoryAsync().ConfigureAwait(false);
                     return directStored.Snapshot;
                 }
                 if (direct is ZLinkAuthorityCompareExchangeResult.Conflict)
@@ -276,12 +274,6 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                 );
         }
         throw Moving("steady normalization conflicted after the bounded retry limit");
-
-        ValueTask RemoveDirectInventoryAsync() =>
-            authorityStore.RemoveSealedInventoryAsync(
-                ZLinkAggregateInventory.RelocationFence(identity.AggregateId),
-                cancellationToken
-            );
     }
 
     private async ValueTask ReleaseUnreferencedRootAsync(string? reference)
