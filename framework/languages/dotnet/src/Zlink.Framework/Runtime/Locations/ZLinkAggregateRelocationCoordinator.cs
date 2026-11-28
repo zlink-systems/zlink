@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Spots;
@@ -13,7 +11,11 @@ internal sealed record ZLinkAggregateRelocationParticipant(
     ReadOnlyMemory<byte> ApplicationAuthorityPayload,
     ReadOnlyMemory<byte> MembershipMutation,
     ZLinkRelocationCompletionBudget? CompletionBudget = null
-);
+)
+{
+    internal string? CapturedStoreVersion { get; init; }
+    internal string CompareExchangeStoreVersion => CapturedStoreVersion ?? ExpectedStoreVersion;
+}
 
 internal sealed record ZLinkAggregateRelocationRequest(
     Guid AggregateId,
@@ -25,12 +27,12 @@ internal sealed record ZLinkAggregateRelocationRequest(
     ZLinkCapacityVector Capacity,
     ZLinkLocationOwnerToken TargetOwner,
     ZLinkAuthorityRelocation.CoordinatorFence Source,
-    ZLinkRelocationEnvelope? CanonicalEnvelope = null
+    ZLinkRelocationEnvelope? CanonicalEnvelope = null,
+    ZLinkAuthorityKey? RepresentativeKey = null
 );
 
 internal sealed record ZLinkAggregateRelocationPublished(
     ZLinkAggregateFence Fence,
-    ZLinkRelocationStored Relocation,
     ZLinkRelocationEnvelope Envelope
 );
 
@@ -39,39 +41,31 @@ internal sealed class ZLinkAuthorityGenerationExhaustedException(string operatio
 
 internal sealed class ZLinkAggregateRelocationCoordinator(
     IZLinkRuntimeFailureReporter failureReporter,
-    IZLinkLocationRepository authorityStore,
-    IZLinkRelocationRepository relocationStore
+    IZLinkLocationRepository authorityStore
 )
 {
-    private sealed record PublicationState(
+    internal sealed record PublicationState(
         ZLinkAggregateFence Fence,
-        ZLinkRelocationStored Relocation,
         ZLinkRelocationEnvelope Envelope,
         IReadOnlyList<ZLinkAggregateRelocationParticipant> Participants,
-        ZLinkAuthorityRelocation AuthorityRelocation
+        ZLinkAuthorityRelocation AuthorityRelocation,
+        bool HasRepresentative
     );
 
     private const int MaxPublicationProbeConcurrency = 64;
-    private static readonly TimeSpan Retention = TimeSpan.FromHours(24);
 
     internal async ValueTask<ZLinkAggregateRelocationPublished> PublishAsync(
         ZLinkAggregateRelocationRequest request,
-        CancellationToken cancellationToken = default,
-        ZLinkRelocationStored? acceptedRelocation = null
+        CancellationToken cancellationToken = default
     )
     {
-        var publication = await PreparePublicationAsync(
-                request,
-                acceptedRelocation,
-                cancellationToken
-            )
+        var publication = await PreparePublicationAsync(request, cancellationToken)
             .ConfigureAwait(false);
         return await CommitPublicationAsync(publication, cancellationToken).ConfigureAwait(false);
     }
 
-    private async ValueTask<PublicationState> PreparePublicationAsync(
+    internal async ValueTask<PublicationState> PreparePublicationAsync(
         ZLinkAggregateRelocationRequest request,
-        ZLinkRelocationStored? acceptedRelocation,
         CancellationToken cancellationToken
     )
     {
@@ -81,12 +75,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         foreach (var participant in request.Participants)
             participant.CompletionBudget?.EnsureFitsBeforeCommit();
 
-        // Canonical wire envelopes carry the source-captured inventory digest.
-        // Their target-local participant recovery is reconstructed from the
-        // source authorities and is deliberately not part of that wire
-        // projection, so recomputing the digest here would reject the
-        // immutable canonical root.
-        var inventoryDigest = request.CanonicalEnvelope is { CanonicalLogicalStream.IsEmpty: false }
+        var inventoryDigest = request.CanonicalEnvelope is not null
             ? request.CanonicalEnvelope.InventoryDigest.ToArray()
             : ZLinkAggregateInventoryDigest.Compute(request.Participants);
         var envelope =
@@ -112,49 +101,12 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
             Convert.ToHexString(inventoryDigest).ToLowerInvariant(),
             checked((ulong)envelope.CanonicalApplicationVersion)
         );
-        var ownsStoredRoot = acceptedRelocation is null;
-        var stored =
-            acceptedRelocation
-            ?? (
-                await ZLinkRelocationTreeStore
-                    .PutAsync(relocationStore, envelope, Retention, cancellationToken)
-                    .ConfigureAwait(false)
-            ).Root;
         var fence = new ZLinkAggregateFence(request.AggregateId, request.AggregateGeneration);
         try
         {
-            var restored = await ZLinkRelocationTreeStore
-                .GetAsync(
-                    relocationStore,
-                    stored.Reference,
-                    stored.ChecksumCrc32c,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (
-                restored.AggregateId != envelope.AggregateId
-                || (
-                    envelope.CanonicalLogicalStream.IsEmpty
-                        ? restored.AggregateGeneration != envelope.AggregateGeneration
-                        : restored.CanonicalApplicationVersion
-                            != envelope.CanonicalApplicationVersion
-                )
-                || !restored.InventoryDigest.Span.SequenceEqual(inventoryDigest.AsSpan())
-            )
-                throw new ZLinkRelocationDataLostException(
-                    "Relocation Store did not preserve the aggregate root."
-                );
-
-            var publicationParticipants = request
-                .Participants.Select(participant => new ZLinkAggregateParticipant(
-                    participant.Envelope.AuthorityKey,
-                    participant.ExpectedStoreVersion,
-                    participant.OwnerTransition,
-                    participant.ApplicationAuthorityPayload,
-                    participant.MembershipMutation,
-                    participant.CompletionBudget?.AcceptedRequests
-                ))
-                .ToArray();
+            var publicationParticipants = ZLinkAggregateInventoryDigest.Authorities(
+                request.Participants
+            );
             var prepare = await authorityStore
                 .PrepareAggregateAsync(
                     new ZLinkAggregatePrepareRequest(
@@ -169,6 +121,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     )
                     {
                         Relocation = relocation,
+                        RepresentativeKey = request.RepresentativeKey,
                     },
                     cancellationToken
                 )
@@ -191,79 +144,76 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     );
             }
 
-            return new PublicationState(fence, stored, envelope, request.Participants, relocation);
+            return new PublicationState(
+                fence,
+                envelope,
+                request.Participants,
+                relocation,
+                request.RepresentativeKey is not null
+            );
         }
         catch
         {
             var publication = await ProbePublicationAsync(
                     request.Participants,
                     relocation,
+                    request.RepresentativeKey is not null,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
             if (publication.State == AggregatePublicationProbe.Published)
                 return new PublicationState(
                     fence,
-                    stored,
                     envelope,
                     request.Participants,
-                    relocation
+                    relocation,
+                    request.RepresentativeKey is not null
                 );
-            if (publication.State == AggregatePublicationProbe.Unknown)
+            if (
+                request.RepresentativeKey is not null
+                || publication.State == AggregatePublicationProbe.Unknown
+            )
                 throw;
 
-            // Prepare may fail after the provider has claimed the aggregate
-            // staging row or installed participant fences. The local
-            // The absence of a returned prepare result does not prove that
-            // no authority state changed.
-            // Delete the immutable payload only after the authority provider
-            // confirms that the deterministic aggregate fence was aborted.
-            var safeToDelete = false;
             try
             {
-                var abort = await authorityStore
+                await authorityStore
                     .AbortAggregateAsync(fence, cancellationToken)
                     .ConfigureAwait(false);
-                safeToDelete =
-                    abort
-                        is ZLinkAggregateAbortResult.Aborted
-                            or ZLinkAggregateAbortResult.AlreadyAborted;
             }
             catch (Exception exception)
             {
-                // An ambiguous authority state keeps the immutable root
-                // available for provider reconciliation and recovery.
                 failureReporter.ReportRuntimeTaskException(
                     nameof(PreparePublicationAsync),
                     exception
                 );
             }
-            if (safeToDelete && ownsStoredRoot)
-                await DeleteOrphanAsync(stored.Reference).ConfigureAwait(false);
             throw;
         }
     }
 
-    private async ValueTask<ZLinkAggregateRelocationPublished> CommitPublicationAsync(
+    internal async ValueTask<ZLinkAggregateRelocationPublished> CommitPublicationAsync(
         PublicationState publication,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        ZLinkRelocationCompletionBudget? representativeBudget = null
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
+        representativeBudget?.EnsureFitsBeforeCommit();
         try
         {
-            await ZLinkRelocationTreeStore
-                .RenewTreeAsync(
-                    relocationStore,
-                    publication.Relocation.Reference,
-                    publication.Relocation.ChecksumCrc32c,
-                    Retention,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            var commit = await authorityStore
-                .CommitAggregateAsync(publication.Fence, cancellationToken)
-                .ConfigureAwait(false);
+            var commit = publication.HasRepresentative
+                ? await authorityStore
+                    .CommitAggregateAttemptAsync(
+                        publication.Fence,
+                        publication.AuthorityRelocation.Target!.AttemptGeneration,
+                        cancellationToken,
+                        representativeBudget?.AcceptedRequests
+                    )
+                    .ConfigureAwait(false)
+                : await authorityStore
+                    .CommitAggregateAsync(publication.Fence, cancellationToken)
+                    .ConfigureAwait(false);
             if (commit == ZLinkAggregateCommitResult.GenerationExhausted)
                 throw new ZLinkAuthorityGenerationExhaustedException(
                     "committing an aggregate relocation"
@@ -286,6 +236,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     await ProbePublicationAsync(
                             publication.Participants,
                             publication.AuthorityRelocation,
+                            publication.HasRepresentative,
                             cancellationToken
                         )
                         .ConfigureAwait(false)
@@ -294,11 +245,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                 throw;
         }
 
-        return new ZLinkAggregateRelocationPublished(
-            publication.Fence,
-            publication.Relocation,
-            publication.Envelope
-        );
+        return new ZLinkAggregateRelocationPublished(publication.Fence, publication.Envelope);
     }
 
     internal static ReadOnlyMemory<byte> ProjectParticipantPayload(
@@ -449,10 +396,10 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         )
             return false;
 
-        var expected = ZLinkSpotRetireTargetRuntime.BuildTargetReadyPayload(
+        var expected = ProjectParticipantPayload(
             participant.ObjectKind,
             recovery.AuthorityPayload,
-            targetDescriptor.Rid,
+            targetDescriptor,
             targetDescriptorLifecycleGeneration,
             targetOwner,
             aggregateId
@@ -463,6 +410,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
     private async ValueTask<AggregatePublicationProbeResult> ProbePublicationAsync(
         IReadOnlyList<ZLinkAggregateRelocationParticipant> participants,
         ZLinkAuthorityRelocation relocation,
+        bool projectPayload,
         CancellationToken cancellationToken
     )
     {
@@ -494,7 +442,21 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                             && found.Snapshot.Relocation.SourceInventorySha256
                                 == relocation.SourceInventorySha256
                             && found.Snapshot.Payload.Span.SequenceEqual(
-                                participant.ApplicationAuthorityPayload.Span
+                                (
+                                    projectPayload
+                                        ? ProjectParticipantPayload(
+                                            participant.Envelope.ObjectKind,
+                                            participant.ApplicationAuthorityPayload,
+                                            found.Snapshot.Allocation.Descriptor,
+                                            found.Snapshot.Allocation.DescriptorLifecycleGeneration,
+                                            new(
+                                                found.Snapshot.OwnerId,
+                                                found.Snapshot.OwnerLeaseGeneration
+                                            ),
+                                            relocation.RelocationId
+                                        )
+                                        : participant.ApplicationAuthorityPayload
+                                ).Span
                             )
                         )
                         {
@@ -540,20 +502,6 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
             new(AggregatePublicationProbe.NotPublished);
     }
 
-    private async ValueTask DeleteOrphanAsync(string reference)
-    {
-        try
-        {
-            await ZLinkRelocationTreeStore
-                .DeleteTreeAsync(relocationStore, reference, CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            failureReporter.ReportRuntimeTaskException(nameof(DeleteOrphanAsync), exception);
-        }
-    }
-
     private static void Validate(ZLinkAggregateRelocationRequest request)
     {
         if (request.AggregateId == Guid.Empty)
@@ -582,40 +530,27 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
 
 internal static class ZLinkAggregateInventoryDigest
 {
-    internal static byte[] Compute(IReadOnlyList<ZLinkAggregateRelocationParticipant> participants)
-    {
-        using var stream = new MemoryStream();
-        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
-        foreach (
-            var participant in participants.OrderBy(
-                static value => value.Envelope.AuthorityKey.Value,
-                StringComparer.Ordinal
+    internal static ZLinkAggregateParticipant[] Authorities(
+        IReadOnlyList<ZLinkAggregateRelocationParticipant> participants
+    ) =>
+        participants
+            .Select(static participant => new ZLinkAggregateParticipant(
+                participant.Envelope.AuthorityKey,
+                participant.ExpectedStoreVersion,
+                participant.OwnerTransition,
+                participant.ApplicationAuthorityPayload,
+                ZLinkAggregateInventory.MembershipBody(participant.MembershipMutation),
+                participant.CompletionBudget?.AcceptedRequests
             )
-        )
-        {
-            WriteString(writer, participant.Envelope.AuthorityKey.Value);
-            writer.Write((byte)participant.Envelope.ObjectKind);
-            writer.Write(participant.Envelope.ObjectGeneration);
-            writer.Write(participant.Envelope.AuthorityOwnerGeneration);
-            WriteString(writer, participant.ExpectedStoreVersion);
-            writer.Write((byte)participant.OwnerTransition);
-            WriteBytes(writer, participant.ApplicationAuthorityPayload.Span);
-            WriteBytes(writer, participant.MembershipMutation.Span);
-        }
-        writer.Flush();
-        return SHA256.HashData(stream.GetBuffer().AsSpan(0, checked((int)stream.Length)));
-    }
+            {
+                CapturedStoreVersion = participant.CapturedStoreVersion,
+            })
+            .ToArray();
 
-    private static void WriteString(BinaryWriter writer, string value)
-    {
-        var encoded = Encoding.UTF8.GetBytes(value);
-        writer.Write(encoded.Length);
-        writer.Write(encoded);
-    }
-
-    private static void WriteBytes(BinaryWriter writer, ReadOnlySpan<byte> value)
-    {
-        writer.Write(value.Length);
-        writer.Write(value);
-    }
+    internal static byte[] Compute(
+        IReadOnlyList<ZLinkAggregateRelocationParticipant> participants
+    ) =>
+        Convert.FromHexString(
+            ZLinkAggregateInventory.Plan(Authorities(participants)).Root.DigestSha256
+        );
 }

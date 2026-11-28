@@ -414,11 +414,10 @@ internal sealed class ZLinkSpotNodeCatalog(
     )
     {
         var location = registration.Locations.ResolveStore();
-        var relocation = registration.Locations.ResolveRelocationStore();
         var target = services.GetService<IZLinkSpotRetireTarget>();
-        return location is null || relocation is null || target is null
+        return location is null || target is null
             ? null
-            : new ZLinkSpotRetireScheduler(location, relocation, target, runtime);
+            : new ZLinkSpotRetireScheduler(location, target, runtime);
     }
 
     internal async ValueTask RequestStopAsync()

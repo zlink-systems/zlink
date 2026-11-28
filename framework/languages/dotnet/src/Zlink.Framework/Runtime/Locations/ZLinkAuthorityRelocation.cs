@@ -117,25 +117,6 @@ internal sealed record ZLinkAuthorityRelocation(
         && authority.OwnerLeaseGeneration > 0
         && targetOwnerLeaseGeneration == (ulong)authority.OwnerLeaseGeneration;
 
-    internal bool HoldsCapturedSource(
-        Guid relocationId,
-        ZLinkAuthoritySnapshot authority,
-        Fence coordinator,
-        string originalStoreVersion
-    ) =>
-        RelocationId == relocationId
-        && Phase == ServiceWireCodec.RelocationPhase.Captured
-        && Source.NodeRid == authority.Allocation.Descriptor.Rid.ToHex()
-        && Source.NodeGeneration == authority.Allocation.DescriptorLifecycleGeneration
-        && Source.OwnerId == authority.OwnerId
-        && authority.OwnerLeaseGeneration > 0
-        && Source.OwnerLeaseGeneration == (ulong)authority.OwnerLeaseGeneration
-        && Coordinator.NodeRid == coordinator.NodeRid
-        && Coordinator.NodeGeneration == coordinator.NodeGeneration
-        && Coordinator.OwnerId == coordinator.OwnerId
-        && Coordinator.OwnerLeaseGeneration == coordinator.OwnerLeaseGeneration
-        && Coordinator.ExpectedStoreVersion == originalStoreVersion;
-
     internal bool HoldsRestoreSource(
         Guid relocationId,
         ZLinkAuthoritySnapshot authority,

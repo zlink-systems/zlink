@@ -9,35 +9,58 @@ internal sealed partial class ZLinkFrameworkRuntime
         var budgets = new Dictionary<ZLinkAuthorityKey, ZLinkAggregateParticipantCompletion>();
         foreach (var participant in stage.Envelope.Participants)
         {
-            var jobs =
-                participant.AuthorityKey == stage.SpotParticipant.AuthorityKey
-                    ? participant.AcceptedJobs.Concat(stage.SnapshotHeldRecords())
-                    : participant.AcceptedJobs;
-            var requests = jobs.Where(static job =>
-                job.CanonicalRequest is { ReplyRouteId: not 0 }
-            );
             var coordinator = new ZLinkServiceWireCodec.RelocationCoordinatorFence(
                 owner.OwnerId,
                 checked((ulong)owner.LeaseGeneration),
                 stage.Node.Node.RoutingId,
                 stage.TargetNodeLifecycleGeneration,
                 ZLinkCanonicalParticipantRecoveryCodec
-                    .Decode(stage.SourceRecoveries[participant.AuthorityKey].Span)
+                    .Decode(participant.RecoveryPayload.Span)
                     .ExpectedStoreVersion
-            );
-            var budget = new ZLinkRelocationCompletionBudget(
-                stage.Envelope.AggregateId,
-                requests.Select(job =>
-                    AggregateCompletionEntry(stage, participant, job, coordinator, payload: null)
-                )
             );
             budgets.Add(
                 participant.AuthorityKey,
-                new ZLinkAggregateParticipantCompletion(budget, coordinator)
+                new(
+                    CreateAggregateCompletionBudget(
+                        stage,
+                        participant,
+                        coordinator,
+                        participant.AcceptedJobs
+                    ),
+                    coordinator
+                )
             );
         }
         stage.Completion = budgets;
     }
+
+    internal ZLinkRelocationCompletionBudget ReserveSpotCompletion(TargetStage stage)
+    {
+        var participant = stage.SpotParticipant;
+        var completion = stage.Completion[participant.AuthorityKey];
+        var budget = CreateAggregateCompletionBudget(
+            stage,
+            participant,
+            completion.Coordinator,
+            participant.AcceptedJobs.Concat(stage.SnapshotHeldRecords())
+        );
+        stage.Completion[participant.AuthorityKey] = new(budget, completion.Coordinator);
+        return budget;
+    }
+
+    private static ZLinkRelocationCompletionBudget CreateAggregateCompletionBudget(
+        TargetStage stage,
+        ZLinkRelocationParticipantEnvelope participant,
+        ZLinkServiceWireCodec.RelocationCoordinatorFence coordinator,
+        IEnumerable<ZLinkRelocationQueuedJob> jobs
+    ) =>
+        new(
+            stage.Envelope.AggregateId,
+            jobs.Where(static job => job.CanonicalRequest is { ReplyRouteId: not 0 })
+                .Select(job =>
+                    AggregateCompletionEntry(stage, participant, job, coordinator, payload: null)
+                )
+        );
 
     private static ZLinkRelocationCompletionEntry AggregateCompletionEntry(
         TargetStage stage,
