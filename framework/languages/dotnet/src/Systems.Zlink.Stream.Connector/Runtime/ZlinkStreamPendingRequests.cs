@@ -15,7 +15,10 @@ internal sealed class ZlinkStreamPendingRequests
         _nextRequestSeq = unchecked((long)lastRequestSeq);
     }
 
-    public PendingRequest Create(string packetName) => new(NextRequestSeq(), packetName);
+    public PendingRequest Create(
+        string packetName,
+        Func<PendingRequest, ZlinkStreamPendingCompletion, ValueTask>? onReply = null
+    ) => new(NextRequestSeq(), packetName, onReply);
 
     public void Register(PendingRequest request, CancellationTokenSource session)
     {
@@ -85,7 +88,11 @@ internal sealed class ZlinkStreamPendingRequests
         }
     }
 
-    internal sealed class PendingRequest(ZlinkStreamRequestSeq requestSeq, string packetName)
+    internal sealed class PendingRequest(
+        ZlinkStreamRequestSeq requestSeq,
+        string packetName,
+        Func<PendingRequest, ZlinkStreamPendingCompletion, ValueTask>? onReply = null
+    )
     {
         private readonly TaskCompletionSource<ZlinkStreamPendingCompletion> _completion = new(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -102,9 +109,19 @@ internal sealed class ZlinkStreamPendingRequests
             _completion.TrySetResult(completion);
         }
 
+        public ValueTask DispatchReplyAsync(ZlinkStreamPendingCompletion completion)
+        {
+            if (onReply is not null)
+                return onReply(this, completion);
+
+            Complete(completion);
+            return default;
+        }
+
         public void Fail(ZlinkStreamError error)
         {
-            _completion.TrySetException(new ZlinkStreamException(error));
+            if (onReply is null)
+                _completion.TrySetException(new ZlinkStreamException(error));
         }
     }
 }
@@ -114,5 +131,6 @@ internal sealed record ZlinkStreamPendingCompletion(
     ZlinkStreamFrame Frame,
     ZlinkStreamError? Error,
     TimeSpan ReceivedAt = default,
-    int? RetryAfterMs = null
+    int? RetryAfterMs = null,
+    bool QueueRequired = false
 );

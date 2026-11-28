@@ -34,6 +34,7 @@
 
     <ItemGroup>
         <None Include="../../../../runtime/conformance/login-admission-v1.json" Link="login-admission-v1.json" CopyToOutputDirectory="PreserveNewest"/>
+        <None Include="../../../../runtime/conformance/login-admission-queue-v1.json" Link="login-admission-queue-v1.json" CopyToOutputDirectory="PreserveNewest"/>
         <Compile Include="Contracts/PublicApiTests.cs"/>
         <Compile Include="Contracts/SpecAlignmentTests.cs"/>
         <Compile Include="GlobalUsings.cs"/>
@@ -42,6 +43,7 @@
         <Compile Include="Support/StreamConnectorTestSupport.cs"/>
         <Compile Include="Transport/ActorBindingTests.cs"/>
         <Compile Include="Transport/AdmissionTests.cs"/>
+        <Compile Include="Transport/AdmissionQueueTests.cs"/>
         <Compile Include="Transport/CloseAndWriteCompletionTests.cs"/>
         <Compile Include="Transport/ConnectionEndingTests.cs"/>
         <Compile Include="Transport/DirectConnectionTests.cs"/>
