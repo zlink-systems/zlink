@@ -15,6 +15,10 @@ import { boundSessionErrorPayload } from './bound-session-response-target';
 import { streamSessionIdFromRoutingId, submitStreamRaw } from './managed-stream';
 import { ZLinkStreamMessageKind, type ZLinkStreamFrameHeader } from './protocol';
 import { ZLinkStreamFrameMessageFactory } from './stream-frame-factory';
+import { queueRequiredMetadata, type AdmissionUpdate } from './admission-queue-messages';
+
+const queueRejectionMetadata = new Map(Object.entries(queueRequiredMetadata));
+const emptyMetadata = new Map<string, string>();
 
 export class ZLinkAuthenticationAdmission {
   private inFlight = 0;
@@ -47,6 +51,10 @@ export class ZLinkAuthenticationAdmission {
     );
   }
 
+  get activeCount(): number {
+    return this.inFlight;
+  }
+
   tryAcquire(): (() => void) | undefined {
     if (this.inFlight >= this.settings.maxConcurrentAuthentications) {
       this.rejections += 1;
@@ -65,11 +73,14 @@ export class ZLinkAuthenticationAdmission {
   async replyRejected(
     socket: ZLinkBackendStreamSocket,
     routingId: unknown,
-    header: ZLinkStreamFrameHeader
+    header: ZLinkStreamFrameHeader,
+    reason: 'localLimit' | 'queueRequired' | 'unavailable' = 'localLimit'
   ): Promise<void> {
     const error = new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.Unavailable,
-      'Authentication admission is full.'
+      reason === 'localLimit'
+        ? 'Authentication admission is full.'
+        : 'Authentication admission is unavailable.'
     );
     if (this.dispatchErrors?.captureEnabled() === true) {
       this.dispatchErrors.report({
@@ -88,14 +99,59 @@ export class ZLinkAuthenticationAdmission {
     const frame = this.frames.createJsonReplyFrameMessage(
       { ...header, actorSlot: undefined },
       ZLinkStreamMessageKind.Error,
-      this.metadata,
+      reason === 'localLimit'
+        ? this.metadata
+        : reason === 'queueRequired'
+          ? queueRejectionMetadata
+          : emptyMetadata,
       false,
       boundSessionErrorPayload(error)
     );
+    await this.submitFrame(socket, routingId, frame);
+  }
+
+  async replyEnqueue(
+    socket: ZLinkBackendStreamSocket,
+    routingId: unknown,
+    header: ZLinkStreamFrameHeader,
+    update: AdmissionUpdate
+  ): Promise<void> {
+    const frame = this.frames.createJsonReplyFrameMessage(
+      { ...header, actorSlot: undefined },
+      ZLinkStreamMessageKind.Response,
+      emptyMetadata,
+      false,
+      update
+    );
+    await this.submitFrame(socket, routingId, frame);
+  }
+
+  async push(
+    socket: ZLinkBackendStreamSocket,
+    routingId: unknown,
+    name: string,
+    update: AdmissionUpdate
+  ): Promise<void> {
+    const frame = this.frames.createJsonFrameMessage(
+      ZLinkStreamMessageKind.Send,
+      name,
+      emptyMetadata,
+      false,
+      undefined,
+      update
+    );
+    await this.submitFrame(socket, routingId, frame);
+  }
+
+  private async submitFrame(
+    socket: ZLinkBackendStreamSocket,
+    routingId: unknown,
+    frame: ReturnType<ZLinkStreamFrameMessageFactory['createJsonReplyFrameMessage']>
+  ): Promise<void> {
     try {
       requireOneWayCompletion(
         await submitStreamRaw(socket, routingId, frame),
-        'STREAM authentication admission reply'
+        'STREAM authentication admission frame'
       );
     } finally {
       frame.close();

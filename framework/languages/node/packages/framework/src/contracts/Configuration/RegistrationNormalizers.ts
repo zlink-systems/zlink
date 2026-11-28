@@ -1,3 +1,4 @@
+import { ZLINK_MAX_SPOT_ID_BYTES } from '../Common/CoreTypes';
 import type {
   Type,
   ZLinkSpot,
@@ -5,6 +6,7 @@ import type {
   ZLinkStreamCompressionCodec
 } from '../../contracts';
 import { ZLinkConfigurationException } from './ConfigurationException';
+import { decodeAdmissionQueueKey } from './AdmissionQueueKey';
 import { copyRouteInternalState, markRouteTransportDeclared } from './RouteChannelInternalState';
 import type {
   ZLinkChannelOptions,
@@ -106,6 +108,11 @@ export function normalizeStreamAuthenticationAdmission(options: ZLinkStreamNodeO
   readonly authenticationPacketName?: string;
   readonly maxConcurrentAuthentications: number;
   readonly authenticationRetryDelayMs: number;
+  readonly admissionQueueEnabled: boolean;
+  readonly admissionQueueKey?: string;
+  readonly admissionQueuePreviousKey?: string;
+  readonly admissionQueueMeshName?: string;
+  readonly admissionGlobalLimit?: number;
 } {
   const authenticationPacketName = options.authenticationPacketName;
   if (
@@ -114,10 +121,31 @@ export function normalizeStreamAuthenticationAdmission(options: ZLinkStreamNodeO
   ) {
     throw new ZLinkConfigurationException('STREAM authentication packet name is empty.');
   }
+  const admissionQueueEnabled = options.admissionQueueEnabled;
+  if (admissionQueueEnabled !== undefined && typeof admissionQueueEnabled !== 'boolean') {
+    throw new ZLinkConfigurationException('STREAM admissionQueueEnabled must be a boolean.');
+  }
+  const enabled = admissionQueueEnabled === true;
+  const admissionQueueKey = enabled ? options.admissionQueueKey : undefined;
+  const admissionQueuePreviousKey = enabled ? options.admissionQueuePreviousKey : undefined;
+  const admissionQueueMeshName = enabled ? options.admissionQueueMeshName : undefined;
+  const admissionGlobalLimit = enabled ? options.admissionGlobalLimit : undefined;
+  if (enabled) {
+    if (authenticationPacketName === undefined) {
+      throw new ZLinkConfigurationException(
+        'STREAM authenticationPacketName is required when the admission queue is enabled.'
+      );
+    }
+    decodeAdmissionQueueKey(admissionQueueKey, 'admissionQueueKey');
+    if (admissionQueuePreviousKey !== undefined) {
+      decodeAdmissionQueueKey(admissionQueuePreviousKey, 'admissionQueuePreviousKey');
+    }
+  }
   const upperBound = 2_147_483_647;
   for (const [key, value] of [
     ['maxConcurrentAuthentications', options.maxConcurrentAuthentications],
-    ['authenticationRetryDelayMs', options.authenticationRetryDelayMs]
+    ['authenticationRetryDelayMs', options.authenticationRetryDelayMs],
+    ['admissionGlobalLimit', admissionGlobalLimit]
   ] as const) {
     if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > upperBound)) {
       throw new ZLinkConfigurationException(`STREAM ${key} must be an integer in 1..2147483647.`);
@@ -128,7 +156,12 @@ export function normalizeStreamAuthenticationAdmission(options: ZLinkStreamNodeO
     maxConcurrentAuthentications:
       options.maxConcurrentAuthentications ??
       Math.min(Number(nodeEffectiveProcessorCount()) * 8, upperBound),
-    authenticationRetryDelayMs: options.authenticationRetryDelayMs ?? 500
+    authenticationRetryDelayMs: options.authenticationRetryDelayMs ?? 500,
+    admissionQueueEnabled: enabled,
+    admissionQueueKey,
+    admissionQueuePreviousKey,
+    admissionQueueMeshName,
+    admissionGlobalLimit
   };
 }
 
@@ -141,11 +174,21 @@ export function toStreamNodeMap(
     Object.entries(streamNodes ?? {}).map(([name, streamNode]) => {
       const normalized = normalizeListener(streamNode, network);
       const admission = normalizeStreamAuthenticationAdmission(streamNode);
+      if (admission.admissionQueueEnabled && (name.length === 0 || Buffer.byteLength(name) > 255)) {
+        throw new ZLinkConfigurationException(
+          'STREAM registration name must be 1 to 255 UTF-8 bytes when admission queue is enabled.'
+        );
+      }
       hostAdmission ??= admission;
       if (
         hostAdmission.authenticationPacketName !== admission.authenticationPacketName ||
         hostAdmission.maxConcurrentAuthentications !== admission.maxConcurrentAuthentications ||
-        hostAdmission.authenticationRetryDelayMs !== admission.authenticationRetryDelayMs
+        hostAdmission.authenticationRetryDelayMs !== admission.authenticationRetryDelayMs ||
+        hostAdmission.admissionQueueEnabled !== admission.admissionQueueEnabled ||
+        hostAdmission.admissionQueueKey !== admission.admissionQueueKey ||
+        hostAdmission.admissionQueuePreviousKey !== admission.admissionQueuePreviousKey ||
+        hostAdmission.admissionQueueMeshName !== admission.admissionQueueMeshName ||
+        hostAdmission.admissionGlobalLimit !== admission.admissionGlobalLimit
       ) {
         throw new ZLinkConfigurationException(
           'STREAM authentication admission settings must match across the host.'
@@ -500,4 +543,46 @@ export function normalizeLocationRegistration(
     relocationStoreInstance: value?.relocationStoreInstance,
     options: value?.options === undefined ? {} : { ...value.options }
   };
+}
+
+export function resolveSpotNodeObjectRole(
+  spotNode: ZLinkSpotNodeOptions
+): 'none' | 'client' | 'server' {
+  if (spotNode.objectRole !== undefined) return spotNode.objectRole;
+  const hasLegacyObjectFactories =
+    (spotNode.spotFactories?.length ?? 0) > 0 ||
+    Object.keys(spotNode.instanceSpotFactories ?? {}).length > 0 ||
+    (spotNode.actorFactories instanceof Map
+      ? spotNode.actorFactories.size
+      : Object.keys(spotNode.actorFactories ?? {}).length) > 0;
+  return hasLegacyObjectFactories ? 'server' : 'none';
+}
+
+export const admissionQueueSpotType = '$zlink.AdmissionQueue';
+
+export function selectAdmissionQueueMesh(
+  stream: ZLinkStreamNodeOptions | undefined,
+  meshes: ReadonlyMap<string, ZLinkSpotNodeOptions>
+): { readonly meshName: string; readonly spotId: string } | undefined {
+  if (stream?.admissionQueueEnabled !== true) return undefined;
+  if (meshes.size === 0) {
+    throw new ZLinkConfigurationException('STREAM admission queue requires a MeshNode.');
+  }
+  const meshName =
+    stream.admissionQueueMeshName ?? (meshes.size === 1 ? meshes.keys().next().value : undefined);
+  if (meshName === undefined) {
+    throw new ZLinkConfigurationException(
+      'Mesh selection is required for the STREAM admission queue.'
+    );
+  }
+  if (!meshes.has(meshName)) {
+    throw new ZLinkConfigurationException(
+      'STREAM admissionQueueMeshName must select a registered MeshNode.'
+    );
+  }
+  const spotId = `$zlink.admission-queue/${meshName}`;
+  if (Buffer.byteLength(spotId) > ZLINK_MAX_SPOT_ID_BYTES) {
+    throw new ZLinkConfigurationException('STREAM admission queue SpotId is too long.');
+  }
+  return { meshName, spotId };
 }

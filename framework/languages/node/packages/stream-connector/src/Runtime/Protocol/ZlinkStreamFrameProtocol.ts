@@ -18,6 +18,7 @@ import { connectorError } from '../ZlinkStreamSupport';
 import { compressPayload, decompressIfNeeded } from './Compression/ZlinkStreamCompressionCodec';
 import { splitZlinkStreamFrames, ZlinkStreamFrameCodec } from './ZlinkStreamFrameCodec';
 import { buildHeader, ZlinkStreamHeaderCodec } from './ZlinkStreamHeaderCodec';
+import { ADMISSION_TICKET } from './ZlinkStreamAdmissionQueue';
 
 export const ZLINK_STREAM_HEARTBEAT_PING = ZlinkStreamControlPacket.HeartbeatPing;
 export const ZLINK_STREAM_HEARTBEAT_PONG = ZlinkStreamControlPacket.HeartbeatPong;
@@ -51,22 +52,33 @@ export class ZlinkStreamFrameProtocol {
     return this.encodeFrame(header, payloadBytes);
   }
 
-  reencodeRequest(frame: Uint8Array, requestSeq: bigint): Uint8Array {
+  reencodeRequest(frame: Uint8Array, requestSeq: bigint, ticket?: string): Uint8Array {
     // The first write already encoded the header and compressed the payload if requested.
     // Use views of this locally encoded frame so the payload is copied only into the new frame.
     const headerLength = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint16(
       0
     );
     const payloadOffset = ZLINK_STREAM_FRAME_PREFIX_BYTES + headerLength;
-    const header = ZlinkStreamHeaderCodec.encodeRetryHeader(
-      frame.subarray(ZLINK_STREAM_FRAME_PREFIX_BYTES, payloadOffset),
-      requestSeq
-    );
+    const original = frame.subarray(ZLINK_STREAM_FRAME_PREFIX_BYTES, payloadOffset);
+    const header =
+      ticket === undefined
+        ? ZlinkStreamHeaderCodec.encodeRetryHeader(original, requestSeq)
+        : this.encodeTicketHeader(original, requestSeq, ticket);
     return ZlinkStreamFrameCodec.encode(
       header,
       frame.subarray(payloadOffset),
       this.options.maxSendPayloadSize
     );
+  }
+
+  private encodeTicketHeader(original: Uint8Array, requestSeq: bigint, ticket: string): Uint8Array {
+    const header = ZlinkStreamHeaderCodec.decode(original);
+    return ZlinkStreamHeaderCodec.encode({
+      ...header,
+      requestSeq,
+      flags: header.flags | ZlinkStreamHeaderFlags.HasMetadata,
+      metadata: header.metadata.with(ADMISSION_TICKET, ticket)
+    });
   }
 
   encodeControl(name: string, payload = new Uint8Array()): Uint8Array {

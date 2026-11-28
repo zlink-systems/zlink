@@ -11,6 +11,11 @@ import { decodeStreamWireHeader, encodeStreamWireHeader } from '@zlink-systems/s
 import { connectorError } from '../ZlinkStreamSupport';
 import { validateName } from './ZlinkStreamPacketNameValidator';
 import { ZlinkStreamMetadataCodec } from './ZlinkStreamMetadataCodec';
+import {
+  ADMISSION_ENQUEUE,
+  ADMISSION_POSITION,
+  ADMISSION_TICKET
+} from './ZlinkStreamAdmissionQueue';
 
 export class ZlinkStreamHeaderCodec {
   static encodeRetryHeader(firstRequestHeader: Uint8Array, requestSeq: bigint): Uint8Array {
@@ -23,7 +28,13 @@ export class ZlinkStreamHeaderCodec {
 
   static encode(header: ZlinkStreamHeader): Uint8Array {
     const reply = isReplyKind(header.kind);
-    if (!reply) validateName(header.name, header.kind === ZlinkStreamMessageKind.Control);
+    if (!reply) {
+      validateName(
+        header.name,
+        header.kind === ZlinkStreamMessageKind.Control ||
+          (header.kind === ZlinkStreamMessageKind.Request && header.name === ADMISSION_ENQUEUE)
+      );
+    }
     validateEncodeFlags(header.flags);
     validateHeaderSemantics(header);
     ZlinkStreamMetadataCodec.size(header.metadata);
@@ -66,7 +77,12 @@ export class ZlinkStreamHeaderCodec {
         actorSlot: wire.actorSlot
       };
       if (!isReplyKind(decoded.kind)) {
-        validateName(decoded.name, decoded.kind === ZlinkStreamMessageKind.Control);
+        validateName(
+          decoded.name,
+          decoded.kind === ZlinkStreamMessageKind.Control ||
+            (decoded.kind === ZlinkStreamMessageKind.Send &&
+              (decoded.name === ADMISSION_POSITION || decoded.name === ADMISSION_TICKET))
+        );
       }
       validateHeaderSemantics(decoded);
     } catch (cause) {

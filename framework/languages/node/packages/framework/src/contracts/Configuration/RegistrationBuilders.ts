@@ -713,6 +713,27 @@ class DefaultStreamNodeBuilder implements ZLinkStreamNodeBuilder {
     this.streamNode.authenticationRetryDelayMs = authenticationRetryDelayMs;
     return this;
   }
+  setAdmissionQueueEnabled(enabled: boolean): this {
+    this.streamNode.admissionQueueEnabled = enabled;
+    return this;
+  }
+  setAdmissionQueueKey(key: string): this {
+    this.streamNode.admissionQueueKey = key;
+    return this;
+  }
+  setAdmissionQueuePreviousKey(key: string): this {
+    this.streamNode.admissionQueuePreviousKey = key;
+    return this;
+  }
+
+  setAdmissionQueueMeshName(meshName: string): this {
+    this.streamNode.admissionQueueMeshName = meshName;
+    return this;
+  }
+  setAdmissionGlobalLimit(limit: number): this {
+    this.streamNode.admissionGlobalLimit = limit;
+    return this;
+  }
   setHeartbeat(intervalMs: number, timeoutMs: number): this {
     this.streamNode.heartbeatIntervalMs = intervalMs;
     this.streamNode.heartbeatTimeoutMs = timeoutMs;
@@ -1637,6 +1658,11 @@ interface MutableStreamNodeOptions {
   authenticationPacketName?: string;
   maxConcurrentAuthentications?: number;
   authenticationRetryDelayMs?: number;
+  admissionQueueEnabled?: boolean;
+  admissionQueueKey?: string;
+  admissionQueuePreviousKey?: string;
+  admissionQueueMeshName?: string;
+  admissionGlobalLimit?: number;
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
   idleTimeoutMs?: number;

@@ -1,3 +1,4 @@
+import { resolveSpotNodeObjectRole } from '../../contracts/Configuration/RegistrationNormalizers';
 import { startActorTeardown } from '../actors/actor-runtime-state';
 import type { RequestRuntime } from '../foundation/request-runtime';
 import type { ZLinkMeshDispatchAdmission } from '../admission';
@@ -393,14 +394,8 @@ export class ZLinkSpotNodeRuntimeManager {
           ...Object.keys(spotNode.actorFactoryRegistrations ?? {})
         ];
         const instanceSpotTypes = Object.keys(spotNode.instanceSpotFactoryRegistrations ?? {});
-        const hasLegacyObjectFactories =
-          (spotNode.spotFactories?.length ?? 0) > 0 ||
-          Object.keys(spotNode.instanceSpotFactories ?? {}).length > 0 ||
-          (spotNode.actorFactories instanceof Map
-            ? spotNode.actorFactories.size
-            : Object.keys(spotNode.actorFactories ?? {}).length) > 0;
         node.configureObjectPlacement({
-          role: spotNode.objectRole ?? (hasLegacyObjectFactories ? 'server' : 'none'),
+          role: resolveSpotNodeObjectRole(spotNode),
           placementWeight: spotNode.placementWeight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT,
           activeCapacityLimit: aggregatePlacementCapacity(
             spotNode.actorLimit ?? 0,

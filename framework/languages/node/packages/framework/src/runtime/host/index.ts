@@ -242,6 +242,12 @@ import { ZLinkStatefulAuthorityRouteRuntime } from './stateful-authority-route-r
 import { ZLinkUserSpotCreationCoordinator } from './user-spot-creation-coordinator';
 import { decodeRemoteActorPacketRelay } from '../spots/spot-remote-route-codec';
 import { decodeStreamHeader } from '../streams/protocol';
+import {
+  admissionQueueSpotType,
+  resolveSpotNodeObjectRole
+} from '../../contracts/Configuration/RegistrationNormalizers';
+import { AdmissionTickets } from '../streams/admission-tickets';
+import { admissionQueueInstanceFactory } from '../streams/admission-queue-spot';
 
 const HOST_SHUTDOWN_POLL_INTERVAL_MS = 100;
 const DEFAULT_HOST_CONTROL_TIMEOUT_MS = 30_000;
@@ -377,11 +383,20 @@ export class ZLinkFrameworkRuntimeHost
   readonly fanoutRuntime: ZLinkFanoutRuntime;
   private readonly relocationStore?: import('../../contracts/Locations/RelocationStore').ZLinkRelocationStore;
   readonly routeMeshCoordinator: ZLinkRouteMeshRuntimeCoordinator;
-  constructor(
-    readonly options: ZLinkFrameworkRuntimeHostOptions,
-    internalOptions?: unknown
-  ) {
-    this.ownedStores = registeredRuntimeStores(options.registration);
+  readonly options: ZLinkFrameworkRuntimeHostOptions;
+  private readonly admissionTickets?: AdmissionTickets;
+
+  constructor(options: ZLinkFrameworkRuntimeHostOptions, internalOptions?: unknown) {
+    if (options.registration.admissionQueueRoute !== undefined) {
+      const stream = options.registration.streamNodes.values().next().value!;
+      this.admissionTickets = new AdmissionTickets(
+        stream.admissionQueueKey!,
+        stream.admissionQueuePreviousKey
+      );
+    }
+    const registration = this.withAdmissionQueueFactory(options.registration);
+    this.options = options = { ...options, registration };
+    this.ownedStores = registeredRuntimeStores(registration);
     const factories = internalOptions as
       | {
           readonly spotNodeRuntime?: ZLinkSpotNodeRuntimeManager;
@@ -1683,6 +1698,38 @@ export class ZLinkFrameworkRuntimeHost
         dispatchErrors,
         metrics: this.metrics,
         applicationJobQueue: this.applicationJobQueue,
+        admissionQueueRuntime:
+          this.admissionTickets === undefined
+            ? undefined
+            : {
+                tickets: this.admissionTickets,
+                transport: this.spotAddressTransport,
+                local: (meshName) => {
+                  const status = spotNodeRuntime?.meshNode(meshName)?.status();
+                  if (status?.routingId == null) return undefined;
+                  const nodeRid = Buffer.from(encodeRoutingIdStorageHex(status.routingId), 'hex');
+                  return {
+                    nodeRid: nodeRid.toString('base64url'),
+                    nodeLifecycleGeneration: String(status.lifecycleGeneration)
+                  };
+                },
+                owner: () => {
+                  const runtime = this.locationOwner.currentRuntime;
+                  const token =
+                    runtime?.ownerLeaseUsable === true ? runtime.currentOwnerToken : undefined;
+                  return token === undefined
+                    ? undefined
+                    : {
+                        ownerId: token.ownerId,
+                        leaseGeneration: String(token.leaseGeneration)
+                      };
+                },
+                error: (error) =>
+                  this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+                    'STREAM admission queue',
+                    error
+                  )
+              },
         acceptNewSession: (meshName) =>
           meshName === undefined ? this.admission.acceptsNewWork : this.admission.accepts(meshName),
         primaryMeshName: this.meshRouters.primaryMeshName(),
@@ -1986,6 +2033,58 @@ export class ZLinkFrameworkRuntimeHost
           error
         )
     });
+  }
+
+  private withAdmissionQueueFactory(
+    registration: ZLinkFrameworkRegistration
+  ): ZLinkFrameworkRegistration {
+    const route = registration.admissionQueueRoute;
+    if (route === undefined) return registration;
+    const mesh = registration.spotNodes.get(route.meshName)!;
+    const role = resolveSpotNodeObjectRole(mesh);
+    if (role === 'none') {
+      throw new ZLinkConfigurationException(
+        'The admission queue RouteMesh requires an Object role.'
+      );
+    }
+    if (!hasConfiguredLocationStore(registration)) {
+      throw new ZLinkConfigurationException(
+        'The admission queue RouteMesh requires a Location Store.'
+      );
+    }
+    if (
+      Object.hasOwn(mesh.instanceSpotFactories ?? {}, admissionQueueSpotType) ||
+      Object.hasOwn(mesh.instanceSpotFactoryRegistrations ?? {}, admissionQueueSpotType)
+    ) {
+      throw new ZLinkConfigurationException('The admission queue Instance Spot type is reserved.');
+    }
+    if (role === 'client') return registration;
+
+    const stream = registration.streamNodes.values().next().value!;
+    const spotNodes = new Map(registration.spotNodes);
+    const implementation = admissionQueueInstanceFactory(
+      this.admissionTickets!,
+      stream.admissionGlobalLimit,
+      async (owner, signal) => {
+        const tracker = this.locationOwner.currentLeaseTracker;
+        if (tracker === undefined)
+          throw new Error('Admission queue owner lease tracker is unavailable.');
+        return await tracker.isOwnerTokenLive(owner, signal);
+      }
+    );
+    spotNodes.set(route.meshName, {
+      ...mesh,
+      objectRole: role,
+      instanceSpotFactories: {
+        ...mesh.instanceSpotFactories,
+        [admissionQueueSpotType]: implementation
+      },
+      instanceSpotFactoryRegistrations: {
+        ...mesh.instanceSpotFactoryRegistrations,
+        [admissionQueueSpotType]: { implementation, relocation: { kind: 'recreate' } }
+      }
+    });
+    return { ...registration, spotNodes };
   }
 
   private requiresStatefulAuthorityRuntime(): boolean {

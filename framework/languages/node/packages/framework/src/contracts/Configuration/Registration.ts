@@ -13,6 +13,7 @@ import {
   normalizeOptionalPositiveInteger,
   normalizeStreamCompression,
   normalizeWorkerOptions,
+  selectAdmissionQueueMesh,
   toChannelMap,
   toRouteChannelOptions,
   toSpotFactorySet,
@@ -60,6 +61,11 @@ export function normalizeFrameworkRegistration(
   const network = normalizeNetworkOptions(options.network);
   const routeChannelOptions = toRouteChannelOptions(options);
   const spotNodes = toSpotNodeMap(options.spotNodes, network);
+  const streamNodes = toStreamNodeMap(options.streamNodes, network);
+  const admissionQueueRoute = selectAdmissionQueueMesh(
+    streamNodes.values().next().value,
+    spotNodes
+  );
   const registration: ZLinkFrameworkRegistration = {
     network,
     applicationVersion: normalizeApplicationVersion(options.applicationVersion),
@@ -94,7 +100,8 @@ export function normalizeFrameworkRegistration(
     ),
     routeChannels: new Set(routeChannelOptions.keys()),
     routeChannelOptions,
-    streamNodes: toStreamNodeMap(options.streamNodes, network),
+    streamNodes,
+    admissionQueueRoute,
     streamCompression: normalizeStreamCompression(options.streamCompression),
     spotNodes,
     spotPublisherClients: toSpotPublisherClientSet(options.spotPublisherClients, spotNodes),
