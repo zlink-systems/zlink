@@ -1706,13 +1706,12 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                     const auto context = _state->spot_contexts_by_id.find (key);
                     if (context == _state->spot_contexts_by_id.end () || !context->second._state)
                         return false;
-                    const auto node = _state->native_node.lock ();
-                    if (!node)
-                        return false;
-                    auto native = std::make_shared<service::spot_t> (
-                      node->bind_relocation_spot (authority->target));
-                    _state->native_spots_by_id.insert_or_assign (key, native);
-                    context->second._state->native_spot = native;
+                    if (const auto node = _state->native_node.lock ()) {
+                        auto native = std::make_shared<service::spot_t> (
+                          node->bind_relocation_spot (authority->target));
+                        _state->native_spots_by_id.insert_or_assign (key, native);
+                        context->second._state->native_spot = native;
+                    }
                     context->second._state->authority_owner_generation =
                       authority->target.authority_owner_generation;
                     return true;

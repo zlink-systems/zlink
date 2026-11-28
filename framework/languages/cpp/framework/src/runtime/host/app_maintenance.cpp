@@ -170,7 +170,10 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
                 continue;
             const auto runtime =
               detail::spot_node_runtime_t::from (state.zlink, node->mesh_name ());
-            if (runtime && !(co_await runtime->read_relocation_units ()).empty ()) {
+            if (!runtime)
+                continue;
+            const auto units = co_await runtime->read_relocation_units ();
+            if (!units.empty ()) {
                 requires_target = true;
                 break;
             }
