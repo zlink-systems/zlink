@@ -261,6 +261,199 @@ public sealed class RemoteActorJoinStopDeadlineTests
         }
     }
 
+    [Fact]
+    public async Task Source_stop_deadline_failure_uses_the_committed_target_join_operation_id()
+    {
+        using var flowListener = Environment.GetEnvironmentVariable(
+            RelocationBehaviorHost.FlowPathEnvironmentVariable
+        )
+            is { } flowPath
+            ? new TestHostMessageFlowListener(flowPath)
+            : null;
+        var timeout = TimeSpan.FromSeconds(5);
+        var actorId = $"committed-stop-actor-{Guid.NewGuid():N}";
+        var spotId = $"committed-stop-spot-{Guid.NewGuid():N}";
+        var trace = new RelocationBehaviorTrace { ActorId = actorId, ExpectedJoinAccepted = null };
+        var transport = new CanonicalRelocationTransportProbe(trace);
+        var store = new RecordingLocationStore(new ZLinkInMemoryProviderLocationStore(), trace);
+        var sourceStore = new SourceSettlementReadGate(store, actorId);
+        var roots = new SynchronizedRelocationStore();
+        var sourceCompleted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        trace.OnPublicJoinCompleted = _ =>
+        {
+            if (trace.JoinCompletions.Any(completion => completion.Node == "source"))
+                sourceCompleted.TrySetResult();
+            return ValueTask.CompletedTask;
+        };
+        trace.ReleaseJoinHandler.SetResult();
+        trace.ReleaseSourceLeave.SetResult();
+        trace.ReleaseTargetLifecycle.SetResult();
+        transport.ReleasePrepareCall.SetResult();
+
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            sourceStore,
+            roots,
+            registerTargetSpot: false,
+            canonicalTransportProbe: transport
+        );
+        var actor = Assert.IsType<ZLinkActorCreateResult.Created>(
+            await source
+                .Services.GetRequiredService<IZLinkActorManager>()
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+                .InMesh(RelocationBehaviorHost.MeshName)
+                .Request(new BehaviorCreate(7))
+                .Async()
+        );
+        trace.SourceNodeRid = actor.Actor.NodeRid;
+        trace.SourceObjectGeneration = actor.Actor.ObjectGeneration;
+        await store.ObserveActorAuthorityAsync(actorId);
+
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            store,
+            roots,
+            registerTargetSpot: true,
+            canonicalTransportProbe: transport
+        );
+        trace.TargetNodeRid = target.LocalNodeRid;
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate(spotId, RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Async();
+        Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
+
+        var sourceState = await source.Runtime.EnsureStartedStateAsync(CancellationToken.None);
+        try
+        {
+            await source
+                .Services.GetRequiredService<IZLinkActorClient>()
+                .RequestToActor(actorId, new BeginBehaviorJoin(spotId, TimeSpan.FromSeconds(2)))
+                .Async<BehaviorAck>();
+            await transport.CutoverSendStarted.Task.WaitAsync(timeout);
+            sourceStore.HoldReads(
+                sourceState.ForceStopTokenSource.Token,
+                sourceState.TaskRunner.ShutdownToken
+            );
+            transport.ReleaseCutoverSend.SetResult();
+
+            await trace.WaitAsync("publicJoinCompleted");
+            var targetCompletion = Assert.Single(trace.JoinCompletions);
+            Assert.Equal("target", targetCompletion.Node);
+            var accepted = Assert.IsType<ZLinkActorJoinCompletion.Accepted>(
+                targetCompletion.Completion
+            );
+            Assert.True(trace.HasTargetAuthorityMutation);
+            Assert.Contains("targetLifecycleCompleted", trace.Events);
+
+            await sourceStore.StopDeadlineReadStarted.Task.WaitAsync(timeout);
+            sourceState.ForceStopTokenSource.Cancel();
+            await sourceCompleted.Task.WaitAsync(timeout);
+
+            var sourceCompletion = Assert.Single(
+                trace.JoinCompletions,
+                completion => completion.Node == "source"
+            );
+            var failed = Assert.IsType<ZLinkActorJoinCompletion.Failed>(
+                sourceCompletion.Completion
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failed.Kind);
+            Assert.Equal(accepted.OperationId, failed.OperationId);
+        }
+        finally
+        {
+            transport.ReleaseCutoverSend.TrySetResult();
+            sourceStore.ReleaseReads.TrySetResult();
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Shutdown_reports_force_stopped_when_the_stop_deadline_expires(
+        bool expiresBeforeDrain
+    )
+    {
+        await using var host = await RelocationBehaviorHost.StartAsync(
+            "source",
+            new RelocationBehaviorTrace(),
+            new ZLinkInMemoryProviderLocationStore(),
+            new SynchronizedRelocationStore(),
+            registerTargetSpot: false
+        );
+        Assert.True(host.Runtime.DrainAdmission.TryEnterActorAdmission(out var admission));
+        using (admission)
+        {
+            // The admitted work stays pending whether the deadline expires before or during drain.
+            var deadline = expiresBeforeDrain
+                ? TimeSpan.FromTicks(1)
+                : TimeSpan.FromMilliseconds(100);
+            var result = await host
+                .Services.GetRequiredService<IZLinkFrameworkRuntime>()
+                .ShutdownAsync(deadline)
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(ZLinkFrameworkTerminationOutcome.ForceStopped, result.Outcome);
+            Assert.Equal(ZLinkFrameworkTerminationReason.DeadlineExceeded, result.Reason);
+        }
+    }
+
+    private sealed class SourceSettlementReadGate(IZLinkLocationStore inner, string actorId)
+        : IZLinkLocationStore
+    {
+        private readonly ZLinkStoreKey _authorityKey =
+            ZLinkProviderLocationRepository.AuthorityMetaKey(
+                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId)
+            );
+        private readonly TaskCompletionSource<(
+            CancellationToken StopDeadline,
+            CancellationToken SourceLeave
+        )> _holdReads = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource StopDeadlineReadStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseReads { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal void HoldReads(CancellationToken stopDeadline, CancellationToken sourceLeave) =>
+            _holdReads.SetResult((stopDeadline, sourceLeave));
+
+        public async ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (
+                key == _authorityKey
+                && _holdReads.Task.IsCompletedSuccessfully
+                && cancellationToken != _holdReads.Task.Result.SourceLeave
+            )
+            {
+                // Only the settlement read after the Restore deadline uses this token.
+                if (cancellationToken == _holdReads.Task.Result.StopDeadline)
+                    StopDeadlineReadStarted.TrySetResult();
+                await ReleaseReads.Task.WaitAsync(cancellationToken);
+            }
+            return await inner.ReadAsync(key, cancellationToken);
+        }
+
+        public ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.WriteAsync(request, cancellationToken);
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
+    }
+
     private static ZLinkSpotActorFrame CreateBacklogRequest(
         ZLinkBackendActorRef actor,
         TaskCompletionSource reply,
