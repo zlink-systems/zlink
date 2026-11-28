@@ -1754,7 +1754,7 @@ Raw `SUB`/`XSUB`의 recv 결과는 Core `zlink_subscribe()`의 전체 payload �
 | `topic` | **`string` (UTF-8)** | 매칭된 topic. **bytes 가 아니다.** |
 | `parts` | `List<Message>` / `Vec<Message>` | multipart payload |
 | `is_single_part()` | `bool` | `parts.size() == 1` |
-| `first_part()` | `Message` | `parts[0]`; 비어있으면 에러/예외 |
+| `first_part()` | `Message` | `parts[0]`; 비어있으면 `INVALID_STATE`(`EINVAL`) 오류/예외 — `NO_DATA`(다시 시도할 수 있는 수신 없음)나 `NOT_SUPPORTED`(소켓 타입 미지원)로 내지 않는다 |
 | `single_part_or_throw()` | `Message` | `is_single_part()` 면 part 반환, 아니면 에러/예외 |
 | `close()` / `Dispose()` / `Drop` | — | 보유 parts 정리. 언어별 lifecycle 관용구 적용 |
 
