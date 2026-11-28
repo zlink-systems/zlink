@@ -639,7 +639,10 @@ fn submit_result_backpressure_admits_after_writable_then_completes_reply() {
         .common_options()
         .set_receive_high_water_mark(RECORD_HWM)
         .unwrap();
-    router.common_options().set_receive_timeout(5000).unwrap();
+    router
+        .common_options()
+        .set_receive_timeout(Some(Duration::from_millis(5000)))
+        .unwrap();
     router
         .bind("inproc://rust-submit-result-backpressured")
         .unwrap();

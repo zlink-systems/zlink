@@ -58,7 +58,10 @@ fn snapshot_reports_connected_row_and_pollconnect() {
 fn snapshot_reports_failed_row_with_failure() {
     let ctx = Context::new().unwrap();
     let client = ctx.create_dealer_socket().unwrap();
-    client.common_options().set_linger(0).unwrap();
+    client
+        .common_options()
+        .set_linger(Some(Duration::ZERO))
+        .unwrap();
     let endpoint = tcp_endpoint();
     client.connect(&endpoint).unwrap();
 

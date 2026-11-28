@@ -90,8 +90,10 @@ fn context_is_send_sync_and_shared_socket_creation_is_safe() {
         let barrier = Arc::clone(&barrier);
         workers.push(thread::spawn(move || {
             barrier.wait();
-            let sock = ctx.pair_socket().unwrap();
-            sock.common_options().set_linger(0).unwrap();
+            let sock = ctx.create_pair_socket().unwrap();
+            sock.common_options()
+                .set_linger(Some(Duration::ZERO))
+                .unwrap();
             let endpoint = format!("inproc://rust-context-thread-safety-{index}");
             sock.bind(&endpoint).unwrap();
         }));

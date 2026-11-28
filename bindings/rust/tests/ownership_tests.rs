@@ -96,7 +96,10 @@ fn send_failure_does_not_leak() {
     let router = ctx.create_router_socket().unwrap();
     router.bind("inproc://own-send-fail").unwrap();
     router.router_options().set_mandatory(true).unwrap();
-    router.common_options().set_send_timeout(50).unwrap();
+    router
+        .common_options()
+        .set_send_timeout(Some(Duration::from_millis(50)))
+        .unwrap();
 
     let rid = RoutingId::from(b"ghost");
     let msg = Message::try_from(b"will-fail").unwrap();

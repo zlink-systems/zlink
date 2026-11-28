@@ -21,14 +21,17 @@ fn tcp_endpoint() -> String {
 fn make_router(ctx: &Context, name: &str) -> RouterSocket {
     let router = ctx.create_router_socket().unwrap();
     router.set_routing_id(&RoutingId::from(name)).unwrap();
-    router.common_options().set_linger(0).unwrap();
+    router
+        .common_options()
+        .set_linger(Some(Duration::ZERO))
+        .unwrap();
     router
         .common_options()
         .set_reconnect_interval(Duration::from_millis(0))
         .unwrap();
     router
         .common_options()
-        .set_receive_timeout(WAIT_MS as i32)
+        .set_receive_timeout(Some(Duration::from_millis(WAIT_MS as u64)))
         .unwrap();
     router
         .common_options()
@@ -151,10 +154,13 @@ fn snapshot_pollroute_and_record_generation() {
     dealer
         .set_routing_id(&RoutingId::from("route-dealer"))
         .unwrap();
-    dealer.common_options().set_linger(0).unwrap();
     dealer
         .common_options()
-        .set_receive_timeout(WAIT_MS as i32)
+        .set_linger(Some(Duration::ZERO))
+        .unwrap();
+    dealer
+        .common_options()
+        .set_receive_timeout(Some(Duration::from_millis(WAIT_MS as u64)))
         .unwrap();
     dealer.connect(&endpoint).unwrap();
     wait_route(&server, None, "route-dealer", 0);
