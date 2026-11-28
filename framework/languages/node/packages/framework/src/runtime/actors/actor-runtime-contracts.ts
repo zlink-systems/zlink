@@ -117,6 +117,7 @@ export interface ZLinkActorJoinCoordinator {
    */
   beginDeferredJoin?(actor: ZLinkActor, state: ZLinkActorRuntimeState): void;
   abortDeferredJoin?(actor: ZLinkActor, state: ZLinkActorRuntimeState): Promise<void>;
+  onAcceptedJoinCompletionFailure?(actor: ZLinkActor, error: unknown): void;
   joinSpot(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,

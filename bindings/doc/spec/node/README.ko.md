@@ -687,6 +687,7 @@ native config 실패를 native errno가 포함된 config 범주의 `ZlinkError`�
 - 데이터 평면 receive와 subscribe API는 재사용 가능한 저장을 위해 호출자가 제공한
   결과 객체를 사용한다.
 - 논블로킹 no-data는 `false`를 반환하며 throw된 에러와 구별된다.
+- SUB·XSUB의 `subscriptionAt(index)`는 해당 인덱스에 항목이 없으면 `null`을 반환한다. 조회 규칙은 [공통 Subscription 조회](../README.ko.md#subscription-조회)를 따른다.
 - 일반 socket, routed socket, subscription과 successful request result에서 수신한 각 part는
   addon이 만든 JavaScript 소유 `Buffer`를 payload로 사용하는 `Message`가 된다. Payload를
   읽을 때 추가 native 호출이 발생하지 않으며 `Message`를 닫아도 `Buffer`의 수명 규칙은
