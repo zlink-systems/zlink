@@ -548,7 +548,7 @@ pub fn emit_unsupported(pattern: &str, transport: &str, reason: &str) {
 
 pub fn is_transport_unsupported_error(err: &ZlinkError) -> bool {
     matches!(
-        err.native_errno(),
+        err.internal_errno(),
         libc::EPERM | libc::EACCES | libc::ENOTSUP
     )
 }
@@ -562,7 +562,7 @@ where
         emit_unsupported(
             pattern,
             transport,
-            &format!("{stage}_errno_{}", err.native_errno()),
+            &format!("{stage}_errno_{}", err.internal_errno()),
         );
         return true;
     }
@@ -571,6 +571,10 @@ where
 
 pub fn is_stop_token(data: &[u8]) -> bool {
     data == STOP_TOKEN
+}
+
+pub fn is_stop_message(parts: &[Message]) -> bool {
+    matches!(parts, [part] if is_stop_token(part.as_bytes()))
 }
 
 pub fn is_valid_message(data: &[u8], expected_size: usize) -> bool {
@@ -995,15 +999,6 @@ pub fn wait_monitor_ready_count(
     );
 }
 
-pub fn poll_idle_until(deadline: Instant, max_wait: Duration) {
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if remaining.is_zero() {
-        return;
-    }
-    let wait_ms = remaining.min(max_wait).as_millis().max(1) as i64;
-    let _ = zlink::poll(&mut [], wait_ms);
-}
-
 pub fn wait_control_readable_until(poller: &Poller, events: &mut [PollEvent], deadline: Instant) {
     wait_poller_until(poller, events, deadline, Duration::from_millis(50));
 }
@@ -1229,8 +1224,8 @@ pub fn resolve_multi_connect_ready_timeout() -> Duration {
 }
 
 pub fn resolve_multi_monitor_hwm_bytes() -> u64 {
-    let primary = std::env::var("PERF_MULTI_MONITOR_HWM").ok();
-    let fallback = std::env::var("PERF_MONITOR_HWM").ok();
+    let primary = std::env::var("PERF_MULTI_MONITOR_HWM_BYTES").ok();
+    let fallback = std::env::var("PERF_MONITOR_HWM_BYTES").ok();
     resolve_nonnegative_u64(
         primary.as_deref(),
         fallback.as_deref(),
@@ -1289,8 +1284,10 @@ fn env_or_u64(name: &str, default: u64) -> u64 {
 
 fn resolve_nonnegative_u64(primary: Option<&str>, fallback: Option<&str>, default: u64) -> u64 {
     primary
-        .and_then(|value| value.parse::<u64>().ok())
-        .or_else(|| fallback.and_then(|value| value.parse::<u64>().ok()))
+        .filter(|value| !value.is_empty())
+        .or_else(|| fallback.filter(|value| !value.is_empty()))
+        .filter(|value| value.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|value| value.parse().ok())
         .unwrap_or(default)
 }
 
@@ -1791,9 +1788,12 @@ mod tests {
             12_345
         );
         assert_eq!(resolve_nonnegative_u64(Some("0"), None, 1), 0);
+        assert_eq!(resolve_nonnegative_u64(Some(""), Some("67890"), 1), 67_890);
+        assert_eq!(resolve_nonnegative_u64(Some("-1"), Some("67890"), 1), 1);
+        assert_eq!(resolve_nonnegative_u64(Some("+1"), None, 99), 99);
         assert_eq!(
-            resolve_nonnegative_u64(Some("-1"), Some("67890"), 1),
-            67_890
+            resolve_nonnegative_u64(Some("18446744073709551616"), None, 99),
+            99
         );
         assert_eq!(resolve_nonnegative_u64(Some("invalid"), None, 99), 99);
     }
