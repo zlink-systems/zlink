@@ -123,7 +123,8 @@ coroutine_executor_t &handler_coroutine_executor ()
     }
     std::lock_guard lock (executor_mutex ());
     if (!executor_instance () && executor_shutdown_requested ()) {
-        throw std::runtime_error ("handler coroutine executor is shut down");
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "handler coroutine executor is shut down");
     }
     return ensure_executor_locked ();
 }

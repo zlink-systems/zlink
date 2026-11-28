@@ -388,9 +388,12 @@ void test_public_authority_store_adapter (test_context_t &test)
     test.require (adapter.observe_relocation (captured_fence)
                     == relocation_authority_t::source_lease_expired,
                   "target commit then authority removal must end the source as expired owner");
-    test.require (adapter.settle_source_relocation (captured_fence, {read->source}, true).outcome
-                    == relocation_authority_t::source_lease_expired,
+    const auto missing_settlement =
+      adapter.settle_source_relocation (captured_fence, {read->source}, true);
+    test.require (missing_settlement.outcome == relocation_authority_t::source_lease_expired,
                   "Missing must never attempt source Preserve");
+    test.require (missing_settlement.authority_missing,
+                  "Missing must be reported apart from a source lease expiry");
 }
 
 } // namespace m6c_test

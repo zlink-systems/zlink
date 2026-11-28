@@ -2,6 +2,8 @@
 
 #include "runtime/locations/relocation_completion_store.hpp"
 
+#include "runtime/execution/task_result.hpp"
+#include "runtime/locations/authority_aggregate_relocation.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/base64.hpp"
 #include "runtime/locations/location_store_write.hpp"

@@ -6,10 +6,10 @@
 
 This category covers socket monitoring, the reusable poller, and standalone timers —
 `OpenSocketMonitor(...)`, `NewPoller()`, and `NewTimer()` respectively, plus the standalone `Poll(...)`
-function. `Timer`, `Poller`, and `Poll` are all declared in `poller_timer.go` — there is no separate
-timer file, unlike some other languages. The exact signatures are owned by
-[`internal/native/monitor.go`](../../../../bindings/go/internal/native/monitor.go) and
-[`poller_timer.go`](../../../../bindings/go/internal/native/poller_timer.go), re-exported as
+function. `Poller` and `Poll` are declared in `poller.go`, and `Timer` in `timer.go`. The exact signatures are owned by
+[`internal/native/monitor.go`](../../../../bindings/go/internal/native/monitor.go),
+[`poller.go`](../../../../bindings/go/internal/native/poller.go), and
+[`timer.go`](../../../../bindings/go/internal/native/timer.go), re-exported as
 aliases through
 [`contracts/eventing.go`](../../../../bindings/go/contracts/eventing.go).
 
@@ -251,5 +251,6 @@ wait.
 
 See
 [`internal/native/monitor.go`](../../../../bindings/go/internal/native/monitor.go),
-[`poller_timer.go`](../../../../bindings/go/internal/native/poller_timer.go), and the
+[`poller.go`](../../../../bindings/go/internal/native/poller.go),
+[`timer.go`](../../../../bindings/go/internal/native/timer.go), and the
 [Go binding spec](../../spec/go/README.en.md) for the full rationale.

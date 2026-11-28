@@ -301,6 +301,7 @@ class observed_commit_store_t final : public location_store_t
     explicit observed_commit_store_t (location_store_t &store) : inner (store) {}
 
     std::size_t commit_keys = 0;
+    std::size_t commit_participant_puts = 0;
     std::vector<std::size_t> commit_reply_puts;
     unsigned rejected_commits = 0;
     std::size_t rows_after_rejection = 0;
@@ -318,10 +319,11 @@ class observed_commit_store_t final : public location_store_t
 
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
+        const auto aggregate_prefix = provider_location_repository_t::key_aggregate ("").value;
         const store_put_t *aggregate = nullptr;
         for (const auto &mutation : request.mutations) {
             const auto *put = std::get_if<store_put_t> (&mutation);
-            if (put && put->key.value.starts_with ("zlink:v11:aggregate:")
+            if (put && put->key.value.starts_with (aggregate_prefix)
                 && nlohmann::json::parse (put->bytes).at ("state") == "committed")
                 aggregate = put;
         }
@@ -331,11 +333,14 @@ class observed_commit_store_t final : public location_store_t
                 for_each_condition_key (condition,
                                         [&] (const auto &key) { keys.insert (key.value); });
             std::size_t reply_puts = 0;
+            commit_participant_puts = 0;
             for (const auto &mutation : request.mutations) {
                 std::visit ([&] (const auto &item) { keys.insert (item.key.value); }, mutation);
                 const auto *put = std::get_if<store_put_t> (&mutation);
                 if (put && put->key.value.starts_with (reply_prefix))
                     ++reply_puts;
+                if (put && put->key.value.starts_with (std::string_view{"authority\0", 10}))
+                    ++commit_participant_puts;
             }
             commit_reply_puts.push_back (reply_puts);
             commit_keys = keys.size ();
@@ -417,6 +422,7 @@ class ActorAuthorityRelocation : public ::testing::Test
 
     void SetUp () override
     {
+        ASSERT_TRUE (repository.ensure_store_format ({}).result ());
         source = host ("s", 3);
         target = host ("t", 4);
         object_reserve_request_t request;
@@ -1102,6 +1108,7 @@ struct retarget_observation_t
     authority_publish_status_t status = authority_publish_status_t::conflict;
     unsigned commit_writes = 0;
     std::size_t commit_keys = 0;
+    std::size_t participant_puts = 0;
     std::size_t rows = 0;
     std::size_t aborted_aggregates = 0;
     std::string owner_id;
@@ -1135,28 +1142,35 @@ class RetargetTrial final : public ActorAuthorityRelocation
         seen.status = publish (prepare, accepted_rows (prepare, count), &adapter).status;
         seen.commit_writes = observed.commit_reply_puts.size ();
         seen.commit_keys = observed.commit_keys;
+        seen.participant_puts = observed.commit_participant_puts;
         seen.rows = stored_rows (prepare);
         seen.owner_id = read ().owner.owner_id;
         seen.store_version = read ().store_version;
         seen.aborted_aggregates =
-          count_rows (provider, "zlink:v11:aggregate:", [] (const auto &item) {
-              return nlohmann::json::parse (item.value.bytes).at ("state") == "aborted";
-          });
+          count_rows (provider, provider_location_repository_t::key_aggregate ("").value,
+                      [] (const auto &item) {
+                          return nlohmann::json::parse (item.value.bytes).at ("state") == "aborted";
+                      });
     }
 };
 
 TEST (RetargetReplyBatchLimit, OverLimitCommitAbortsBeforeOwnershipMoves)
 {
+    constexpr std::size_t probe_replies = 1;
     retarget_observation_t probe;
-    RetargetTrial{}.run (1, probe);
+    RetargetTrial{}.run (probe_replies, probe);
     ASSERT_EQ (probe.status, authority_publish_status_t::published);
     ASSERT_EQ (probe.commit_writes, 1u);
-    const auto other_keys = probe.commit_keys - 1;
-    const auto largest = location_store_limits::write_keys - other_keys;
+    ASSERT_EQ (probe.participant_puts, 1u);
+    ASSERT_GT (probe.commit_keys, probe.participant_puts + probe_replies);
+    const auto other_keys = probe.commit_keys - probe.participant_puts - probe_replies;
+    const auto largest = location_store_limits::write_keys - other_keys - probe.participant_puts;
 
     retarget_observation_t fits;
     RetargetTrial{}.run (largest, fits);
     EXPECT_EQ (fits.status, authority_publish_status_t::published);
+    EXPECT_EQ (fits.commit_writes, 1u);
+    EXPECT_EQ (fits.participant_puts, probe.participant_puts);
     EXPECT_EQ (fits.commit_keys, location_store_limits::write_keys);
     EXPECT_EQ (fits.rows, largest);
     EXPECT_EQ (fits.aborted_aggregates, 0u);

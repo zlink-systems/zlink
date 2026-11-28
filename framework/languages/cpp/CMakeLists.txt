@@ -227,6 +227,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/mesh/service_topology_registry.cpp
   framework/src/runtime/locations/relocation_completion_store.cpp
   framework/src/runtime/locations/location_store_format.cpp
+  framework/src/runtime/locations/provider_location_repository.cpp
   framework/src/runtime/locations/service_descriptor_registry.cpp
   framework/src/runtime/fanout/raw_fanout_owner.cpp
   framework/src/runtime/fanout/fanout_subscription.cpp
@@ -339,6 +340,13 @@ target_link_libraries(zlink_framework_m6c_runtime PUBLIC
   zlink_framework_m6b_runtime
   Threads::Threads)
 
+set(ZLINK_FRAMEWORK_CPP_SPOT_RUNTIME_SOURCES
+  framework/src/runtime/spots/spot_runtime.cpp
+  framework/src/runtime/spots/spot_runtime_activation.cpp
+  framework/src/runtime/spots/spot_runtime_actor_join.cpp
+  framework/src/runtime/spots/spot_runtime_ingress.cpp
+  framework/src/runtime/spots/spot_runtime_relocation.cpp)
+
 add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/codecs/json_profile_engine.cpp
   $<TARGET_OBJECTS:zlink_framework_m6a_objects>
@@ -379,12 +387,21 @@ add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/http/http_listener.cpp
   framework/src/runtime/http/http_request_pipeline.cpp
   framework/src/runtime/host/framework_runtime.cpp
+  framework/src/runtime/locations/in_memory_location_store.cpp
   framework/src/runtime/mesh/mesh_metadata_codec.cpp
   framework/src/runtime/mesh/mesh_node_host_service.cpp
+  framework/src/runtime/mesh/mesh_node_host_actor_creation_completion.cpp
+  framework/src/runtime/mesh/mesh_node_host_actor_creation_target.cpp
+  framework/src/runtime/mesh/mesh_node_host_actor_lifecycle.cpp
+  framework/src/runtime/mesh/mesh_node_host_descriptors.cpp
+  framework/src/runtime/mesh/mesh_node_host_dispatch.cpp
+  framework/src/runtime/mesh/mesh_node_host_operations.cpp
+  framework/src/runtime/mesh/mesh_node_host_placement.cpp
+  framework/src/runtime/mesh/mesh_node_host_user_spot.cpp
   framework/src/runtime/mesh/mesh_node_runtime.cpp
   framework/src/runtime/mesh/route_mesh_runtime_service.cpp
   framework/src/runtime/mesh/route_mesh_runtime_options_service.cpp
-  framework/src/runtime/spots/spot_runtime.cpp
+  ${ZLINK_FRAMEWORK_CPP_SPOT_RUNTIME_SOURCES}
   framework/src/runtime/mesh/mesh_record_dispatcher.cpp
   framework/src/runtime/spots/actor_transfer_coordinator.cpp
   framework/src/runtime/spots/spot_ids.cpp
@@ -424,7 +441,7 @@ if(ZLINK_FRAMEWORK_CPP_SHARED AND APPLE)
 endif()
 zlink_framework_cpp_configure_msvc_target(zlink_framework)
 if(MSVC)
-  set_property(SOURCE framework/src/runtime/spots/spot_runtime.cpp APPEND PROPERTY
+  set_property(SOURCE ${ZLINK_FRAMEWORK_CPP_SPOT_RUNTIME_SOURCES} APPEND PROPERTY
     COMPILE_OPTIONS
       "$<$<CONFIG:Release>:/O1>"
       "$<$<CONFIG:Release>:/Oi->")
@@ -2850,6 +2867,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_shared_serial_turn PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_preparation_terminal_order
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_preparation_terminal_order.cpp
+    "framework-unit;framework-contract;framework-regression;execution" contract)
+  target_use_zlink_gtest_main(test_cpp_framework_preparation_terminal_order)
+  target_include_directories(test_cpp_framework_preparation_terminal_order PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_yield_terminal
     tests/Zlink.Framework.UnitTests/test_cpp_framework_yield_terminal.cpp
     "framework-unit;framework-contract;framework-regression;execution" contract)
@@ -3164,6 +3188,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_accepted_source_restore.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_join_settlement.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_authority_publication.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_previous_publication.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_host_relocation.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_lifecycle_turns.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_authority_turns.cpp
@@ -3184,7 +3209,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/support/actor_maintenance_join_stream_fixture.cpp
     tests/support/actor_maintenance_join_suffix_fixture.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spotwide_host_relocation.cpp
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_reincarnate_conformance.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_reincarnate_conformance.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_callback_publication.cpp)
   target_compile_features(test_cpp_framework_spot_close_conformance PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_spot_close_conformance)
   target_use_zlink_gtest_main(test_cpp_framework_spot_close_conformance)

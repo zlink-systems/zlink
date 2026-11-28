@@ -1,0 +1,2030 @@
+{
+  "fixture": "zlink.framework.login-admission-queue",
+  "version": 1,
+  "status": "approved-design-fixture-runtime-not-yet-implemented",
+  "contract": {
+    "ticketFormat": "version(1) || expiresAtUnixMs(8 BE) || epoch(8 BE) || HMAC-SHA256(32)",
+    "ticketLifetimeMs": 30000,
+    "clockSkewMs": 2000,
+    "nodeReportValidityMs": 3000,
+    "reregisterAfterMs": 15000
+  },
+  "ticketVectors": [
+    {
+      "name": "current-key",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+      "expect": {
+        "accept": true,
+        "reason": "ok"
+      }
+    },
+    {
+      "name": "expired",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000032001,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+      "expect": {
+        "accept": false,
+        "reason": "expired"
+      }
+    },
+    {
+      "name": "skew-boundary",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000032000,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+      "expect": {
+        "accept": true,
+        "reason": "skewAccepted"
+      }
+    },
+    {
+      "name": "wrong-session",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1i",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+      "expect": {
+        "accept": false,
+        "reason": "wrongSession"
+      }
+    },
+    {
+      "name": "other-node-same-session",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1i",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+      "expect": {
+        "accept": false,
+        "reason": "wrongSession"
+      }
+    },
+    {
+      "name": "restarted-node-same-session",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 8,
+        "verificationStreamName": "login",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+      "expect": {
+        "accept": false,
+        "reason": "wrongSession"
+      }
+    },
+    {
+      "name": "other-stream-same-session",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login-eu",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+      "expect": {
+        "accept": false,
+        "reason": "wrongSession"
+      }
+    },
+    {
+      "name": "wrong-epoch",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
+        "verificationEpoch": 43
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+      "expect": {
+        "accept": false,
+        "reason": "wrongEpoch"
+      }
+    },
+    {
+      "name": "previous-key",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACqHiNCLzKnAMakiOKyWxxkjlhcar3xapkhHWWHkU0REdw",
+      "expect": {
+        "accept": true,
+        "reason": "previousKeyOk"
+      }
+    },
+    {
+      "name": "short-ticket",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3",
+      "expect": {
+        "accept": false,
+        "reason": "badLength"
+      }
+    },
+    {
+      "name": "wrong-version",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
+        "verificationEpoch": 42
+      },
+      "ticket": "AgAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+      "expect": {
+        "accept": false,
+        "reason": "badVersion"
+      }
+    },
+    {
+      "name": "short-key",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#352-ticket-형식과-서명",
+      "given": {
+        "keyBase64Url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHg",
+        "previousKeyBase64Url": null,
+        "sessionRidBase64Url": "c2Vzc2lvbi1h",
+        "nodeRidBase64Url": "bm9kZS1h",
+        "nodeLifecycleGeneration": 7,
+        "streamName": "login",
+        "expiresAtUnixMs": 1700000030000,
+        "epoch": 42,
+        "nowUnixMs": 1700000029999,
+        "verificationSessionRidBase64Url": "c2Vzc2lvbi1h",
+        "verificationNodeRidBase64Url": "bm9kZS1h",
+        "verificationNodeLifecycleGeneration": 7,
+        "verificationStreamName": "login",
+        "verificationEpoch": 42
+      },
+      "ticket": "AQAAAYvP5d0wAAAAAAAAACpiyuBell5HgikPLQ67FPIQV3x9t43C5DEhcM6GKhG3Hw",
+      "expect": {
+        "accept": false,
+        "reason": "keyTooShort"
+      }
+    }
+  ],
+  "queueScenarios": [
+    {
+      "name": "enqueue-idempotent",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "sessionRid": "a",
+        "nodeRid": "n",
+        "position": 2
+      },
+      "steps": [
+        {
+          "action": "enqueue",
+          "expect": {
+            "position": 2,
+            "newWaiters": 0
+          }
+        },
+        {
+          "action": "issueTicket",
+          "expect": {
+            "ticket": "T"
+          }
+        },
+        {
+          "action": "enqueue",
+          "ticketUnused": true,
+          "ticketUnexpired": true,
+          "expect": {
+            "ticket": "T",
+            "newWaiters": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "same-session-rid-on-two-nodes-are-two-waiters",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "waiters": []
+      },
+      "steps": [
+        {
+          "action": "enqueue",
+          "node": "n1",
+          "nodeLifecycleGeneration": 7,
+          "streamName": "login",
+          "sessionRid": "a",
+          "expect": {
+            "newWaiters": 1,
+            "position": 1
+          }
+        },
+        {
+          "action": "enqueue",
+          "node": "n2",
+          "nodeLifecycleGeneration": 3,
+          "streamName": "login",
+          "sessionRid": "a",
+          "expect": {
+            "newWaiters": 1,
+            "position": 2
+          }
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "nodeLifecycleGeneration": 7,
+          "usedTickets": [
+            {
+              "streamName": "login",
+              "sessionRid": "a"
+            }
+          ],
+          "expect": {
+            "waiting": [
+              {
+                "node": "n2",
+                "sessionRid": "a"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "node-budget-and-fifo",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "reports": [
+          {
+            "node": "n",
+            "limit": 5,
+            "inFlight": 2,
+            "issuedSinceReport": 1
+          }
+        ],
+        "waiting": [
+          "a",
+          "b",
+          "c"
+        ]
+      },
+      "steps": [
+        {
+          "action": "calculateBudget",
+          "expect": {
+            "budget": 2
+          }
+        },
+        {
+          "action": "issue",
+          "expect": {
+            "ticketSessions": [
+              "a",
+              "b"
+            ],
+            "remaining": [
+              "c"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "budget-capped-by-global-limit",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 2,
+        "runningPermits": 1,
+        "unusedUnexpiredTickets": 0,
+        "reports": [
+          {
+            "node": "n",
+            "limit": 5,
+            "inFlight": 0,
+            "issuedSinceReport": 0
+          }
+        ],
+        "waiting": [
+          "a",
+          "b",
+          "c"
+        ]
+      },
+      "steps": [
+        {
+          "action": "calculateBudget",
+          "expect": {
+            "budget": 1
+          }
+        },
+        {
+          "action": "issue",
+          "expect": {
+            "ticketSessions": [
+              "a"
+            ],
+            "remaining": [
+              "b",
+              "c"
+            ]
+          }
+        },
+        {
+          "action": "calculateBudget",
+          "note": "a's ticket is unused and unexpired",
+          "expect": {
+            "budget": 0
+          }
+        },
+        {
+          "action": "releasePermit",
+          "expect": {
+            "runningPermits": 0
+          }
+        },
+        {
+          "action": "calculateBudget",
+          "expect": {
+            "budget": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "stale-report-no-issuance",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "reportAgeMs": 3001,
+        "waiting": [
+          "a"
+        ]
+      },
+      "steps": [
+        {
+          "action": "issue",
+          "expect": {
+            "ticketSessions": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "permit-granted-below-limit",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 2,
+        "epoch": 42,
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          },
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
+          "expect": {
+            "granted": true,
+            "permitIdNonzero": true,
+            "runningPermits": 1
+          },
+          "requestSeq": 1
+        },
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "expect": {
+            "granted": true,
+            "runningPermits": 2
+          },
+          "requestSeq": 1
+        }
+      ]
+    },
+    {
+      "name": "permit-denied-at-limit",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": [
+          {
+            "node": "n1",
+            "ownerId": "o1",
+            "leaseGeneration": 3
+          }
+        ],
+        "validTickets": [
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "expect": {
+            "granted": false,
+            "runningPermits": 1
+          },
+          "requestSeq": 1
+        }
+      ]
+    },
+    {
+      "name": "denied-ticket-invalidated-and-waiter-at-node-front",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": [
+          {
+            "node": "n1",
+            "ownerId": "o1",
+            "leaseGeneration": 3
+          }
+        ],
+        "waiting": [
+          {
+            "node": "n2",
+            "sessionRid": "s3"
+          }
+        ],
+        "issuedTickets": [
+          {
+            "node": "n2",
+            "sessionRid": "s2",
+            "ticket": "T2"
+          }
+        ],
+        "validTickets": [
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "requestSeq": 1,
+          "expect": {
+            "granted": false,
+            "runningPermits": 1
+          }
+        },
+        {
+          "action": "enqueue",
+          "node": "n2",
+          "sessionRid": "s2",
+          "expect": {
+            "position": 1,
+            "newWaiters": 0,
+            "ticket": null
+          }
+        },
+        {
+          "action": "nodeWaiters",
+          "node": "n2",
+          "expect": {
+            "order": [
+              "s2",
+              "s3"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "retry-with-invalidated-ticket-before-reissue-denied",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": [],
+        "invalidatedTickets": [
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ],
+        "waiting": [
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "requestSeq": 2,
+          "note": "the node still accepts the old unexpired ticket by HMAC; the Spot has no valid ticket for this connection",
+          "expect": {
+            "granted": false,
+            "runningPermits": 0
+          }
+        },
+        {
+          "action": "issue",
+          "expect": {
+            "ticketSessions": [
+              "s2"
+            ]
+          }
+        },
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "requestSeq": 3,
+          "note": "after reissue, old or new ticket bytes are the same connection and epoch",
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "permit-wrong-epoch-denied",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 5,
+        "epoch": 42,
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 41,
+          "expect": {
+            "granted": false,
+            "runningPermits": 0
+          },
+          "requestSeq": 1
+        }
+      ]
+    },
+    {
+      "name": "permit-release-idempotent",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          },
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          },
+          "requestSeq": 1
+        },
+        {
+          "action": "releasePermit",
+          "permit": "last",
+          "expect": {
+            "runningPermits": 0
+          }
+        },
+        {
+          "action": "releasePermit",
+          "permit": "last",
+          "expect": {
+            "runningPermits": 0
+          }
+        },
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          },
+          "requestSeq": 1
+        }
+      ]
+    },
+    {
+      "name": "permit-reclaimed-when-owner-lease-ends",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": [
+          {
+            "node": "n1",
+            "ownerId": "o1",
+            "leaseGeneration": 3
+          }
+        ],
+        "validTickets": [
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "ownerLeaseEnded",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "expect": {
+            "runningPermits": 0
+          }
+        },
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          },
+          "requestSeq": 1
+        }
+      ]
+    },
+    {
+      "name": "permit-reclaimed-when-missing-from-report",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 2,
+        "epoch": 42,
+        "runningPermits": [
+          {
+            "node": "n1",
+            "ownerId": "o1",
+            "leaseGeneration": 3,
+            "permit": "p1",
+            "requestSeq": 1
+          },
+          {
+            "node": "n1",
+            "ownerId": "o1",
+            "leaseGeneration": 3,
+            "permit": "p2",
+            "requestSeq": 2
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [
+            "p2"
+          ],
+          "resolvedRequestSeq": 2,
+          "expect": {
+            "runningPermits": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "late-grant-survives-earlier-report",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          },
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          },
+          "requestSeq": 1
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [],
+          "note": "sent before the grant reached n1",
+          "expect": {
+            "runningPermits": 1
+          },
+          "resolvedRequestSeq": 0
+        },
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "expect": {
+            "granted": false,
+            "runningPermits": 1
+          },
+          "requestSeq": 1
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [],
+          "note": "handler done and permit not released (lost send)",
+          "expect": {
+            "runningPermits": 0
+          },
+          "resolvedRequestSeq": 1
+        }
+      ]
+    },
+    {
+      "name": "lost-grant-reclaimed-after-request-timeout",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          },
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
+          "requestSeq": 1,
+          "responseLost": true,
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          }
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [],
+          "resolvedRequestSeq": 0,
+          "note": "request 1 still waiting",
+          "expect": {
+            "runningPermits": 1
+          }
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [],
+          "resolvedRequestSeq": 1,
+          "note": "request 1 abandoned at the Spot request timeout",
+          "expect": {
+            "runningPermits": 0
+          }
+        },
+        {
+          "action": "admitPermit",
+          "node": "n2",
+          "ownerId": "o2",
+          "leaseGeneration": 5,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "requestSeq": 1,
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "out-of-order-grants-keep-unresolved-request",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 3,
+        "epoch": 42,
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          },
+          {
+            "node": "n1",
+            "sessionRid": "s2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
+          "requestSeq": 1,
+          "permit": "p1",
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          }
+        },
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s2",
+          "epoch": 42,
+          "requestSeq": 2,
+          "permit": "p2",
+          "expect": {
+            "granted": true,
+            "runningPermits": 2
+          }
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [
+            "p2"
+          ],
+          "resolvedRequestSeq": 0,
+          "note": "response 2 arrived, response 1 not yet; contiguous resolved prefix is 0",
+          "expect": {
+            "runningPermits": 2
+          }
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [
+            "p1",
+            "p2"
+          ],
+          "resolvedRequestSeq": 2,
+          "expect": {
+            "runningPermits": 2
+          }
+        },
+        {
+          "action": "nodeReport",
+          "node": "n1",
+          "heldPermits": [
+            "p2"
+          ],
+          "resolvedRequestSeq": 2,
+          "note": "p1 handler done, release lost",
+          "expect": {
+            "runningPermits": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "ticket-reuse-does-not-bypass-permit",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": [],
+        "validTickets": [
+          {
+            "node": "n1",
+            "sessionRid": "s1"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
+          "expect": {
+            "granted": true,
+            "runningPermits": 1
+          },
+          "requestSeq": 1
+        },
+        {
+          "action": "admitPermit",
+          "node": "n1",
+          "ownerId": "o1",
+          "leaseGeneration": 3,
+          "sessionRid": "s1",
+          "epoch": 42,
+          "expect": {
+            "granted": false,
+            "runningPermits": 1
+          },
+          "requestSeq": 2
+        }
+      ]
+    },
+    {
+      "name": "estimated-wait",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {},
+      "steps": [
+        {
+          "action": "estimate",
+          "position": 2,
+          "ticketsLast30Seconds": 20,
+          "expect": {
+            "estimatedWaitMs": 3000
+          }
+        },
+        {
+          "action": "estimate",
+          "position": 2,
+          "ticketsLast30Seconds": 0,
+          "expect": {
+            "estimatedWaitMs": 2000
+          }
+        },
+        {
+          "action": "estimate",
+          "position": 2147483647,
+          "ticketsLast30Seconds": 0,
+          "expect": {
+            "estimatedWaitMs": 2147483647
+          }
+        }
+      ]
+    },
+    {
+      "name": "delete-waiters",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "waiters": [
+          "used",
+          "ended",
+          "expired"
+        ]
+      },
+      "steps": [
+        {
+          "action": "nodeReport",
+          "usedTicketSessions": [
+            "used"
+          ],
+          "expect": {
+            "waiters": [
+              "ended",
+              "expired"
+            ]
+          }
+        },
+        {
+          "action": "nodeReport",
+          "endedSessions": [
+            "ended"
+          ],
+          "expect": {
+            "waiters": [
+              "expired"
+            ]
+          }
+        },
+        {
+          "action": "ticketExpires",
+          "sessionRid": "expired",
+          "unused": true,
+          "expect": {
+            "waiters": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "new-incarnation",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#351-대기열-spot과-epoch",
+      "given": {
+        "epoch": 42,
+        "waiting": [
+          "a"
+        ]
+      },
+      "steps": [
+        {
+          "action": "reinitialize",
+          "expect": {
+            "epoch": 43,
+            "waiting": []
+          }
+        },
+        {
+          "action": "verifyOldTicket",
+          "ticketEpoch": 42,
+          "expect": {
+            "accept": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "position-skips-waiters-holding-a-ticket",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "waiting": [
+          {
+            "node": "n1",
+            "sessionRid": "a",
+            "ticket": true
+          },
+          {
+            "node": "n2",
+            "sessionRid": "b",
+            "ticket": false
+          },
+          {
+            "node": "n1",
+            "sessionRid": "c",
+            "ticket": true
+          },
+          {
+            "node": "n2",
+            "sessionRid": "d",
+            "ticket": false
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "enqueue",
+          "node": "n2",
+          "sessionRid": "d",
+          "expect": {
+            "position": 2,
+            "newWaiters": 0
+          }
+        },
+        {
+          "action": "enqueue",
+          "node": "n2",
+          "sessionRid": "b",
+          "expect": {
+            "position": 1,
+            "newWaiters": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "vanished-node-holding-every-permit-reclaimed-on-report",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "globalLimit": 1,
+        "epoch": 42,
+        "runningPermits": [
+          {
+            "node": "n1",
+            "ownerId": "o1",
+            "leaseGeneration": 3,
+            "requestSeq": 1
+          }
+        ],
+        "ownerLeases": {
+          "o1:3": "ended"
+        },
+        "reports": [
+          {
+            "node": "n2",
+            "limit": 5,
+            "inFlight": 0,
+            "issuedSinceReport": 0
+          }
+        ],
+        "waiting": [
+          {
+            "node": "n2",
+            "sessionRid": "s2"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "nodeReport",
+          "node": "n2",
+          "heldPermits": [],
+          "resolvedRequestSeq": 0,
+          "note": "n1 never reports again; the global cap blocks issuing, so this report checks the permit owners' leases",
+          "expect": {
+            "ownerLeaseChecks": 1,
+            "runningPermits": 0,
+            "ticketSessions": [
+              "s2"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "nodeScenarios": [
+    {
+      "name": "invalid-ticket-missing",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
+      "given": {
+        "queueEnabled": true,
+        "ticketState": "missing",
+        "reportedEpoch": 42
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "handlerCalls": 0,
+            "stageOneInFlightDelta": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "invalid-ticket-bad-signature",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
+      "given": {
+        "queueEnabled": true,
+        "ticketState": "bad-signature",
+        "reportedEpoch": 42
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "handlerCalls": 0,
+            "stageOneInFlightDelta": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "invalid-ticket-expired",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
+      "given": {
+        "queueEnabled": true,
+        "ticketState": "expired",
+        "reportedEpoch": 42
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "handlerCalls": 0,
+            "stageOneInFlightDelta": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "invalid-ticket-wrong-epoch",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
+      "given": {
+        "queueEnabled": true,
+        "ticketState": "wrong-epoch",
+        "reportedEpoch": 42
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "handlerCalls": 0,
+            "stageOneInFlightDelta": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "no-report-response",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#351-대기열-spot과-epoch",
+      "given": {
+        "queueEnabled": true,
+        "reportedEpoch": null,
+        "ticketState": "valid"
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "handlerCalls": 0,
+            "stageOneInFlightDelta": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "valid-ticket-stage-one",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#32-동작",
+      "given": {
+        "queueEnabled": true,
+        "reportedEpoch": 42,
+        "ticketState": "valid"
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "decision": "stageOne",
+            "handlerCallsBeforeStageOne": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "global-limit-admit-permit-before-handler",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "queueEnabled": true,
+        "globalLimit": 1,
+        "ticketState": "valid",
+        "reportedEpoch": 42,
+        "spotPermit": "granted"
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "admitPermitRequests": 1,
+            "handlerCalls": 1,
+            "admitPermitRequestSeq": 1
+          }
+        },
+        {
+          "action": "handlerCompleted",
+          "outcome": "failure",
+          "expect": {
+            "releasePermitSends": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "global-limit-permit-denied",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "queueEnabled": true,
+        "globalLimit": 1,
+        "ticketState": "valid",
+        "reportedEpoch": 42,
+        "spotPermit": "denied"
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "metadata": {
+              "$zlink.admission.queueRequired": "1"
+            },
+            "handlerCalls": 0,
+            "releasePermitSends": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "global-limit-spot-no-response",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "queueEnabled": true,
+        "globalLimit": 1,
+        "ticketState": "valid",
+        "reportedEpoch": 42,
+        "spotPermit": "noResponseWithinSpotRequestTimeout"
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "errorCode": "unavailable",
+            "handlerCalls": 0,
+            "admitPermitRequests": 1
+          }
+        },
+        {
+          "action": "nodeReport",
+          "expect": {
+            "resolvedRequestSeq": 1,
+            "heldPermits": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "no-global-limit-no-permit",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#353-node-보고와-ticket-발급",
+      "given": {
+        "queueEnabled": true,
+        "globalLimit": null,
+        "ticketState": "valid",
+        "reportedEpoch": 42
+      },
+      "steps": [
+        {
+          "action": "authenticate",
+          "expect": {
+            "admitPermitRequests": 0,
+            "handlerCalls": 1
+          }
+        }
+      ]
+    }
+  ],
+  "startupScenarios": [
+    {
+      "name": "single-mesh-name-omitted",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#350-2단계-설정",
+      "given": {
+        "queueEnabled": true,
+        "meshNodes": [
+          "game"
+        ],
+        "queueMeshName": null
+      },
+      "expect": {
+        "started": true,
+        "queueMesh": "game",
+        "queueSpotId": "$zlink.admission-queue/game"
+      }
+    },
+    {
+      "name": "multiple-meshes-name-given",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#351-대기열-spot과-epoch",
+      "given": {
+        "queueEnabled": true,
+        "meshNodes": [
+          "game",
+          "chat"
+        ],
+        "queueMeshName": "chat"
+      },
+      "expect": {
+        "started": true,
+        "queueMesh": "chat",
+        "queueSpotId": "$zlink.admission-queue/chat"
+      }
+    },
+    {
+      "name": "multiple-meshes-name-missing",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#350-2단계-설정",
+      "given": {
+        "queueEnabled": true,
+        "meshNodes": [
+          "game",
+          "chat"
+        ],
+        "queueMeshName": null
+      },
+      "expect": {
+        "started": false,
+        "configurationError": "Mesh selection is required"
+      }
+    },
+    {
+      "name": "no-mesh-node",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#350-2단계-설정",
+      "given": {
+        "queueEnabled": true,
+        "meshNodes": [],
+        "queueMeshName": null
+      },
+      "expect": {
+        "started": false,
+        "configurationError": true
+      }
+    },
+    {
+      "name": "queue-disabled-ignores-mesh",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#350-2단계-설정",
+      "given": {
+        "queueEnabled": false,
+        "meshNodes": [
+          "game",
+          "chat"
+        ],
+        "queueMeshName": null
+      },
+      "expect": {
+        "started": true,
+        "queueMesh": null
+      }
+    },
+    {
+      "name": "stream-name-over-255-bytes",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#350-2단계-설정",
+      "given": {
+        "queueEnabled": true,
+        "meshNodes": [
+          "game"
+        ],
+        "queueMeshName": null,
+        "streamNameUtf8Bytes": 256
+      },
+      "expect": {
+        "started": false,
+        "configurationError": true
+      }
+    },
+    {
+      "name": "stream-name-255-bytes",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#350-2단계-설정",
+      "given": {
+        "queueEnabled": true,
+        "meshNodes": [
+          "game"
+        ],
+        "queueMeshName": null,
+        "streamNameUtf8Bytes": 255
+      },
+      "expect": {
+        "started": true,
+        "queueMesh": "game",
+        "queueSpotId": "$zlink.admission-queue/game"
+      }
+    }
+  ],
+  "connectorScenarios": [
+    {
+      "name": "shared-enqueue-and-callback-order",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#355-한-연결의-동시-인증-request",
+      "given": {
+        "requests": [
+          "a",
+          "b"
+        ],
+        "cachedTicket": "old"
+      },
+      "steps": [
+        {
+          "action": "queueRequired",
+          "request": "a",
+          "expect": {
+            "cachedTicket": null,
+            "enqueueCount": 1,
+            "callbacks": [
+              "OnAdmissionQueued"
+            ]
+          }
+        },
+        {
+          "action": "queueRequired",
+          "request": "b",
+          "expect": {
+            "enqueueCount": 1
+          }
+        },
+        {
+          "action": "positionResponse",
+          "position": 2,
+          "estimatedWaitMs": 2000,
+          "expect": {
+            "callbacks": [
+              "OnAdmissionPosition"
+            ]
+          }
+        },
+        {
+          "action": "positionSend",
+          "position": 1,
+          "estimatedWaitMs": 1000,
+          "expect": {
+            "callbacks": [
+              "OnAdmissionPosition"
+            ]
+          }
+        },
+        {
+          "action": "ticketSend",
+          "ticket": "T",
+          "expiresInMs": 30000,
+          "expect": {
+            "retriedRequests": [
+              "a",
+              "b"
+            ]
+          }
+        },
+        {
+          "action": "stageOneReject",
+          "request": "a",
+          "retryAfterMs": "500",
+          "expect": {
+            "callbacks": [
+              "OnAdmissionWaiting"
+            ]
+          }
+        },
+        {
+          "action": "complete",
+          "request": "a",
+          "expect": {
+            "callbacks": [
+              "requestComplete"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "ticket-before-response-and-late-position",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#355-한-연결의-동시-인증-request",
+      "given": {
+        "requests": [
+          "a"
+        ]
+      },
+      "steps": [
+        {
+          "action": "queueRequired",
+          "expect": {
+            "enqueueCount": 1,
+            "callbacks": [
+              "OnAdmissionQueued"
+            ]
+          }
+        },
+        {
+          "action": "ticketSend",
+          "ticket": "T",
+          "expiresInMs": 30000,
+          "expect": {
+            "retriedRequests": [
+              "a"
+            ]
+          }
+        },
+        {
+          "action": "positionResponse",
+          "position": 1,
+          "estimatedWaitMs": 1000,
+          "expect": {
+            "positionCallbacks": 0
+          }
+        },
+        {
+          "action": "positionSend",
+          "position": 1,
+          "estimatedWaitMs": 1000,
+          "expect": {
+            "positionCallbacks": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "reregister-after-silence",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#354-순번-push와-재등록",
+      "given": {
+        "requests": [
+          "a"
+        ]
+      },
+      "steps": [
+        {
+          "action": "queueRequired",
+          "atMs": 0,
+          "expect": {
+            "enqueueCount": 1,
+            "queuedCallbacks": 1
+          }
+        },
+        {
+          "action": "silence",
+          "atMs": 15000,
+          "expect": {
+            "enqueueCount": 2,
+            "queuedCallbacks": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "conflicting-metadata",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#356-예약-이름과-metadata-충돌",
+      "given": {
+        "requests": [
+          "a",
+          "b"
+        ]
+      },
+      "steps": [
+        {
+          "action": "error",
+          "request": "a",
+          "code": "unavailable",
+          "metadata": {
+            "$zlink.admission.queueRequired": "1",
+            "$zlink.admission.retryAfterMs": "500"
+          },
+          "expect": {
+            "a": "FrameDecodeFailed",
+            "b": "pending",
+            "connectionClosed": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "malformed-response",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
+      "given": {
+        "requests": [
+          "a",
+          "b"
+        ]
+      },
+      "steps": [
+        {
+          "action": "enqueueResponse",
+          "request": "a",
+          "payload": {
+            "position": "bad"
+          },
+          "expect": {
+            "a": "FrameDecodeFailed",
+            "b": "pending",
+            "connectionClosed": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "malformed-position-send",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#355-한-연결의-동시-인증-request",
+      "given": {
+        "requests": [
+          "a",
+          "b"
+        ]
+      },
+      "steps": [
+        {
+          "action": "send",
+          "packet": "$zlink.admission.position",
+          "payload": {},
+          "expect": {
+            "a": "FrameDecodeFailed",
+            "b": "FrameDecodeFailed",
+            "connectionClosed": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "unsolicited-position-send",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#355-한-연결의-동시-인증-request",
+      "given": {
+        "requests": []
+      },
+      "steps": [
+        {
+          "action": "send",
+          "packet": "$zlink.admission.position",
+          "payload": {},
+          "expect": {
+            "discarded": true,
+            "connectionClosed": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "malformed-ticket-send",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#355-한-연결의-동시-인증-request",
+      "given": {
+        "requests": [
+          "a",
+          "b"
+        ]
+      },
+      "steps": [
+        {
+          "action": "send",
+          "packet": "$zlink.admission.ticket",
+          "payload": {},
+          "expect": {
+            "a": "FrameDecodeFailed",
+            "b": "FrameDecodeFailed",
+            "connectionClosed": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "unsolicited-ticket-send",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#355-한-연결의-동시-인증-request",
+      "given": {
+        "requests": []
+      },
+      "steps": [
+        {
+          "action": "send",
+          "packet": "$zlink.admission.ticket",
+          "payload": {},
+          "expect": {
+            "discarded": true,
+            "connectionClosed": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "deadline-original",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
+      "given": {
+        "originalDeadlineMs": 400,
+        "firstRejectionMs": 10,
+        "maxAdmissionWaitMs": 2000
+      },
+      "steps": [
+        {
+          "action": "wait",
+          "atMs": 400,
+          "expect": {
+            "deadlineMs": 400,
+            "result": "RequestTimeout",
+            "sendAfterDeadline": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "deadline-admission",
+      "spec": "framework/doc/framework/common/spec/server/04-session/03-authentication-admission.ko.md#34-wire",
+      "given": {
+        "originalDeadlineMs": 3000,
+        "firstRejectionMs": 10,
+        "maxAdmissionWaitMs": 300
+      },
+      "steps": [
+        {
+          "action": "wait",
+          "atMs": 310,
+          "expect": {
+            "deadlineMs": 310,
+            "result": "RequestTimeout",
+            "sendAfterDeadline": false
+          }
+        }
+      ]
+    }
+  ]
+}

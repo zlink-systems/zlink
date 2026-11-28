@@ -312,6 +312,15 @@ void aggregate_read_keeps_source_version_until_commit (
         } else {
             EXPECT_FALSE (target_authority.aggregate && target_authority.aggregate->relocation);
         }
+        const auto raw_key = std::string ("authority\0spot\0", 15) + request.key.global_id;
+        const auto raw = store.read ({raw_key}).result ().value ();
+        ASSERT_TRUE (std::holds_alternative<store_found_t> (raw));
+        const auto stored = nlohmann::json::parse (std::get<store_found_t> (raw).value.bytes);
+        const auto &aggregate = stored.at ("aggregate");
+        if (relocation_record.at ("relocation").at ("phase") == "prepared")
+            EXPECT_EQ (aggregate.at ("relocation").at ("phase"), "committed");
+        else
+            EXPECT_FALSE (aggregate.contains ("relocation"));
     }
 }
 

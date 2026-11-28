@@ -200,6 +200,8 @@ struct source_relocation_settlement_t
     // Only current first-target tenures can receive Message Follow.
     std::map<std::pair<object_kind_t, std::string>, std::uint64_t, relocation_object_key_less_t>
       follow_generations;
+    // Set when the source read found the authority record Missing (01 §10).
+    bool authority_missing = false;
 };
 
 /* The primary participant whose authority row carries the unit's fence: the
@@ -469,7 +471,11 @@ enum class relocation_reason_t
     restore_failed,
     bound_session_fence_incomplete,
     /* The source owner lease expired before its Preserve fence (28 §4.4). */
-    owner_lease_expired
+    owner_lease_expired,
+    authority_unsettled_at_stop,
+    /* Location runtime §10: the authority record is Missing. Same expired-owner
+     * terminal as owner_lease_expired; only the diagnostic differs. */
+    authority_missing
 };
 
 struct target_only_cas_t
@@ -705,6 +711,8 @@ class maintenance_runtime_t
     task_t<stateful_error_t>
     abort_relocation_before_cutover (std::shared_ptr<relocation_terminal_state_t> state,
                                      std::span<const object_ref_t> before_capture = {});
+    task_t<stateful_error_t>
+    resume_preserved_source (const std::shared_ptr<relocation_terminal_state_t> &state);
     task_t<relocation_reason_t>
     prepare_target (const eligible_relocation_unit_t::canonical_wire_context_t &context,
                     const std::vector<frozen_object_state_t> &participants,

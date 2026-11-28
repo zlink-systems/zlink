@@ -13,6 +13,7 @@
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/messaging/request_deadline.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
+#include "runtime/protocol/actor_join_recovery_codec.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 
 #include <algorithm>
@@ -520,21 +521,16 @@ task_t<void>
 public_host_runtime_t::await_relocation_publication (const authority_snapshot_t &authority,
                                                      std::chrono::steady_clock::time_point deadline)
 {
-    if (!authority.aggregate || !authority.aggregate->relocation)
+    const auto previous = finishing_relocation (authority);
+    if (!previous)
         co_return;
-    const auto &record = *authority.aggregate->relocation;
-    if (record.phase != "committed" && record.phase != "activating" && record.phase != "activated"
-        && record.phase != "cleaning" && record.phase != "completed")
-        co_return;
-    const auto &target = authority.aggregate->encoded.at ("relocation").at ("target");
-    const auto generation = authority_aggregate_codec::number (target, "attemptGeneration");
+    const auto relocation = protocol::actor_join_relocation_id (previous->id);
     const auto terminal = co_await _relocation_session_terminal_lane.run_task ([&] {
-        for (const auto &[key, attempt] : _relocation_target_attempts)
-            if (attempt.terminal && std::get<2> (key) == generation
-                && authority_aggregate_codec::wire_uuid (std::get<0> (key), std::get<1> (key))
-                     == record.relocation_id)
-                return attempt.terminal;
-        return std::shared_ptr<task_completion_source_t<void>>{};
+        const auto found = _relocation_target_attempts.find (
+          {relocation.high, relocation.low, previous->attempt_generation});
+        return found == _relocation_target_attempts.end ()
+                 ? std::shared_ptr<task_completion_source_t<void>>{}
+                 : found->second.terminal;
     });
     if (!terminal)
         throw framework_exception_t (framework_error_kind_t::unavailable,
@@ -552,6 +548,108 @@ bool public_host_runtime_t::relocation_target_wire_ready (
 bool public_host_runtime_t::relocation_target_terminal (const relocation_target_attempt_t &attempt)
 {
     return attempt.terminal && attempt.terminal->task ().await_ready ();
+}
+
+bool public_host_runtime_t::relocation_target_holds_publication (
+  const relocation_target_attempt_t &attempt)
+{
+    return attempt.authority_committed_at != std::chrono::steady_clock::time_point{}
+           && !relocation_target_terminal (attempt);
+}
+
+task_t<bool> public_host_runtime_t::has_finishing_relocation_target ()
+{
+    co_return co_await _relocation_session_terminal_lane.run_task ([this] {
+        return std::any_of (
+          _relocation_target_attempts.begin (), _relocation_target_attempts.end (),
+          [] (const auto &entry) { return relocation_target_holds_publication (entry.second); });
+    });
+}
+
+bool public_host_runtime_t::has_pending_relocation_requests (const actor_ref_t &actor)
+{
+    using stateful::object_kind_t;
+    return _relocation_session_terminal_lane.run_sync ([&] {
+        return std::any_of (
+          _relocation_target_attempts.begin (), _relocation_target_attempts.end (),
+          [&] (const auto &entry) {
+              const auto &attempt = entry.second;
+              return relocation_target_holds_publication (attempt)
+                     && std::any_of (attempt.targets.begin (), attempt.targets.end (),
+                                     [&] (const auto &target) {
+                                         return target.kind == object_kind_t::actor
+                                                && target.key == actor.actor_id ().value ()
+                                                && target.object_generation
+                                                     == actor.object_generation ()
+                                                && target.node_id == actor.node_rid ().value ();
+                                     })
+                     && std::any_of (attempt.captured_requests.begin (),
+                                     attempt.captured_requests.end (), [&] (const auto &request) {
+                                         return request.kind == object_kind_t::actor
+                                                && request.key == actor.actor_id ().value ()
+                                                && !request.delivery->task ().await_ready ();
+                                     });
+          });
+    });
+}
+
+task_t<bool> public_host_runtime_t::await_previous_relocation_target (
+  protocol::relocation_id_t relocation,
+  std::uint64_t attempt_generation,
+  const stateful::object_ref_t &object,
+  std::chrono::steady_clock::time_point deadline)
+{
+    const auto terminal = co_await _relocation_session_terminal_lane.run_task ([&] {
+        const bool exact = relocation.high != 0 || relocation.low != 0;
+        const auto found =
+          exact ? _relocation_target_attempts.find (
+                    {relocation.high, relocation.low, attempt_generation})
+                : std::find_if (_relocation_target_attempts.begin (),
+                                _relocation_target_attempts.end (), [&] (const auto &entry) {
+                                    const auto &attempt = entry.second;
+                                    return relocation_target_holds_publication (attempt)
+                                           && std::find (attempt.targets.begin (),
+                                                         attempt.targets.end (), object)
+                                                != attempt.targets.end ();
+                                });
+        if (found == _relocation_target_attempts.end ()
+            || std::find (found->second.targets.begin (), found->second.targets.end (), object)
+                 == found->second.targets.end ())
+            return std::shared_ptr<task_completion_source_t<void>>{};
+        return found->second.terminal;
+    });
+    // The caller rereads a published slot even if publication was cleared before lookup.
+    if (!terminal)
+        co_return false;
+    auto target_terminal = terminal->task ();
+    if (target_terminal.await_ready ())
+        co_return true;
+
+    using foundation::operation_terminal_t;
+    auto completion = std::make_shared<task_completion_source_t<void>> ();
+    auto waiter = completion->task ();
+    const auto transport = _transport;
+    const auto operation = co_await transport->register_local_operation_async (
+      deadline, [completion] (operation_terminal_t result, result_t<zlink::message_t>) {
+          if (result == operation_terminal_t::completed)
+              completion->complete (result_t<void>::success ());
+          else
+              completion->complete (
+                result_t<void>::failure (result == operation_terminal_t::timed_out
+                                           ? framework_error_kind_t::deadline_exceeded
+                                           : framework_error_kind_t::shutting_down,
+                                         "Waiting for the previous relocation target ended"));
+      });
+    if (!operation)
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "Relocation wait cannot register on a stopped host");
+    detail::observe_task_completion (target_terminal, [weak = std::weak_ptr (transport),
+                                                       id = *operation] (const result_t<void> &) {
+        if (const auto owner = weak.lock ())
+            (void) owner->complete_local_operation (id);
+    });
+    co_await waiter;
+    co_return true;
 }
 
 std::optional<public_host_runtime_t::relocation_target_attempt_t>
@@ -580,7 +678,7 @@ task_t<void> public_host_runtime_t::discard_unverified_relocation_targets (
     co_await _relocation_session_terminal_lane.run_task ([&] {
         const auto sealed = _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire);
         for (auto &[key, attempt] : _relocation_target_attempts) {
-            if (attempt.cutover_received)
+            if (attempt.phase != relocation_target_phase_t::waiting_cutover)
                 continue;
             if (sealed || std::find (observed.begin (), observed.end (), key) != observed.end ())
                 if (auto staging = take_relocation_target_discard (attempt))
@@ -752,7 +850,7 @@ task_t<void> public_host_runtime_t::poll_relocation_target_attempts ()
             if (relocation_target_terminal (attempt) || !relocation_target_wire_ready (attempt)
                 || attempt.next_finalize_at > now)
                 continue;
-            if (attempt.cutover_received) {
+            if (attempt.phase == relocation_target_phase_t::cutover_received) {
                 pending.push_back (key);
                 continue;
             }
@@ -1236,7 +1334,8 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
             attempt = found->second;
         } else {
             const auto now = std::chrono::steady_clock::now ();
-            if (!found->second.cutover_received || !relocation_target_wire_ready (found->second)
+            if (found->second.phase != relocation_target_phase_t::cutover_received
+                || !relocation_target_wire_ready (found->second)
                 || now < found->second.next_finalize_at)
                 return false;
             attempt = found->second;
@@ -1339,11 +1438,35 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
 
     stateful::stateful_error_t committed = stateful::stateful_error_t::none;
     std::exception_ptr commit_failure;
+    const auto normalize = [&] {
+        return std::ranges::all_of (attempt.targets, [&] (const auto &target) {
+            return _relocation_authority->finish_relocation (target, attempt.prepare);
+        });
+    };
+    // Membership §4.2 step 7: normalize a request-free Join before its callback.
+    // Location §9.3: accepted replies retain their own rows after dispatch opens.
+    const bool normalize_before_join = canonical_application_join && attempt.replies->empty ();
+    std::function<void ()> before_actor_join_completion;
+    if (normalize_before_join) {
+        before_actor_join_completion = [&] {
+            try {
+                if (!normalize ())
+                    throw framework_exception_t (
+                      framework_error_kind_t::unavailable,
+                      "Relocation target lost its authority publication fence");
+            }
+            catch (...) {
+                commit_failure = std::current_exception ();
+                throw;
+            }
+        };
+    }
     try {
         // Membership §4.2 steps 7-8: lifecycle and queue opening precede command 44.
         committed = attempt.targets.size () == 1
                       ? _objects.commit_relocation_restore (attempt.targets.front (),
-                                                            attempt.restore_identity)
+                                                            attempt.restore_identity,
+                                                            before_actor_join_completion)
                       : _objects.commit_relocation_restore_aggregate (attempt.targets,
                                                                       attempt.restore_identity);
     }
@@ -1374,9 +1497,8 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
     }
 
     try {
-        for (const auto &target : attempt.targets)
-            if (!_relocation_authority->finish_relocation (target, attempt.prepare))
-                co_return false;
+        if (!normalize_before_join && !normalize ())
+            co_return false;
     }
     catch (const framework_exception_t &error) {
         if (!detail::is_transient_error (error.kind ()))
@@ -2289,7 +2411,7 @@ bool public_host_runtime_t::register_relocation_target_queue (
                    if (found == _relocation_target_attempts.end ()
                        || !relocation_target_wire_ready (found->second))
                        return false;
-                   if (!found->second.cutover_received)
+                   if (found->second.phase == relocation_target_phase_t::waiting_cutover)
                        found->second.boundary_batch.emplace_back (target, data, participant_id);
                    return true;
                });
