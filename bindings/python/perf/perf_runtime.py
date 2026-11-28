@@ -16,8 +16,11 @@ def _require_fresh_native_extension(native_dir):
     built = sorted(native_dir.glob("_zlink_native*.so")) + sorted(native_dir.glob("_zlink_native*.pyd"))
     if not built:
         raise RuntimeError(f"zlink native extension is missing in {native_dir}")
-    sources = [native_dir / "_zlink_native.c", native_dir / "hotpath.h"]
-    newest_source = max(path.stat().st_mtime_ns for path in sources if path.is_file())
+    sources = [path for path in (native_dir / "_zlink_native.c", native_dir / "hotpath.h")
+               if path.is_file()]
+    if not sources:
+        raise RuntimeError(f"zlink native extension source is missing in {native_dir}")
+    newest_source = max(path.stat().st_mtime_ns for path in sources)
     if min(path.stat().st_mtime_ns for path in built) < newest_source:
         raise RuntimeError(f"zlink native extension is older than its source: {built[0]}")
 
@@ -35,7 +38,12 @@ def require_binding_runtime(source_dir):
         module_path = Path(zlink.__file__).resolve()
         if (source_dir / "zlink") not in module_path.parents:
             raise RuntimeError(f"zlink was imported outside the source package: {module_path}")
-        _require_fresh_native_extension(source_dir / "zlink" / "_native")
+        native_dir = source_dir / "zlink" / "_native"
+        _require_fresh_native_extension(native_dir)
+        # zlink imports its C extension itself; check that the loaded module is the in-place build.
+        loaded = sys.modules.get("zlink._native._zlink_native")
+        if loaded is None or native_dir not in Path(loaded.__file__).resolve().parents:
+            raise RuntimeError(f"zlink native extension was not loaded from {native_dir}")
         zlink.version()
     except (ImportError, OSError, RuntimeError) as exc:
         raise SystemExit(

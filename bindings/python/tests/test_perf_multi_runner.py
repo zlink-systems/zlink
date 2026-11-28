@@ -234,6 +234,9 @@ class PerfMultiRunnerTests(unittest.TestCase):
                 _require_fresh_native_extension(native_dir)
             os.utime(built, ns=(3_000_000_000, 3_000_000_000))
             _require_fresh_native_extension(native_dir)
+            source.unlink()
+            with self.assertRaisesRegex(RuntimeError, "source is missing"):
+                _require_fresh_native_extension(native_dir)
 
     def test_python_runner_rejects_binding_outside_source_tree(self):
         with mock.patch.object(zlink, "__file__", str(ROOT / "zlink" / "__init__.py")):
