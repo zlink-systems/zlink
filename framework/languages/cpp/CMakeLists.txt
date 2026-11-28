@@ -3184,6 +3184,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_relocation_settlement.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_deferred_join_reservation.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_canonical_replay.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_remote_entry_join_return.cpp
     tests/support/actor_maintenance_join_actors.cpp
     tests/support/actor_maintenance_join_host_access.cpp
     tests/support/actor_maintenance_join_host_fixture.cpp

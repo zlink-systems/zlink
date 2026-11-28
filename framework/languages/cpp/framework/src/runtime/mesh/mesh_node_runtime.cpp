@@ -856,8 +856,7 @@ task_t<void> mesh_node_runtime_t::start (
                                     host::actor_join_operation_target_completion_t completion) {
           spot_node_runtime_t spot (spot_state);
           spot.dispatch_wire_actor_join_admission (
-            spot_id_t (request.target_spot.spot_id),
-            request.entry ? std::string_view{} : request.actor.actor_id,
+            spot_id_t (request.target_spot.spot_id), request.actor.actor_id,
             [spot_state, routing_id, request, payload = std::move (payload), serializers,
              completion] () -> task_t<void> {
                 completion (
