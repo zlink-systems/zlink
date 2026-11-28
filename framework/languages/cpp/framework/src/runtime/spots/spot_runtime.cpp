@@ -2275,9 +2275,19 @@ task_t<bool> spot_context_t::close ()
 
 task_t<bool> spot_context_t::close_erased ()
 {
-    if (!_state || !_state->node)
-        return task_t<bool> (result_t<bool>::success (false));
     const auto state = _state;
+    if (!state)
+        return task_t<bool> (result_t<bool>::success (false));
+    if (state->is_instance_spot () && state->state_sync ([state] {
+            return state->closed == spot_close_reason_t::relocation_out;
+        })) {
+        return task_t<bool> (detail::result_access_t::failure<bool> (detail::with_failure_code (
+          detail::make_framework_origin_exception (framework_error_kind_t::unavailable,
+                                                   "Instance Spot owner is moving"),
+          static_cast<std::uint32_t> (runtime::protocol::framework_error_code::spotMoving))));
+    }
+    if (!state->node)
+        return task_t<bool> (result_t<bool>::success (false));
     state->ensure_relocation_turn_open ();
     if (state->serial_queue && state->serial_queue->is_current_lifecycle_turn ())
         throw framework_exception_t (framework_error_kind_t::invalid_operation,

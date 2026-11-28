@@ -1694,14 +1694,24 @@ std::shared_ptr<service::spot_t> detail::spot_node_runtime_t::attach_native_spot
             native = std::make_shared<service::spot_t> (plan.native_node->entry_spot ());
         } else {
             try {
-                auto spot =
-                  relocation_restore
-                    ? plan.native_node->bind_relocation_spot (runtime::stateful::object_ref_t{
-                        plan.instance_spot ? runtime::stateful::object_kind_t::instance_spot
-                                           : runtime::stateful::object_kind_t::user_spot,
-                        plan.rid, plan.object_generation, plan.authority_owner_generation,
-                        plan.mesh_name, plan.node_rid})
-                    : plan.native_node->get_or_create_spot (plan.rid);
+                auto spot = [&] {
+                    if (!relocation_restore && !plan.instance_spot)
+                        return plan.native_node->get_or_create_spot (plan.rid);
+                    runtime::stateful::object_ref_t object{
+                      plan.instance_spot ? runtime::stateful::object_kind_t::instance_spot
+                                         : runtime::stateful::object_kind_t::user_spot,
+                      plan.rid,
+                      plan.object_generation,
+                      plan.authority_owner_generation,
+                      plan.mesh_name,
+                      plan.node_rid};
+                    if (relocation_restore)
+                        return plan.native_node->bind_relocation_spot (std::move (object));
+                    return plan.native_node
+                      ->get_or_create_spot_async (plan.rid, std::move (object), plan.spot_name)
+                      .result ()
+                      .value ();
+                }();
                 native = std::make_shared<service::spot_t> (std::move (spot));
             }
             catch (const std::exception &error) {

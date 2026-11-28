@@ -1675,8 +1675,6 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                     }
                     continue;
                 }
-                if (target.kind != runtime::stateful::object_kind_t::user_spot)
-                    continue;
                 const auto context = _state->spot_contexts_by_id.find (target.key);
                 if (context != _state->spot_contexts_by_id.end () && context->second._state) {
                     ready.push_back (context->second._state);
@@ -1708,7 +1706,12 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                     const auto context = _state->spot_contexts_by_id.find (key);
                     if (context == _state->spot_contexts_by_id.end () || !context->second._state)
                         return false;
-                    // Restore predicted a generation; admission uses the committed authority.
+                    if (const auto node = _state->native_node.lock ()) {
+                        auto native = std::make_shared<service::spot_t> (
+                          node->bind_relocation_spot (authority->target));
+                        _state->native_spots_by_id.insert_or_assign (key, native);
+                        context->second._state->native_spot = native;
+                    }
                     context->second._state->authority_owner_generation =
                       authority->target.authority_owner_generation;
                     return true;
@@ -3014,10 +3017,16 @@ spot_node_runtime_t::relocation_units_t spot_node_runtime_t::collect_relocation_
     relocation_units_t units;
     for (const auto &[_, context] : node.spot_contexts_by_id) {
         const auto &state = context._state;
-        if (!state || state->is_entry_spot () || state->is_instance_spot ()
-            || state->execution_mode != user_spot_execution_mode_t::spot_wide)
+        if (!state || state->closed || state->native_spot.expired () || state->is_entry_spot ()
+            || (!state->is_instance_spot ()
+                && state->execution_mode != user_spot_execution_mode_t::spot_wide))
             continue;
-        units.spots.push_back ({state->spot_id, state->spot_name, {}});
+        units.spots.push_back ({state->spot_id,
+                                state->is_instance_spot () ? placement_object_kind_t::instance_spot
+                                                           : placement_object_kind_t::user_spot,
+                                state->spot_name,
+                                state->object_generation,
+                                {}});
     }
     for (const auto &actor : inventory) {
         auto ref = ::zlink::framework::detail::actor_ref_access_t::make (

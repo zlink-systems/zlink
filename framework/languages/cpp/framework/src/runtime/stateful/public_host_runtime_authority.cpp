@@ -692,34 +692,26 @@ namespace
 
 using close_completion_t = std::shared_ptr<task_completion_source_t<spot_close_commit_t>>;
 
-std::function<task_t<authority_snapshot_t> ()>
+task_t<authority_snapshot_t>
 reincarnate_closing_authority (std::shared_ptr<location_repository_t> store,
                                authority_key_t key,
                                std::string version,
-                               std::vector<std::byte> ready_payload)
+                               std::vector<std::byte> ready_payload,
+                               std::function<task_t<bool> ()> release_local)
 {
-    return [store, key, version, ready_payload] {
-        auto completion = std::make_shared<task_completion_source_t<authority_snapshot_t>> ();
-        auto output = completion->task ();
-        after_close_step (
-          store->compare_exchange_authority (key, version, authority_reincarnate_t{ready_payload}),
-          {}, [completion] (result_t<authority_compare_exchange_result_t> exchanged) {
-              if (!exchanged) {
-                  completion->complete (result_t<authority_snapshot_t>::failure (
-                    exchanged.error_kind (),
-                    exchanged.error () ? exchanged.error ()->what () : "Spot Reincarnate failed"));
-                  return;
-              }
-              const auto *stored = std::get_if<authority_stored_t> (&exchanged.value ());
-              if (!stored) {
-                  completion->complete (result_t<authority_snapshot_t>::failure (
-                    framework_error_kind_t::unavailable, "Spot Reincarnate fence conflicted"));
-                  return;
-              }
-              completion->complete (result_t<authority_snapshot_t>::success (stored->snapshot));
-          });
-        return output;
-    };
+    (void) co_await release_local ();
+    auto exchange = store->compare_exchange_authority (
+      key, version, authority_reincarnate_t{std::move (ready_payload)});
+    const auto exchanged = co_await await_result (std::move (exchange));
+    if (!exchanged)
+        co_return result_t<authority_snapshot_t>::failure (
+          exchanged.error_kind (),
+          exchanged.error () ? exchanged.error ()->what () : "Spot Reincarnate failed");
+    const auto *stored = std::get_if<authority_stored_t> (&exchanged.value ());
+    if (!stored)
+        co_return result_t<authority_snapshot_t>::failure (framework_error_kind_t::unavailable,
+                                                           "Spot Reincarnate fence conflicted");
+    co_return stored->snapshot;
 }
 
 void complete_close_step (const close_completion_t &completion, spot_close_commit_t commit)
@@ -774,14 +766,43 @@ release_authority (std::shared_ptr<zlink::framework::location_repository_t> stor
     };
 }
 
-task_t<bool> release_user_spot_record_async (std::shared_ptr<public_host_runtime_t> host,
-                                             stateful::object_ref_t ref)
+task_t<bool> release_spot_record_async (std::shared_ptr<public_host_runtime_t> host,
+                                        stateful::object_ref_t ref)
 {
     const auto [error, closed] = co_await host->objects ().close_spot_async (ref);
     if (error != stateful::stateful_error_t::none && error != stateful::stateful_error_t::not_found)
         co_return result_t<bool>::failure (framework_error_kind_t::internal_failure,
-                                           "User Spot record release failed");
+                                           "Spot record release failed");
     co_return true;
+}
+
+spot_close_commit_t commit_instance_spot_close (std::shared_ptr<public_host_runtime_t> host,
+                                                std::shared_ptr<location_repository_t> store,
+                                                authority_key_t key,
+                                                const std::string &spot_id,
+                                                const authority_snapshot_t &closing,
+                                                std::vector<std::byte> ready_payload)
+{
+    const stateful::object_ref_t ref{stateful::object_kind_t::instance_spot,
+                                     spot_id,
+                                     closing.object_generation,
+                                     closing.authority_owner_generation,
+                                     closing.allocation.target.mesh_name,
+                                     std::string (closing.allocation.target.node_rid.value ())};
+    // Release and Reincarnate retire the same fenced local incarnation.
+    const auto release_local = [host = std::move (host), ref] {
+        return release_spot_record_async (host, ref);
+    };
+    return {result_t<bool>::success (true),
+            release_authority (store, key, closing.store_version, release_local),
+            [store, key, version = closing.store_version, ready_payload = std::move (ready_payload),
+             release_local] {
+                return reincarnate_closing_authority (store, key, version, ready_payload,
+                                                      release_local);
+            },
+            [store, key] (const authority_snapshot_t &next) {
+                return release_authority (store, key, next.store_version, {}) ();
+            }};
 }
 
 } // namespace
@@ -817,14 +838,31 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
     const auto mesh_name = _options.mesh.descriptor.mesh_name;
     after_close_step (
       store->read_authority (authority_key), {},
-      [completion, store, authority_key, stable_type, spot_id, object_generation,
-       authority_owner_generation, instance_owner = *instance_owner, local,
+      [self = shared_from_this (), completion, store, authority_key, stable_type, spot_id,
+       object_generation, authority_owner_generation, instance_owner = *instance_owner, local,
        mesh_name] (result_t<authority_read_result_t> current) {
           if (!current) {
               complete_close_step (completion, {close_store_failure (current), {}});
               return;
           }
           const auto *snapshot = std::get_if<authority_snapshot_t> (&current.value ());
+          const auto finish_if_moved =
+            [completion, stable_type, object_generation,
+             authority_owner_generation] (const authority_snapshot_t *read) {
+                if (!read || read->allocation.object_kind != placement_object_kind_t::instance_spot
+                    || read->allocation.stable_type != stable_type
+                    || read->object_generation != object_generation
+                    || read->authority_owner_generation <= authority_owner_generation)
+                    return false;
+                complete_close_step (
+                  completion,
+                  close_step_failure (
+                    framework_error_kind_t::unavailable, "Instance Spot owner is moving",
+                    static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving)));
+                return true;
+            };
+          if (finish_if_moved (snapshot))
+              return;
           if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
               || snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
               || snapshot->allocation.stable_type != stable_type
@@ -858,19 +896,15 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
                  .mesh_name = snapshot->allocation.target.mesh_name,
                  .node_rid = snapshot->allocation.target.node_rid,
                  .node_generation = snapshot->allocation.target.node_lifecycle_generation});
-              complete_close_step (
-                completion, {result_t<bool>::success (true),
-                             release_authority (store, authority_key, snapshot->store_version, {}),
-                             reincarnate_closing_authority (store, authority_key,
-                                                            snapshot->store_version, ready_payload),
-                             [store, authority_key] (const authority_snapshot_t &next) {
-                                 return release_authority (store, authority_key, next.store_version,
-                                                           {}) ();
-                             }});
+              complete_close_step (completion,
+                                   commit_instance_spot_close (self, store, authority_key, spot_id,
+                                                               *snapshot, ready_payload));
               return;
           }
 
-          const auto ready = decode_instance_spot_authority_payload (snapshot->payload);
+          auto application = *snapshot;
+          stateful::authority_relocation_payload_codec_t::project_application_payload (application);
+          const auto ready = decode_instance_spot_authority_payload (application.payload);
           if (!ready || ready->state != instance_spot_authority_state_t::ready
               || ready->stable_type != stable_type || ready->spot_id != spot_id
               || ready->owner_id != instance_owner.owner_id
@@ -889,26 +923,25 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
               authority_put_t{encode_instance_closing_state (instance_closing_state_t{
                 stable_type, spot_id, object_generation, authority_owner_generation})}),
             {},
-            [completion, store, ready_payload = snapshot->payload,
-             authority_key] (result_t<authority_compare_exchange_result_t> sealed) {
+            [self, completion, store, spot_id, ready_payload = std::move (application.payload),
+             authority_key,
+             finish_if_moved] (result_t<authority_compare_exchange_result_t> sealed) {
                 if (!sealed) {
                     complete_close_step (completion, {close_store_failure (sealed), {}});
                     return;
                 }
                 const auto *closing = std::get_if<authority_stored_t> (&sealed.value ());
                 if (!closing) {
+                    if (const auto *conflict = std::get_if<authority_conflict_t> (&sealed.value ());
+                        conflict
+                        && finish_if_moved (std::get_if<authority_snapshot_t> (&conflict->current)))
+                        return;
                     complete_close_step (completion, {});
                     return;
                 }
                 complete_close_step (
-                  completion,
-                  {result_t<bool>::success (true),
-                   release_authority (store, authority_key, closing->snapshot.store_version, {}),
-                   reincarnate_closing_authority (store, authority_key,
-                                                  closing->snapshot.store_version, ready_payload),
-                   [store, authority_key] (const authority_snapshot_t &next) {
-                       return release_authority (store, authority_key, next.store_version, {}) ();
-                   }});
+                  completion, commit_instance_spot_close (self, store, authority_key, spot_id,
+                                                          closing->snapshot, ready_payload));
             });
       });
     return output;
@@ -1012,9 +1045,8 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
     // Step 4 releases the local object record, then the authority row.
     const auto release_from = [self, store, authority_key] (std::string closing_version,
                                                             stateful::object_ref_t ref) {
-        return release_authority (store, authority_key, std::move (closing_version), [self, ref] {
-            return release_user_spot_record_async (self, ref);
-        });
+        return release_authority (store, authority_key, std::move (closing_version),
+                                  [self, ref] { return release_spot_record_async (self, ref); });
     };
 
     if (snapshot->payload == closing_payload) {
@@ -1458,17 +1490,29 @@ spot_handle_t public_host_runtime_t::get_or_create_spot (std::string spot_id)
 
 task_t<spot_handle_t> public_host_runtime_t::get_or_create_spot_async (std::string spot_id)
 {
-    const auto &key = spot_id;
-    if (const auto existing = co_await _objects.resolve_spot_async (key))
-        co_return spot_handle_t (shared_from_this (), *existing);
-    auto created = co_await _objects.begin_create_async (
-      stateful::create_request_t{stateful::object_kind_t::user_spot,
-                                 key,
-                                 "framework.spot",
-                                 _options.mesh.descriptor.mesh_name,
-                                 {},
-                                 false,
-                                 false});
+    return get_or_create_spot_async (std::move (spot_id), {}, "framework.spot");
+}
+
+task_t<spot_handle_t> public_host_runtime_t::get_or_create_spot_async (
+  std::string spot_id, std::optional<stateful::object_ref_t> reserved, std::string stable_type)
+{
+    const auto kind = reserved ? reserved->kind : stateful::object_kind_t::user_spot;
+    stateful::create_result_t created;
+    if (reserved) {
+        created = co_await _objects.begin_reserved_object_async (std::move (*reserved),
+                                                                 std::move (stable_type), {});
+    } else {
+        if (const auto existing = co_await _objects.resolve_spot_async (spot_id))
+            co_return spot_handle_t (shared_from_this (), *existing);
+        created = co_await _objects.begin_create_async (
+          stateful::create_request_t{kind,
+                                     spot_id,
+                                     std::move (stable_type),
+                                     _options.mesh.descriptor.mesh_name,
+                                     {},
+                                     false,
+                                     false});
+    }
     if (created.error != stateful::stateful_error_t::none) {
         throw std::runtime_error ("framework Spot authority creation failed");
     }
@@ -1477,7 +1521,7 @@ task_t<spot_handle_t> public_host_runtime_t::get_or_create_spot_async (std::stri
         if (committed != stateful::stateful_error_t::none)
             throw std::runtime_error ("framework Spot Ready commit failed");
     }
-    auto object = co_await _objects.find_async (stateful::object_kind_t::user_spot, key);
+    auto object = co_await _objects.find_async (kind, spot_id);
     if (!object) {
         throw std::runtime_error ("framework Spot authority is unavailable");
     }

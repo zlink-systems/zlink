@@ -1,0 +1,439 @@
+/* SPDX-License-Identifier: Elastic-2.0 */
+#include "../support/instance_spot_activation_messages.hpp"
+#include "../support/spot_host_relocation_fixture.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/relocation_authority_payload.hpp"
+#include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/messaging/client_call_codec.hpp"
+#include "runtime/spots/spot_runtime.hpp"
+#include <zlink/framework.hpp>
+#include <gtest/gtest.h>
+#include <atomic>
+
+namespace
+{
+namespace fw = zlink::framework;
+namespace stateful = fw::runtime::stateful;
+namespace wire = fw::runtime::protocol;
+namespace messaging = fw::runtime::messaging;
+using namespace framework_instance_spot_activation_fixture;
+using namespace std::chrono_literals;
+
+constexpr auto mesh_name = "instance-host-relocation";
+constexpr auto stable_type = "player-quest";
+constexpr auto source_rid = "instance-source";
+constexpr auto target_rid = "instance-target";
+constexpr auto spot_id = "instance-alice";
+using fw::test::spot_host_relocation::host_t;
+using fw::test::spot_host_relocation::observe;
+using fw::test::spot_host_relocation::wait_budget;
+
+class instance_t final : public fw::instance_spot_t
+{
+  public:
+    instance_t (fw::instance_spot_context_t context, std::atomic<unsigned> &restores) :
+        restores (restores), _context (std::move (context))
+    {
+    }
+    fw::instance_spot_context_t &context () noexcept override { return _context; }
+    const fw::instance_spot_context_t &context () const noexcept override { return _context; }
+
+    void configure () override
+    {
+        _context.handlers ().add_handler<&instance_t::add> ();
+        _context.handlers ().add_handler<&instance_t::read> ();
+    }
+
+    fw::task_t<void> on_closing (const fw::spot_closing_context_t &, std::stop_token) override
+    {
+        if (closing)
+            co_await closing ();
+    }
+
+    std::function<fw::task_t<void> ()> closing;
+    std::function<fw::task_t<void> ()> restoring;
+
+    void add (const event_t &event) { value = value * 10 + event.value; }
+    reply_t read (const request_t &) { return {value}; }
+
+    int value = 0;
+    std::atomic<unsigned> &restores;
+
+  private:
+    fw::instance_spot_context_t _context;
+};
+
+class instance_adapter_t final : public fw::spot_relocation_adapter_t<instance_t>
+{
+  public:
+    fw::task_t<std::vector<std::byte>> capture (instance_t &spot, std::stop_token) override
+    {
+        co_return std::vector<std::byte>{static_cast<std::byte> (spot.value)};
+    }
+
+    fw::task_t<void>
+    restore (instance_t &spot, std::vector<std::byte> state, std::stop_token) override
+    {
+        if (spot.restoring)
+            co_await spot.restoring ();
+        spot.value = std::to_integer<int> (state.at (0));
+        ++spot.restores;
+        co_return;
+    }
+};
+
+class InstanceSpotHostRelocation : public ::testing::Test
+{
+  protected:
+    void configure (host_t &host, const char *rid)
+    {
+        auto &options = host.app.add_zlink_framework ();
+        options.add_location_store (locations);
+        options.add_relocation_store (relocations);
+        options.configure_locations ().owner_lease_renew_interval = 10ms;
+        options.configure_locations ().owner_lease_fencing_margin = 1ms;
+        options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
+        host.app.logging ().use_file (std::string (rid) + ".flow");
+        options.add_route_mesh (mesh_name)
+          .set_object_role (fw::object_role_t::server)
+          .set_routing_id (zlink::routing_id_t::from (rid))
+          .listen ("tcp://127.0.0.1:0")
+          .add_instance_spot_factory<instance_t> (
+            stable_type,
+            [this, rid] (fw::instance_spot_context_t context) {
+                auto spot = std::make_shared<instance_t> (std::move (context), restores);
+                if (std::string_view (rid) == source_rid) {
+                    source_spot = spot;
+                } else {
+                    ++target_activations;
+                    spot->restoring = restoring;
+                }
+                return spot;
+            },
+            [] (auto &factory) { factory.template preserve_state_with<instance_adapter_t> (); });
+    }
+
+    void start_source ()
+    {
+        configure (source, source_rid);
+        ASSERT_TRUE (source.start ());
+        auto services = source.app.advanced ().services ().build_provider ();
+        auto client = source.app.advanced ().zlink ().route_client (
+          services.get_required<fw::serializer_registry_t> ());
+        const auto activated = client.request_to_spot (spot_id, request_t{})
+                                 .instance_spot (stable_type)
+                                 .timeout (wait_budget)
+                                 .async<reply_t> ()
+                                 .result ();
+        ASSERT_TRUE (activated) << (activated.error () ? activated.error ()->what () : "");
+        ASSERT_EQ (activated.value ().value, 0);
+        ASSERT_TRUE (source_spot);
+    }
+
+    void start_target ()
+    {
+        configure (target, target_rid);
+        ASSERT_TRUE (target.start ());
+        auto services = source.app.advanced ().services ().build_provider ();
+        auto &routes = services.get_required<fw::route_mesh_runtime_t> ();
+        ASSERT_TRUE (observe ([&] { return routes.snapshot (mesh_name).ready_peer_count == 1; }));
+    }
+
+    fw::authority_read_result_t read_authority ()
+    {
+        auto services = source.app.advanced ().services ().build_provider ();
+        return services.get_required<fw::location_repository_t> ()
+          .read_authority (fw::runtime::spot_authority_key (spot_id))
+          .result ()
+          .value ();
+    }
+
+    void relocate ()
+    {
+        const auto moved = source.app
+                             .relocate ({.mode = fw::relocation_mode_t::planned_maintenance,
+                                         .deadline = wait_budget})
+                             .result ();
+        ASSERT_TRUE (moved);
+        ASSERT_EQ (moved.value ().outcome, fw::relocation_outcome_t::relocated)
+          << "reason=" << static_cast<int> (moved.value ().reason);
+    }
+
+    std::atomic<unsigned> restores = 0;
+    std::atomic<unsigned> target_activations = 0;
+    std::function<fw::task_t<void> ()> restoring;
+    std::shared_ptr<instance_t> source_spot;
+    std::shared_ptr<fw::runtime::in_memory_location_store_t> locations =
+      std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    std::shared_ptr<fw::runtime::in_memory_relocation_store_t> relocations =
+      std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source;
+    host_t target;
+};
+
+TEST_F (InstanceSpotHostRelocation, MovesAnInstanceOnlyHost)
+{
+    ASSERT_NO_FATAL_FAILURE (start_source ());
+    const auto before = std::get<fw::authority_snapshot_t> (read_authority ());
+    ASSERT_NO_FATAL_FAILURE (start_target ());
+    auto services = target.app.advanced ().services ().build_provider ();
+    auto &serializers = services.get_required<fw::serializer_registry_t> ();
+    auto client = target.app.advanced ().zlink ().route_client (serializers);
+    const auto read = [&] {
+        return client.request_to_spot (spot_id, request_t{})
+          .timeout (wait_budget)
+          .async<reply_t> ()
+          .result ();
+    };
+    ASSERT_TRUE (client.send_to_spot (spot_id, event_t{7}).async ().result ());
+    const auto seeded = read ();
+    ASSERT_TRUE (seeded) << (seeded.error () ? seeded.error ()->what () : "");
+    ASSERT_EQ (seeded.value ().value, 7);
+    ASSERT_NO_FATAL_FAILURE (relocate ());
+
+    const auto after = std::get<fw::authority_snapshot_t> (read_authority ());
+    ASSERT_EQ (after.allocation.target.node_rid.value (), target_rid);
+    EXPECT_EQ (after.object_generation, before.object_generation);
+    EXPECT_GT (after.authority_owner_generation, before.authority_owner_generation);
+    auto application = after;
+    fw::runtime::stateful::authority_relocation_payload_codec_t::project_application_payload (
+      application);
+    const auto ready = fw::runtime::decode_instance_spot_authority_payload (application.payload);
+    ASSERT_TRUE (ready);
+    EXPECT_EQ (ready->state, fw::runtime::instance_spot_authority_state_t::ready);
+    EXPECT_EQ (ready->spot_id, spot_id);
+    EXPECT_EQ (ready->stable_type, stable_type);
+    EXPECT_EQ (ready->owner_id, after.owner.owner_id);
+    EXPECT_EQ (ready->owner_lease_generation, after.owner.lease_generation);
+    EXPECT_EQ (ready->node_rid.value (), target_rid);
+    EXPECT_EQ (ready->node_generation, after.allocation.target.node_lifecycle_generation);
+    EXPECT_EQ (restores.load (), 1u);
+
+    // Submit against the captured fence to exercise packets that were already
+    // addressed to the previous owner when the Store changed.
+    const auto runtime =
+      fw::detail::spot_node_runtime_t::from (target.app.advanced ().zlink (), mesh_name);
+    ASSERT_TRUE (runtime);
+    const auto native = runtime->native_node ();
+    ASSERT_TRUE (native);
+    auto &transport = native->transport ();
+    const auto caller_spot = native->entry_spot ().spot_id ();
+    const auto old_rid = zlink::routing_id_t::from (source_rid).to_bytes ();
+    const wire::spot_route_fence_t old_fence{
+      spot_id,
+      before.object_generation,
+      old_rid,
+      before.allocation.target.node_lifecycle_generation,
+      before.authority_owner_generation,
+      static_cast<std::uint64_t> (before.owner.lease_generation)};
+    const messaging::client_call_codec_t codec;
+    const auto encode = [&]<typename T> (messaging::message_kind_t kind, const T &message) {
+        const auto envelope = codec.create_envelope (kind, mesh_name, T::packet_name, wait_budget);
+        return codec.encode_envelope_parts (envelope, message, serializers)
+          .take_application_payload ();
+    };
+    const auto sent =
+      transport
+        .send_to_spot_result (old_rid, caller_spot, old_fence,
+                              encode (messaging::message_kind_t::command, event_t{8}))
+        .result ();
+    ASSERT_TRUE (sent) << (sent.error () ? sent.error ()->what () : "");
+    ASSERT_EQ (sent.value (), zlink::submit_result_t::ok);
+
+    using terminal_t = fw::runtime::foundation::operation_terminal_t;
+    using response_t = std::pair<terminal_t, fw::result_t<zlink::message_t>>;
+    const auto response = std::make_shared<fw::task_completion_source_t<response_t>> ();
+    const auto submitted =
+      transport
+        .request_to_spot (old_rid, caller_spot, old_fence,
+                          encode (messaging::message_kind_t::request, request_t{}), wait_budget,
+                          [response] (terminal_t terminal, fw::result_t<zlink::message_t> payload) {
+                              response->complete (fw::result_t<response_t>::success (
+                                {terminal, std::move (payload)}));
+                          })
+        .result ();
+    ASSERT_TRUE (submitted && submitted.value ())
+      << (submitted.error () ? submitted.error ()->what () : "");
+    const auto received = response->task ().result_for (wait_budget);
+    ASSERT_TRUE (received && *received);
+    const auto &[terminal, payload] = received->value ();
+    ASSERT_EQ (terminal, terminal_t::completed);
+    ASSERT_TRUE (payload) << (payload.error () ? payload.error ()->what () : "");
+    const auto parts = wire::decode_application_parts (
+      wire::decode_application_payload (wire::message_bytes (payload.value ())));
+    const auto reply = codec.decode_envelope_reply<reply_t> (messaging::message_parts_t (parts),
+                                                             serializers, "Empty Spot reply",
+                                                             "Invalid Spot reply", "Spot request");
+    ASSERT_TRUE (reply) << (reply.error () ? reply.error ()->what () : "");
+    EXPECT_EQ (reply.value ().value, 78);
+    const auto late_close = source_spot->context ().close ().result ();
+    ASSERT_FALSE (late_close);
+    EXPECT_EQ (late_close.error_kind (), fw::framework_error_kind_t::unavailable);
+    EXPECT_EQ (
+      fw::detail::failure_code (*late_close.error ()),
+      static_cast<std::uint32_t> (fw::runtime::protocol::framework_error_code::spotMoving));
+    const auto after_close = std::get<fw::authority_snapshot_t> (read_authority ());
+    EXPECT_TRUE (after_close.same_incarnation (after));
+}
+
+TEST_F (InstanceSpotHostRelocation, RestoresHeldDirectMessagesAndLogicalTimerAfterCommit)
+{
+    auto restoring_started = std::make_shared<fw::task_completion_source_t<void>> ();
+    auto continue_restore = std::make_shared<fw::task_completion_source_t<void>> ();
+    restoring = [restoring_started, continue_restore] () -> fw::task_t<void> {
+        restoring_started->complete (fw::result_t<void>::success ());
+        co_await continue_restore->task ();
+    };
+    const auto release = std::shared_ptr<void> (nullptr, [continue_restore] (void *) {
+        if (!continue_restore->task ().await_ready ())
+            continue_restore->complete (fw::result_t<void>::success ());
+    });
+    ASSERT_NO_FATAL_FAILURE (start_source ());
+    ASSERT_NO_FATAL_FAILURE (start_target ());
+
+    const auto source_runtime =
+      fw::detail::spot_node_runtime_t::from (source.app.advanced ().zlink (), mesh_name);
+    const auto target_runtime =
+      fw::detail::spot_node_runtime_t::from (target.app.advanced ().zlink (), mesh_name);
+    ASSERT_TRUE (source_runtime);
+    ASSERT_TRUE (target_runtime);
+    auto source_native = source_runtime->native_node ();
+    auto target_native = target_runtime->native_node ();
+    const auto owner =
+      source_native->objects ().find (stateful::object_kind_t::instance_spot, spot_id);
+    ASSERT_TRUE (owner);
+    constexpr std::uint64_t next_due = 2000000000000ULL;
+    const stateful::logical_timer_t timer{
+      .timer_id = 1,
+      .due_after_milliseconds = next_due,
+      .period_milliseconds = 1000,
+      .next_tick_sequence = 2,
+      .name = "pulse",
+      .handler_type = "test.pulse",
+      .overrun_policy = 2,
+      .max_catch_up_ticks = 2,
+      .last_completed_delivery_index = 1,
+      .last_completed_scheduled_index = 1,
+      .next_scheduled_at_unix_milliseconds = next_due,
+      .pending_ticks = {{2, 2, next_due - 2000, 0}, {3, 3, next_due - 1000, 0}}};
+    ASSERT_EQ (source_native->objects ().register_timer (*owner, timer),
+               stateful::stateful_error_t::none);
+
+    auto services = target.app.advanced ().services ().build_provider ();
+    auto client = target.app.advanced ().zlink ().route_client (
+      services.get_required<fw::serializer_registry_t> ());
+    ASSERT_TRUE (client.request_to_spot (spot_id, request_t{})
+                   .timeout (wait_budget)
+                   .async<reply_t> ()
+                   .result ());
+    const auto moving = source.app.relocate (
+      {.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget});
+    ASSERT_TRUE (observe ([&] { return restoring_started->task ().await_ready (); }));
+    const auto precommit = std::get<fw::authority_snapshot_t> (read_authority ());
+    EXPECT_EQ (precommit.allocation.target.node_rid.value (), source_rid);
+    EXPECT_FALSE (target_native->objects ().find (stateful::object_kind_t::instance_spot, spot_id,
+                                                  stateful::object_state_t::ready));
+    for (int value : {1, 2})
+        ASSERT_TRUE (client.send_to_spot (spot_id, event_t{value}).async ().result ());
+    ASSERT_TRUE (observe ([&] {
+        return source_native->objects ().pending (*owner, stateful::turn_domain_t::application)
+               == 2;
+    }));
+
+    continue_restore->complete (fw::result_t<void>::success ());
+    const auto moved = moving.result ();
+    ASSERT_TRUE (moved);
+    ASSERT_EQ (moved.value ().outcome, fw::relocation_outcome_t::relocated)
+      << "reason=" << static_cast<int> (moved.value ().reason);
+    const auto replayed = client.request_to_spot (spot_id, request_t{})
+                            .timeout (wait_budget)
+                            .async<reply_t> ()
+                            .result ();
+    ASSERT_TRUE (replayed) << (replayed.error () ? replayed.error ()->what () : "");
+    EXPECT_EQ (replayed.value ().value, 12);
+    EXPECT_EQ (restores.load (), 1u);
+    const auto relocated =
+      target_native->objects ().find (stateful::object_kind_t::instance_spot, spot_id);
+    ASSERT_TRUE (relocated);
+    EXPECT_EQ (target_native->objects ().timers (*relocated),
+               std::vector<stateful::logical_timer_t>{timer});
+}
+
+TEST_F (InstanceSpotHostRelocation, DoesNotActivateAnInstanceMissingFromTheSourceRegistry)
+{
+    ASSERT_NO_FATAL_FAILURE (start_source ());
+    ASSERT_NO_FATAL_FAILURE (start_target ());
+    const auto before = std::get<fw::authority_snapshot_t> (read_authority ());
+    ASSERT_EQ (before.allocation.target.node_rid.value (), source_rid);
+
+    const auto source_runtime =
+      fw::detail::spot_node_runtime_t::from (source.app.advanced ().zlink (), mesh_name);
+    const auto target_runtime =
+      fw::detail::spot_node_runtime_t::from (target.app.advanced ().zlink (), mesh_name);
+    ASSERT_TRUE (source_runtime);
+    ASSERT_TRUE (target_runtime);
+    const auto source_native = source_runtime->native_node ();
+    const auto target_native = target_runtime->native_node ();
+    ASSERT_TRUE (source_native);
+    ASSERT_TRUE (target_native);
+
+    // Remove only the native record, leaving the host inventory and Store authority intact.
+    const auto owner = source_native->resolve_spot_async (spot_id).result ().value ();
+    ASSERT_TRUE (owner);
+    const auto [error, removed] = source_native->objects ().close_spot (*owner);
+    ASSERT_EQ (error, stateful::stateful_error_t::none);
+    ASSERT_TRUE (removed);
+    ASSERT_FALSE (source_native->resolve_spot_async (spot_id).result ().value ());
+    const auto inventory = source_runtime->read_relocation_units ().result ().value ();
+    ASSERT_EQ (inventory.spots.size (), 1u);
+    ASSERT_EQ (inventory.spots.front ().spot_id, spot_id);
+    ASSERT_EQ (inventory.spots.front ().kind, fw::placement_object_kind_t::instance_spot);
+    ASSERT_EQ (inventory.spots.front ().object_generation, before.object_generation);
+
+    const auto moved =
+      source.app
+        .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
+        .result ();
+    ASSERT_TRUE (moved);
+    EXPECT_EQ (moved.value ().outcome, fw::relocation_outcome_t::blocked);
+    EXPECT_EQ (moved.value ().reason, fw::relocation_reason_t::state_incompatible);
+
+    EXPECT_FALSE (target_native->resolve_spot_async (spot_id).result ().value ());
+    const auto authority = read_authority ();
+    const auto *after = std::get_if<fw::authority_snapshot_t> (&authority);
+    ASSERT_TRUE (after);
+    EXPECT_TRUE (after->same_incarnation (before));
+    EXPECT_EQ (target_activations.load (), 0u);
+}
+
+TEST_F (InstanceSpotHostRelocation, SkipsAnInstanceWhoseClosingFenceCommittedFirst)
+{
+    ASSERT_NO_FATAL_FAILURE (start_source ());
+    auto closing_started = std::make_shared<fw::task_completion_source_t<void>> ();
+    auto continue_close = std::make_shared<fw::task_completion_source_t<void>> ();
+    source_spot->closing = [closing_started, continue_close] () -> fw::task_t<void> {
+        closing_started->complete (fw::result_t<void>::success ());
+        co_await continue_close->task ();
+    };
+    const auto release = std::shared_ptr<void> (nullptr, [continue_close] (void *) {
+        if (!continue_close->task ().await_ready ())
+            continue_close->complete (fw::result_t<void>::success ());
+    });
+    const auto closing = source_spot->context ().close ();
+    ASSERT_TRUE (observe ([&] { return closing_started->task ().await_ready (); }));
+    const auto current = std::get<fw::authority_snapshot_t> (read_authority ());
+    ASSERT_TRUE (fw::runtime::decode_instance_closing_state (current.payload));
+
+    ASSERT_NO_FATAL_FAILURE (relocate ());
+    const auto during_close = std::get<fw::authority_snapshot_t> (read_authority ());
+    EXPECT_EQ (during_close.store_version, current.store_version);
+    EXPECT_EQ (restores.load (), 0u);
+
+    continue_close->complete (fw::result_t<void>::success ());
+    const auto closed = closing.result ();
+    ASSERT_TRUE (closed);
+    ASSERT_TRUE (closed.value ());
+    EXPECT_TRUE (std::holds_alternative<fw::authority_missing_t> (read_authority ()));
+}
+}

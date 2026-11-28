@@ -28,10 +28,16 @@ namespace zlink::framework
 // Actor stable types. `source` supplies the maintenance wave and the declared
 // relocation policy per capability. The Core-peer admitted/ready gate (spec
 // step 5) is applied by the caller, which owns the Core peer table.
+struct relocation_spot_requirement_t
+{
+    placement_object_kind_t kind;
+    std::string_view stable_type;
+};
+
 bool relocation_unit_target_eligible (const mesh_node_descriptor_t &source,
                                       const mesh_node_descriptor_t &candidate,
                                       std::int64_t effective_target_application_version,
-                                      std::string_view spot_type,
+                                      std::optional<relocation_spot_requirement_t> spot,
                                       const std::vector<std::string> &actor_types);
 
 // Applies node-wide placement weight to the final eligible candidate set (spec

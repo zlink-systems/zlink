@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
+#include "../support/spot_host_relocation_fixture.hpp"
 #include <zlink/json.hpp>
 #include <zlink/framework.hpp>
 #include "runtime/locations/in_memory_store_providers.hpp"
@@ -12,13 +13,14 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
-#include <thread>
 
 namespace
 {
 namespace fw = zlink::framework;
 using namespace std::chrono_literals;
-constexpr auto wait_budget = 5s;
+using fw::test::spot_host_relocation::host_t;
+using fw::test::spot_host_relocation::observe;
+using fw::test::spot_host_relocation::wait_budget;
 constexpr auto mesh_name = "spotwide-relocation";
 constexpr auto actor_type = "member";
 constexpr auto room_type = "room";
@@ -198,7 +200,7 @@ class room_t final : public fw::spot_t<member_t>
   private:
     fw::spot_context_t _context;
 };
-class failing_capture_t final : public fw::spot_relocation_adapter_t<room_t>
+class room_capture_adapter_t final : public fw::spot_relocation_adapter_t<room_t>
 {
   public:
     fw::task_t<std::vector<std::byte>> capture (room_t &spot, std::stop_token) override
@@ -210,33 +212,6 @@ class failing_capture_t final : public fw::spot_relocation_adapter_t<room_t>
         co_return;
     }
 };
-struct host_t
-{
-    fw::app_t app = fw::app_t::create ();
-    std::thread worker;
-    ~host_t ()
-    {
-        app.request_stop ();
-        if (worker.joinable ())
-            worker.join ();
-    }
-    void start ()
-    {
-        worker = std::thread ([this] {
-            char name[] = "spotwide-relocation";
-            char *argv[]{name, nullptr};
-            app.run (1, argv);
-        });
-    }
-};
-template <class Predicate> bool observe (Predicate predicate)
-{
-    const auto deadline = std::chrono::steady_clock::now () + wait_budget;
-    while (!predicate () && std::chrono::steady_clock::now () < deadline)
-        std::this_thread::yield ();
-    return predicate ();
-}
-
 TEST (SpotRequestAdmission, NewHostRequestsExistingSpotImmediatelyAfterReady)
 {
     auto locations = std::make_shared<fw::runtime::in_memory_location_store_t> ();
@@ -265,8 +240,7 @@ TEST (SpotRequestAdmission, NewHostRequestsExistingSpotImmediatelyAfterReady)
     };
     host_t owner, requester;
     configure (owner, "first-request-owner");
-    owner.start ();
-    ASSERT_TRUE (observe ([&] { return owner.app.is_ready (); }));
+    ASSERT_TRUE (owner.start ("spotwide-relocation"));
     auto owner_services = owner.app.advanced ().services ().build_provider ();
     const auto created = owner_services.get_required<fw::spot_manager_t> ()
                            .get_or_create (fw::spot_id_t (room_id), room_type)
@@ -276,8 +250,7 @@ TEST (SpotRequestAdmission, NewHostRequestsExistingSpotImmediatelyAfterReady)
     ASSERT_EQ (created.value ().state, fw::spot_create_state_t::created);
 
     configure (requester, "first-request-caller");
-    requester.start ();
-    ASSERT_TRUE (observe ([&] { return requester.app.is_ready (); }));
+    ASSERT_TRUE (requester.start ("spotwide-relocation"));
     auto services = requester.app.advanced ().services ().build_provider ();
     const auto existing = services.get_required<fw::spot_manager_t> ()
                             .get_or_create (fw::spot_id_t (room_id), room_type)
@@ -332,8 +305,7 @@ TEST (SpotWideHostRelocation, TargetRejectsChangedCoordinatorFenceBeforeAggregat
         };
         host_t source, target;
         configure (source, source_rid);
-        source.start ();
-        ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
+        ASSERT_TRUE (source.start ("spotwide-relocation"));
         auto services = source.app.advanced ().services ().build_provider ();
         ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
                        .get_or_create (fw::spot_id_t (room_id), room_type)
@@ -353,8 +325,7 @@ TEST (SpotWideHostRelocation, TargetRejectsChangedCoordinatorFenceBeforeAggregat
               joins.changed.wait_for (lock, wait_budget, [&] { return joins.accepted == 1; }));
         }
         configure (target, target_rid);
-        target.start ();
-        ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
+        ASSERT_TRUE (target.start ("spotwide-relocation"));
         auto &repository = services.get_required<fw::location_repository_t> ();
         const auto spot = std::get<fw::authority_snapshot_t> (
           repository.read_authority (fw::runtime::spot_authority_key (room_id)).result ().value ());
@@ -433,6 +404,8 @@ TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
     joins_t joins;
     auto locations = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    std::atomic<bool> actor_committed_before_spot_capture = false;
+    fw::location_repository_t *repository = nullptr;
     const auto configure = [&] (host_t &host, const char *rid) {
         auto &options = host.app.add_zlink_framework ();
         options.configure_locations ().owner_lease_renew_interval = std::chrono::milliseconds (10);
@@ -453,19 +426,27 @@ TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
             [] (auto &factory) { factory.recreate_on_relocation (); })
           .add_spot_factory<room_t> (
             room_type,
-            [] (fw::spot_context_t context) {
-                return std::make_shared<room_t> (std::move (context));
+            [&] (fw::spot_context_t context) {
+                auto spot = std::make_shared<room_t> (std::move (context));
+                spot->capture = [&] () -> fw::task_t<std::vector<std::byte>> {
+                    const auto read = co_await repository->read_authority (
+                      fw::runtime::actor_authority_key ("entry-member"));
+                    const auto *actor = std::get_if<fw::authority_snapshot_t> (&read);
+                    actor_committed_before_spot_capture =
+                      actor && actor->allocation.target.node_rid.value () == target_rid;
+                    co_return std::vector<std::byte>{};
+                };
+                return spot;
             },
             [] (auto &factory) {
-                // Keep the public defaults: SpotWide and framework_managed.
-                factory.recreate_on_relocation ();
+                factory.template preserve_state_with<room_capture_adapter_t> ();
             });
     };
     host_t source, target;
     configure (source, source_rid);
-    source.start ();
-    ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
+    ASSERT_TRUE (source.start ("spotwide-relocation"));
     auto services = source.app.advanced ().services ().build_provider ();
+    repository = &services.get_required<fw::location_repository_t> ();
     auto &actors = services.get_required<fw::actor_manager_t> ();
     auto &client = services.get_required<fw::actor_client_t> ();
     ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
@@ -492,8 +473,7 @@ TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
         ASSERT_EQ (before.value ().node, source_rid);
     }
     configure (target, target_rid);
-    target.start ();
-    ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
+    ASSERT_TRUE (target.start ("spotwide-relocation"));
     auto &routes = services.get_required<fw::route_mesh_runtime_t> ();
     ASSERT_TRUE (observe ([&] { return routes.snapshot (mesh_name).ready_peer_count == 1; }));
     const auto moved =
@@ -503,6 +483,7 @@ TEST (SpotWideHostRelocation, FrameworkManagedMembersKeepUserSpotHandler)
     ASSERT_TRUE (moved);
     ASSERT_EQ (moved.value ().outcome, fw::relocation_outcome_t::relocated)
       << "reason=" << static_cast<int> (moved.value ().reason);
+    EXPECT_TRUE (actor_committed_before_spot_capture.load ());
     auto target_services = target.app.advanced ().services ().build_provider ();
     auto &target_client = target_services.get_required<fw::actor_client_t> ();
     for (const auto *id : {"wide-member-1", "wide-member-2", "entry-member"}) {
@@ -550,8 +531,7 @@ TEST (SpotWideHostRelocation, GetOrCreateReturnsExistingRelocationTarget)
     };
     host_t source, target;
     configure (source, source_rid);
-    source.start ();
-    ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
+    ASSERT_TRUE (source.start ("spotwide-relocation"));
     auto services = source.app.advanced ().services ().build_provider ();
     const auto created = services.get_required<fw::spot_manager_t> ()
                            .get_or_create (fw::spot_id_t (room_id), room_type)
@@ -561,8 +541,7 @@ TEST (SpotWideHostRelocation, GetOrCreateReturnsExistingRelocationTarget)
     ASSERT_EQ (created.value ().state, fw::spot_create_state_t::created);
     ASSERT_EQ (created.value ().spot.node_rid ().value (), source_rid);
     configure (target, target_rid);
-    target.start ();
-    ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
+    ASSERT_TRUE (target.start ("spotwide-relocation"));
     ASSERT_TRUE (observe ([&] {
         return services.get_required<fw::route_mesh_runtime_t> ()
                  .snapshot (mesh_name)
@@ -648,7 +627,9 @@ TEST (SpotWideHostRelocation, AbortRunsAcceptedSpotPrefixWithoutNewIngress)
                 };
                 return spot;
             },
-            [] (auto &factory) { factory.template preserve_state_with<failing_capture_t> (); });
+            [] (auto &factory) {
+                factory.template preserve_state_with<room_capture_adapter_t> ();
+            });
     };
     host_t source, target;
     struct release_capture_t
@@ -661,8 +642,7 @@ TEST (SpotWideHostRelocation, AbortRunsAcceptedSpotPrefixWithoutNewIngress)
         }
     } release_capture{release};
     configure (source, "abort-source");
-    source.start ();
-    ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
+    ASSERT_TRUE (source.start ("spotwide-relocation"));
     auto services = source.app.advanced ().services ().build_provider ();
     const auto created = services.get_required<fw::spot_manager_t> ()
                            .get_or_create (fw::spot_id_t (room_id), room_type)
@@ -671,8 +651,7 @@ TEST (SpotWideHostRelocation, AbortRunsAcceptedSpotPrefixWithoutNewIngress)
     ASSERT_TRUE (created);
     ASSERT_EQ (created.value ().spot.node_rid ().value (), "abort-source");
     configure (target, "abort-target");
-    target.start ();
-    ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
+    ASSERT_TRUE (target.start ("spotwide-relocation"));
     ASSERT_TRUE (observe ([&] {
         return services.get_required<fw::route_mesh_runtime_t> ()
                  .snapshot (mesh_name)

@@ -1141,8 +1141,12 @@ class exercise_t final : public zf::hosted_service_t
             followup_result.emplace (followup.get ());
         const auto closed = _evidence->close_completion->result ();
         close_result.emplace (closed);
-        if (_evidence->branch == branch_t::successor_close)
+        if (_evidence->branch == branch_t::successor_close) {
+            ASSERT_TRUE (_evidence->successor_close_completion)
+              << "First intent terminal: "
+              << (intent_result->error () ? intent_result->error ()->what () : "success");
             successor_close_result.emplace (_evidence->successor_close_completion->result ());
+        }
         if (!initializer_fails (_evidence->branch) && (!closed || !closed.value ()))
             throw std::runtime_error ("Close did not complete successfully");
         const auto final = _store->inspect_authority ().result ().value ();

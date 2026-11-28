@@ -227,7 +227,8 @@ task_t<create_result_t> stateful_object_runtime_t::begin_reserved_object_async (
     return _lane.run_task ([this, reserved = std::move (reserved),
                             stable_type = std::move (stable_type),
                             creation_request = std::move (creation_request)] () -> create_result_t {
-        if ((reserved.kind != object_kind_t::actor && reserved.kind != object_kind_t::user_spot)
+        if ((reserved.kind != object_kind_t::actor && reserved.kind != object_kind_t::user_spot
+             && reserved.kind != object_kind_t::instance_spot)
             || !valid_text (reserved.key) || !valid_text (stable_type)
             || reserved.object_generation == 0 || reserved.authority_owner_generation == 0
             || !valid_text (reserved.mesh_name) || !valid_text (reserved.node_id)

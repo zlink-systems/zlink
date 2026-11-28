@@ -58,7 +58,6 @@ relocation_object_t from_generated (const generated_object_t &object)
             result.kind = relocation_object_kind_t::instance_spot;
             result.stable_type = object.primary_id;
             result.object_id = object.spot_id;
-            result.expected_authority_owner_generation = 1;
             break;
         default:
             throw service_wire_error_t ("relocation envelope object kind is invalid");

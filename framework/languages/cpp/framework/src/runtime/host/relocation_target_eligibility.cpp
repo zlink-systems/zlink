@@ -61,7 +61,7 @@ bool candidate_supports (const mesh_node_descriptor_t &source,
 bool relocation_unit_target_eligible (const mesh_node_descriptor_t &source,
                                       const mesh_node_descriptor_t &candidate,
                                       std::int64_t effective_target_application_version,
-                                      std::string_view spot_type,
+                                      std::optional<relocation_spot_requirement_t> spot,
                                       const std::vector<std::string> &actor_types)
 {
     if (candidate.state != framework_runtime_state_t::serving
@@ -70,9 +70,7 @@ bool relocation_unit_target_eligible (const mesh_node_descriptor_t &source,
         || (source.maintenance_wave && candidate.maintenance_wave == source.maintenance_wave)) {
         return false;
     }
-    // An actor-only relocation unit has no user Spot requirement.
-    if (!spot_type.empty ()
-        && !candidate_supports (source, candidate, placement_object_kind_t::user_spot, spot_type))
+    if (spot && !candidate_supports (source, candidate, spot->kind, spot->stable_type))
         return false;
     for (const auto &actor_type : actor_types) {
         if (!candidate_supports (source, candidate, placement_object_kind_t::actor, actor_type))

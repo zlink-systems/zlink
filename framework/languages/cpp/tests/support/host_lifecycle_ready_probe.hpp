@@ -6,6 +6,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <optional>
 
 namespace zlink::framework::test::host_lifecycle
 {
@@ -31,14 +32,18 @@ class ready_host_probe_t final : public zlink::framework::hosted_service_t
             _observation->close ();
     }
 
-    bool wait_ready ()
+    bool wait_ready (std::optional<std::chrono::milliseconds> timeout = std::nullopt)
     {
         std::unique_lock lock (_mutex);
-        _changed.wait (lock, [&] {
+        const auto settled = [&] {
             return _state == zlink::framework::framework_runtime_state_t::serving
                    || _state == zlink::framework::framework_runtime_state_t::stopped
                    || _state == zlink::framework::framework_runtime_state_t::error;
-        });
+        };
+        if (timeout)
+            _changed.wait_for (lock, *timeout, settled);
+        else
+            _changed.wait (lock, settled);
         return _state == zlink::framework::framework_runtime_state_t::serving;
     }
 
