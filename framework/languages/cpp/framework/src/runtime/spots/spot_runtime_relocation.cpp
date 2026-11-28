@@ -1955,13 +1955,16 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                                   const auto &completion = *completion_record;
                                   const auto key = actor_key (completion.actor);
                                   auto &coordinator = *node->actor_transfer_coordinator;
-                                  const auto replay =
-                                    delivered ? co_await coordinator
-                                                  .complete_commit_and_take_backlog_async (
-                                                    completion.handoff_id, completion.source_actor,
-                                                    completion.target_spot_id)
-                                              : co_await coordinator.seal_failed_join_completion (
-                                                  key, completion.handoff_id);
+                                  // GCC-COAWAIT-01: await outside a conditional expression.
+                                  detail::actor_transfer_coordinator_t::backlog_result_t replay;
+                                  if (delivered)
+                                      replay = co_await coordinator
+                                                 .complete_commit_and_take_backlog_async (
+                                                   completion.handoff_id, completion.source_actor,
+                                                   completion.target_spot_id);
+                                  else
+                                      replay = co_await coordinator.seal_failed_join_completion (
+                                        key, completion.handoff_id);
                                   auto replay_services = co_await node->lane.run_task ([&] {
                                       if (replay) {
                                           const auto context = node->spot_contexts_by_id.find (

@@ -240,6 +240,8 @@ actor_transfer_coordinator_t::seal_failed_join_completion (std::string actor_key
 
 void actor_transfer_coordinator_t::retire_remote_join_seal (const std::string &actor_key)
 {
+    // Called under the Spot state lane (erase_actor_route_unlocked). Coordinator lane work never
+    // waits on the state lane, so this synchronous wait cannot deadlock.
     _lane.run_sync ([&] {
         const auto moving = _moves.find (actor_key);
         if (moving != _moves.end ()

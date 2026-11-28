@@ -4787,6 +4787,8 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
                                         }
                                     };
                                     if (!delivered && !completion_failure) {
+                                        // Like fail_commit below: coordinator lane work never waits on
+                                        // this lane, so the synchronous result cannot deadlock.
                                         auto sealed =
                                           node->actor_transfer_coordinator
                                             ->seal_failed_join_completion (key, transfer_id)
