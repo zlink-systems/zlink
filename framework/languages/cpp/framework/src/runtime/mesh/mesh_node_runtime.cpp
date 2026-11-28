@@ -5,6 +5,7 @@
 #include "runtime/timers/async_delay.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/authority_aggregate_relocation.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include <zlink/framework/contracts/configuration/detail/framework_options_state.hpp>
 #include <runtime/locations/location_repository.hpp>
@@ -266,6 +267,7 @@ std::uint64_t make_lifecycle_generation ()
                         ^ static_cast<std::uint64_t> (std::random_device{}());
     const auto time =
       static_cast<std::uint64_t> (std::chrono::steady_clock::now ().time_since_epoch ().count ());
+    // Deferred Join completion IDs reserve bit 63, so generated MeshNode generations fit in 63 bits.
     auto value = (random ^ time ^ counter.fetch_add (1, std::memory_order_relaxed))
                  & static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ());
     return value == 0 ? 1 : value;
@@ -2384,8 +2386,6 @@ struct mesh_node_runtime_t::remote_actor_join_state_t
     std::uint64_t target_application_version = 0;
     std::uint64_t completion_operation_id_high = 0;
     std::uint64_t completion_operation_id_low = 0;
-    std::uint64_t target_completion_operation_id_high = 0;
-    std::uint64_t target_completion_operation_id_low = 0;
     std::uint64_t actor_authority_owner_generation = 0;
     std::optional<std::uint64_t> committed_actor_authority_owner_generation;
     std::vector<std::uint8_t> admission_payload;
@@ -2394,8 +2394,8 @@ struct mesh_node_runtime_t::remote_actor_join_state_t
     std::uint32_t completion_root_checksum = 0;
     session_relocation_seal_outcome_t session_seal;
     std::string relocation_content_type;
-    std::chrono::steady_clock::time_point deadline;
-    std::uint64_t deadline_unix_ms = 0;
+    std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now () + timeout;
+    std::uint64_t deadline_unix_ms = runtime::messaging::request_deadline_unix_ms (deadline);
 };
 
 task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_entry_spot (
@@ -2558,6 +2558,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
   std::string application_packet_name,
   std::string application_content_type)
 {
+    const auto deadline = std::chrono::steady_clock::now () + timeout;
     spot_node_runtime_t spot_runtime (_state->spot_state);
     const auto completion_source_spot = spot_runtime.actor_spot (actor);
     auto located = co_await resolver->resolve_spot_address ({}, target_spot);
@@ -2626,6 +2627,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
       std::move (actor), target, request, timeout, std::move (bound_session_node_rid),
       std::move (bound_session_rid), std::move (application_packet_name),
       std::move (application_content_type)});
+    state->deadline = deadline;
+    state->deadline_unix_ms = runtime::messaging::request_deadline_unix_ms (deadline);
     state->source_spot = completion_source_spot;
     state->route_resolver = std::move (resolver);
     // actorJoin(28) fence-gate: wire only when this node has explicitly
@@ -2680,8 +2683,11 @@ void mesh_node_runtime_t::assign_remote_actor_join_operation_id (remote_actor_jo
 {
     s.completion_operation_id_low =
       _state->next_join_completion_operation.fetch_add (1, std::memory_order_relaxed);
+    // MeshNode lifecycle generations use 63 bits. The high bit separates
+    // Deferred Join IDs from local operations that use the same generation.
+    constexpr auto deferred_join_domain = std::uint64_t{1} << 63;
     s.completion_operation_id_high =
-      static_cast<std::uint64_t> (std::hash<std::string>{}(_state->mesh_name)) | 1ULL;
+      _node->status ().lifecycle_generation () | deferred_join_domain;
 }
 
 task_t<actor_join_reply_t> mesh_node_runtime_t::fail_remote_actor_join (
@@ -2701,13 +2707,13 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::fail_remote_actor_join (
 task_t<actor_join_reply_t> mesh_node_runtime_t::join_remote_application_actor_to_spot (
   std::shared_ptr<remote_actor_join_state_t> s, std::optional<observed_spot_authority_t> observed)
 {
+    assign_remote_actor_join_operation_id (*s);
     // The source owns the policy in its immutable startup factory catalog.
     const auto &factories = _state->spot_state->actor_factories;
     const auto factory =
       factories.find (std::string (detail::actor_ref_access_t::actor_type (s->actor)));
     if (factory != factories.end ()
         && factory->second.relocation.kind == detail::factory_relocation_kind_t::disabled) {
-        assign_remote_actor_join_operation_id (*s);
         co_return co_await fail_remote_actor_join (
           *s,
           result_t<actor_join_reply_t>::failure (framework_error_kind_t::rejected,
@@ -2753,11 +2759,6 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     s->source_spot_generation = *source_spot_generation;
     auto reserved = spot.reserved_actor_transfer_id (s->actor);
     s->transfer_id = reserved ? std::move (*reserved) : spot.next_actor_transfer_id ();
-    assign_remote_actor_join_operation_id (*s);
-    s->target_completion_operation_id_high = s->completion_operation_id_high;
-    s->target_completion_operation_id_low = s->completion_operation_id_low;
-    s->deadline = std::chrono::steady_clock::now () + s->timeout;
-    s->deadline_unix_ms = runtime::messaging::request_deadline_unix_ms (s->deadline);
     const auto source = co_await _node->resolve_actor_async (s->actor);
     if (!source || source->authority_owner_generation == 0) {
         const auto failed = result_t<actor_join_reply_t>::failure (
@@ -2776,6 +2777,12 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     }
     s->source_actor = *source;
     s->actor_authority_owner_generation = source->authority_owner_generation;
+    if (const auto ready = co_await runtime::await_result (await_actor_join_capture (*s)); !ready)
+        co_return co_await fail_remote_actor_join (
+          *s, detail::propagate_failure<actor_join_reply_t> (ready, "Actor Join capture preflight"),
+          "Actor Join capture preflight failed");
+    const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
+      s->deadline - std::chrono::steady_clock::now ());
     runtime::messaging::client_call_codec_t codec;
     const auto request = spot_actor_admission_route_request_t{
       s->transfer_id,
@@ -2793,10 +2800,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
       s->request.to_bytes ()};
     const auto header =
       codec.create_envelope (runtime::messaging::message_kind_t::request, "spot",
-                             spot_actor_admission_route_request_t::packet_name, s->timeout);
+                             spot_actor_admission_route_request_t::packet_name, remaining);
     auto encoded = codec.encode_envelope_parts (header, request, *_serializers);
-    auto parts =
-      co_await request_actor_join_spot_route (s->target, std::move (encoded), s->timeout);
+    auto parts = co_await request_actor_join_spot_route (s->target, std::move (encoded), remaining);
     const auto reply = codec.decode_envelope_reply<spot_actor_admission_route_reply_t> (
       parts, *_serializers, "remote Actor admission reply is empty",
       "remote Actor admission reply decode failed", "ActorTransferAdmission");
@@ -2940,10 +2946,7 @@ std::uint64_t mesh_node_runtime_t::negotiated_receive_chunk_limit_bytes (
 // explicitly observed the target Spot's authority fence via
 // observe_spot_authority -- and (b) the target peer
 // is admitted at exactly that observed lifecycle generation. The request
-// correlation is minted from the same monotonic counter the JSON path's
-// completion_operation_id_low already uses, forced odd/nonzero the same
-// way completion_operation_id_high is (the generated actorJoin codec throws on
-// correlation == 0).
+// correlation uses the source's sequence and must be nonzero.
 task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_join_via_wire (
   std::shared_ptr<remote_actor_join_state_t> s, observed_spot_authority_t observed)
 {
@@ -2977,14 +2980,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
           "local owner lease is unavailable for wire Actor join");
     }
     const auto local = _node->status ();
-    // deliver_actor_join / spot's completion delivery requires a
-    // non-zero completion operation id, exactly like the JSON path's
-    // admit_remote_application_actor_join sets before it can send its
-    // request.
-    assign_remote_actor_join_operation_id (*s);
     const auto correlation = (s->completion_operation_id_low << 1) | 1ULL;
-    s->target_completion_operation_id_high = local.lifecycle_generation ();
-    s->target_completion_operation_id_low = correlation;
     spot_node_runtime_t spot (_state->spot_state);
     const auto source_spot_generation =
       co_await spot.resolve_spot_generation (local.routing_id (), *s->source_spot);
@@ -2998,11 +2994,15 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     s->source_spot_generation = *source_spot_generation;
     s->source_actor = *source;
     s->actor_authority_owner_generation = source->authority_owner_generation;
-    s->deadline = std::chrono::steady_clock::now () + s->timeout;
-    s->deadline_unix_ms = runtime::messaging::request_deadline_unix_ms (s->deadline);
     s->transfer_id = canonical_actor_join_handoff_id (
       local.routing_id ().to_bytes (), s->actor.actor_id ().value (), s->actor.object_generation (),
       local.lifecycle_generation (), correlation);
+    if (const auto ready = co_await runtime::await_result (await_actor_join_capture (*s)); !ready)
+        co_return co_await fail_remote_actor_join (
+          *s, detail::propagate_failure<actor_join_reply_t> (ready, "Actor Join capture preflight"),
+          "Actor Join capture preflight failed");
+    const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
+      s->deadline - std::chrono::steady_clock::now ());
     const runtime::protocol::actor_join_request_t wire_request{
       correlation,
       runtime::protocol::actor_route_fence_t{
@@ -3018,7 +3018,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     const auto payload = canonical_actor_join_application_payload (
       s->application_packet_name, s->application_content_type, s->request);
     auto outcome = co_await _node->transport ().request_actor_join (
-      s->target.node_rid.to_bytes (), wire_request, payload, s->timeout);
+      s->target.node_rid.to_bytes (), wire_request, payload, remaining);
     if (!outcome.reply) {
         //  Spec 32 §5: classify instead of collapsing every failure to
         //  Unavailable — a malformed/identity-mismatched reply is
@@ -3115,6 +3115,39 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     co_return co_await seal_remote_application_actor_join (std::move (s));
 }
 
+task_t<void> mesh_node_runtime_t::await_actor_join_capture (const remote_actor_join_state_t &state)
+{
+    if (spot_node_runtime_t (_state->spot_state)
+          .reserved_with_pending_relocation_request (state.actor))
+        throw framework_exception_t (
+          framework_error_kind_t::unavailable,
+          "Actor Join cannot wait for captured request delivery in its own Actor turn");
+    if (!_user_spot_store)
+        throw framework_exception_t (framework_error_kind_t::unavailable,
+                                     "Actor relocation authority is unavailable");
+
+    const auto key = runtime::actor_authority_key (state.actor.actor_id ().value ());
+    const auto read = co_await _user_spot_store->read_authority (key);
+    if (const auto *published = std::get_if<authority_snapshot_t> (&read)) {
+        const auto previous = runtime::finishing_relocation (*published);
+        const bool waited = co_await _node->await_previous_relocation_target (
+          previous ? runtime::protocol::actor_join_relocation_id (previous->id)
+                   : runtime::protocol::relocation_id_t{},
+          previous ? previous->attempt_generation : 0, state.source_actor, state.deadline);
+        if (previous || waited) {
+            const auto current = co_await _user_spot_store->read_authority (key);
+            if (const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
+                !snapshot || runtime::finishing_relocation (*snapshot))
+                throw framework_exception_t (
+                  framework_error_kind_t::unavailable,
+                  "The previous relocation still holds the Actor authority publication");
+        }
+    }
+    if (std::chrono::steady_clock::now () >= state.deadline)
+        throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                     "Actor Join deadline elapsed before capture");
+}
+
 task_t<actor_join_reply_t> mesh_node_runtime_t::seal_remote_application_actor_join (
   std::shared_ptr<remote_actor_join_state_t> s)
 {
@@ -3129,12 +3162,13 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::seal_remote_application_actor_jo
     }
     std::optional<std::string> authority_lookup_error;
     try {
-        const auto read = co_await _user_spot_store->read_authority (
-          runtime::actor_authority_key (s->actor.actor_id ().value ()));
+        const auto key = runtime::actor_authority_key (s->actor.actor_id ().value ());
+        const auto read = co_await _user_spot_store->read_authority (key);
         const auto *authority = std::get_if<authority_snapshot_t> (&read);
         const auto status = _node->status ();
         if (!authority || authority->allocation.state != placement_allocation_state_t::active
             || authority->allocation.object_kind != placement_object_kind_t::actor
+            || runtime::finishing_relocation (*authority)
             || authority->object_generation != s->actor.object_generation ()
             || authority->authority_owner_generation != s->actor_authority_owner_generation
             || authority->allocation.target.node_rid.value () != s->source_actor.node_id
@@ -3326,7 +3360,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       .target_authority_owner_generation = s->actor_authority_owner_generation,
       .target_spot_authority_owner_generation = s->target.authority_owner_generation,
       .coordinator = s->relocation_coordinator,
-      .operation = {s->target_completion_operation_id_high, s->target_completion_operation_id_low},
+      .operation = {s->completion_operation_id_high, s->completion_operation_id_low},
       .reply_content_type = s->admission_reply_content_type,
       .reply = s->admission_payload};
     runtime::protocol::frozen_record_t recovery_frozen;
@@ -3464,21 +3498,52 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
     co_return actor_join_reply_t{
       actor_join_reply_t::relayed, target_actor, zlink::message_t::from (s->admission_payload),
       [this, s, cleanup, target_actor] {
-          auto pending = [] (mesh_node_runtime_t *self,
-                             std::shared_ptr<remote_actor_join_state_t> source,
-                             runtime::stateful::relocation_source_cleanup_t settle,
-                             actor_ref_t target) -> task_t<void> {
-              auto relocated = co_await settle ();
-              co_await self->settle_remote_application_actor_join_source (
-                std::move (source), std::move (relocated), std::move (target));
+          return [] (mesh_node_runtime_t *self, std::shared_ptr<remote_actor_join_state_t> source,
+                     runtime::stateful::relocation_source_cleanup_t settle,
+                     actor_ref_t target) -> task_t<void> {
+              // The relayed Join owns source cleanup through authority settlement.
+              // Keep the accepted work in the host drain barrier while it runs.
+              struct finish_work_t
+              {
+                  mesh_node_runtime_t &node;
+                  ~finish_work_t () { node.application_work_finished (); }
+              };
+              constexpr auto unsettled_error = framework_error_kind_t::unavailable;
+              const auto failures = self->_state->spot_state->runtime_failures ();
+              try {
+                  self->_active_application_callbacks.fetch_add (1, std::memory_order_relaxed);
+                  const finish_work_t finish_work{*self};
+                  auto relocated = co_await settle ();
+                  if (relocated.reason
+                      != runtime::stateful::relocation_reason_t::authority_unsettled_at_stop) {
+                      co_await self->settle_remote_application_actor_join_source (
+                        std::move (source), std::move (relocated), std::move (target));
+                      co_return;
+                  }
+                  // Host relocation §14: complete the waiting Join and leave authority sealed.
+                  spot_node_runtime_t spot (self->_state->spot_state);
+                  co_await spot.release_source_actor_leave_reservations (source->actor);
+                  auto delivery = spot.deliver_actor_join_completion (
+                    source->actor,
+                    actor_join_failed_t{source->completion_operation_id_high,
+                                        source->completion_operation_id_low, unsettled_error},
+                    source->source_spot);
+                  detail::observe_task_terminal (
+                    delivery, [failures] (const result_t<result_t<void>> &result) {
+                        // Delivery failure can fail app.run(). The Spot drain warning only logs diagnostics.
+                        if (auto failure =
+                              result ? result.value ().exception () : result.exception ())
+                            failures->report (std::move (failure));
+                    });
+              }
+              catch (...) {
+                  failures->report (std::current_exception ());
+                  throw;
+              }
+              // Keep the gateway's source reference when settlement ends without a commit.
+              throw framework_exception_t (unsettled_error,
+                                           "Actor Join authority unsettled at stop deadline");
           }(this, s, cleanup, target_actor);
-          detail::observe_task_completion (
-            pending,
-            [failures = _state->spot_state->runtime_failures ()] (const result_t<void> &result) {
-                if (!result)
-                    failures->report (result.exception ());
-            });
-          return pending;
       }};
 }
 
@@ -3494,7 +3559,8 @@ task_t<void> mesh_node_runtime_t::settle_remote_application_actor_join_source (
           || relocated.reason == runtime::stateful::relocation_reason_t::checksum_mismatch;
         const auto authority_lost =
           data_lost
-          || relocated.reason == runtime::stateful::relocation_reason_t::owner_lease_expired;
+          || relocated.reason == runtime::stateful::relocation_reason_t::owner_lease_expired
+          || relocated.reason == runtime::stateful::relocation_reason_t::authority_missing;
         if (authority_lost) {
             const runtime::protocol::actor_route_fence_t source_fence{
               std::string (s->actor.actor_id ().value ()),
@@ -3508,8 +3574,9 @@ task_t<void> mesh_node_runtime_t::settle_remote_application_actor_join_source (
               std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (s->actor))
                 + ":" + std::string (s->actor.actor_id ().value ()),
               source_fence);
-        } else
+        } else {
             spot.fail_remote_actor_transfer (s->actor, false);
+        }
         (void) co_await abort_remote_actor_join_seal (s);
         throw framework_exception_t (
           data_lost        ? framework_error_kind_t::data_lost
@@ -3517,7 +3584,10 @@ task_t<void> mesh_node_runtime_t::settle_remote_application_actor_join_source (
                            : framework_error_kind_t::internal_failure,
           "canonical Actor Join relocation did not complete (terminal="
             + std::to_string (static_cast<int> (relocated.terminal))
-            + ", reason=" + std::to_string (static_cast<int> (relocated.reason)) + ")");
+            + ", reason=" + std::to_string (static_cast<int> (relocated.reason)) + ")"
+            + (relocated.reason == runtime::stateful::relocation_reason_t::authority_missing
+                 ? ": authority missing"
+                 : ""));
     }
     const auto followed = relocated.settlement.follow_generations.find (
       std::pair{s->source_actor.kind, s->source_actor.key});
@@ -3560,7 +3630,8 @@ mesh_node_runtime_t::reserve_application_actor_join_barrier (const actor_ref_t &
         return result_t<std::shared_ptr<deferred_barrier_t>>::failure (
           framework_error_kind_t::not_found, "Deferred Actor join source runtime was not found");
     }
-    return spot_runtime.reserve_actor_join_barrier (actor);
+    return spot_runtime.reserve_actor_join_barrier (actor,
+                                                    _node->has_pending_relocation_requests (actor));
 }
 
 result_t<actor_join_reply_t> mesh_node_runtime_t::actor_join_reply_from_completion (

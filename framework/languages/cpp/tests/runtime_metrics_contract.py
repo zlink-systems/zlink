@@ -83,20 +83,26 @@ def spot_recording_labels(language, source, catalog=""):
 
 
 spot_sources = {
-    "cpp": root / "languages/cpp/framework/src/runtime/spots/spot_runtime.cpp",
+    "cpp": sorted((sources / "spots").glob("spot_runtime*.cpp")),
     "dotnet": root / "languages/dotnet/src/Zlink.Framework/Runtime/Diagnostics/ZLinkRuntimeMetrics.cs",
     "java": root / "languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/spots/ZLinkSpotLifecycle.java",
     "node": root / "languages/node/packages/framework/src/runtime/diagnostics/runtime-metrics.ts",
 }
 java_catalog = (root / "languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/metrics/ZLinkRuntimeMetrics.java").read_text(encoding="utf-8")
 spot_expected = set(contract["zlink.spot.count"]["labels"])
-for language, path in spot_sources.items():
-    source = path.read_text(encoding="utf-8")
+def read_sources(paths):
+    if isinstance(paths, Path):
+        return paths.read_text(encoding="utf-8")
+    return "\n".join(path.read_text(encoding="utf-8") for path in paths)
+
+
+for language, paths in spot_sources.items():
+    source = read_sources(paths)
     try:
         series = spot_recording_labels(language, source, java_catalog)
         for labels in series:
             if labels != spot_expected:
-                metadata_errors.append(f"{path.relative_to(root)}: zlink.spot.count labels {sorted(labels)} != {sorted(spot_expected)}")
+                metadata_errors.append(f"{language}: zlink.spot.count labels {sorted(labels)} != {sorted(spot_expected)}")
         print(f"{language} actual Spot recording labels ({len(series)} paths): {sorted(set.union(*series))}")
         # A wrong label must fail even if the instrument catalog stays correct.
         if language == "java":
@@ -183,7 +189,7 @@ value_paths = {
 }
 allowed_values = set(contract["zlink.spot.count"]["labelValues"]["spot_kind"])
 for language, paths in value_paths.items():
-    texts = {key: path.read_text(encoding="utf-8") for key, path in paths.items()}
+    texts = {key: read_sources(source_paths) for key, source_paths in paths.items()}
     try:
         values = spot_recording_values(language, texts)
         for direction, kinds in values.items():

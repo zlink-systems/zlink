@@ -124,7 +124,6 @@ bindings/cpp/
 |       |   +-- capability.cpp
 |       |   +-- context.cpp
 |       |   +-- utilities.cpp
-|       |   +-- operation_detail.hpp
 |       |   +-- runtime_helpers.hpp
 |       |   +-- types_impl.hpp
 |       +-- Messaging/
@@ -448,6 +447,7 @@ The finished C++ binding's public headers cover the following groups.
 - Core: context, version/capability helpers, context options, shutdown, auto-HWM recalculation, `atomic_counter_t`, `stopwatch_t`, `thread_t`.
 - Messaging: message ownership, builder multipart input, received metadata, topic message, subscription event, routing id, callback types.
 - Socket family: pair, dealer, router, pub, sub, xpub, xsub, stream, common options, typed socket options, bind/connect/disconnect, TLS, callbacks, request/reply surfaces.
+- `subscription_at(index)` on SUB and XSUB returns `std::nullopt` when the index has no entry, and the overload with output parameters returns `false`. The query rule is [the common Subscription Query](../README.en.md#subscription-query).
 - Eventing: socket monitor, monitor event, monitor snapshot, poller, one-shot `poll(...)`, poll event, timer, readiness flags.
 - Errors: a typed exception or error-result surface that preserves the core result domain.
 

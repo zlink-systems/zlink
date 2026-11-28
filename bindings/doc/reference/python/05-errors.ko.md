@@ -25,13 +25,13 @@ concrete class다(이 binding의 다른 대부분의 contract와 달리
 | Exception | Result enum | 던지는 곳 | 값 |
 |---|---|---|---|
 | `SubmitError` | `SubmitResult`(Sockets category) | send/publish/request-submit API | `BACKPRESSURED`(1, 정상 제어 흐름), `NOT_CONNECTED`(2), `NOT_FOUND`(3), `TERMINATED`(4), `INVALID_HANDLE`(5), `INVALID_ARGUMENT`(6), `NOT_SUPPORTED`(7), `INVALID_STATE`(8), `THREAD_VIOLATION`(9), `OUT_OF_MEMORY`(10), `SEQ_EXHAUSTED`(11), `INTERNAL_ERROR`(12), `NOT_ADMITTED`(13, 정상 제어 흐름) |
-| `RequestError` | `RequestResult`(Sockets category) | await한 `submit()` 또는 blocking `submit_sync()` terminal request 실패 | `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
+| `RequestError` | `RequestResult`(Sockets category) | `await submission.reply` 또는 blocking `submit_sync()`에서의 요청 완료 실패 | `TIMED_OUT`(101), `NOT_FOUND`(102), `TERMINATED`(103), `PROTOCOL_ERROR`(104), `INTERNAL_ERROR`(105), `REJECTED`(106), `CONFLICT`(107), `BUSY`(108), `NOT_CONNECTED`(109), `INVALID_ARGUMENT`(110), `INVALID_STATE`(111), `NOT_SUPPORTED`(112), `BACKPRESSURED`(113) |
 | `RecvError` | `RecvResult`(Sockets category) | recv-family API | `NO_DATA`(201), `BUSY`(202), `TERMINATED`(203), `INVALID_HANDLE`(204), `NOT_SUPPORTED`(205), `INTERNAL_ERROR`(206), `BUFFER_TOO_SMALL`(207), `INVALID_STATE`(208) — 더 완전한 8개 값 집합(node와 일치) |
 | `HandlerError` | `HandlerResult`(Sockets category) | 유지되는 result family; 현행 public completion/event 전달은 handler를 등록하지 않음 | `INVALID_ARGUMENT`(301), `BUSY`(302), `NOT_SUPPORTED`(303), `DEADLOCK`(304), `INVALID_HANDLE`(305), `INTERNAL_ERROR`(306) |
 | `CloseError` | `CloseResult` | `close()` 경로, `Context.shutdown()` | `BUSY`(401), `SHUTDOWN`(402), `INVALID_HANDLE`(403), `INTERNAL_ERROR`(404) |
 | `BindError` | `BindResult` | `Socket.bind(...)` | `INVALID_ARGUMENT`(501), `ADDR_IN_USE`(502), `NOT_SUPPORTED`(503), `INVALID_HANDLE`(504), `INTERNAL_ERROR`(505) |
-| `ConnectError` | `ConnectResult` | `connect`/`disconnect`/`disconnect_rid` | `INVALID_ARGUMENT`(601), `NOT_SUPPORTED`(602), `INVALID_HANDLE`(603), `INTERNAL_ERROR`(604), `NOT_FOUND`(605), `CONFLICT`(606), `BUSY`(607), `AUTH_FAILED`(608) — 더 완전한 8개 값 집합(node와 일치) |
-| `ConfigError` | `ConfigResult` | 모든 socket/context option getter/setter | `INVALID_HANDLE`(701), `INVALID_ARGUMENT`(702), `NOT_SUPPORTED`(703), `INTERNAL_ERROR`(704), `INVALID_STATE`(705), `NOT_FOUND`(706), `CONFLICT`(707), `BUFFER_TOO_SMALL`(708), `BUSY`(709) — 9개 값 전체 집합(dotnet/node와 일치) |
+| `ConnectError` | `ConnectResult` | `connect`/`disconnect`/`disconnect_rid`/`unbind` | `INVALID_ARGUMENT`(601), `NOT_SUPPORTED`(602), `INVALID_HANDLE`(603), `INTERNAL_ERROR`(604), `NOT_FOUND`(605), `CONFLICT`(606), `BUSY`(607), `AUTH_FAILED`(608) — 더 완전한 8개 값 집합(node와 일치) |
+| `ConfigError` | `ConfigResult` | 소켓·context 옵션 접근과 TLS 설정 | `INVALID_HANDLE`(701), `INVALID_ARGUMENT`(702), `NOT_SUPPORTED`(703), `INTERNAL_ERROR`(704), `INVALID_STATE`(705), `NOT_FOUND`(706), `CONFLICT`(707), `BUFFER_TOO_SMALL`(708), `BUSY`(709) — 9개 값 전체 집합(dotnet/node와 일치) |
 
 **언어간 비대칭, 여기서 다시 명시.** 이 binding의
 `RecvResult`/`ConnectResult`/`ConfigResult`는 dotnet/cpp/java/rust가
@@ -41,11 +41,10 @@ concrete class다(이 binding의 다른 대부분의 contract와 달리
 하는지, 이 binding의 더 완전한 집합을 줄여야 하는지는 스펙 차원의
 질문이며 이 레퍼런스의 범위 밖이다.
 
-**각 값 family가 실제로 뜻하는 것.** `SubmitResult`의
-`BACKPRESSURED`/`NOT_CONNECTED`/`NOT_FOUND`/`NOT_ADMITTED`는 예외적
-실패가 아니라 정상적인 실행 흐름이다 — non-`OK` submit 결과를 전부
-같게 취급하는 코드는 "재시도가 합리적"과 "이대로 제출하면 절대
-성공하지 않음"의 구분을 잃는다. `BUFFER_TOO_SMALL`은 caller가
+비동기 전송이나 요청이 수용을 기다리는 동안 최초 제출 결과는
+`submission.result == SubmitResult.BACKPRESSURED`일 수 있다.
+대기 토큰 없이 제출에 실패하면 `SubmitError`가 발생한다.
+`BUFFER_TOO_SMALL`은 caller가
 제공한 output 용량이 첫 완결된 값을 담을 수 없다는 뜻이다 — 호출은
 아무것도 소비하지 않으므로 더 큰 buffer로 재시도해도 안전하다.
 `INVALID_STATE`는 stale handle이나 닫힌 수신·연결 상태를 다룬다.
@@ -61,27 +60,30 @@ pull-event 표면은 이를 생성하지 않는다.
 
 ```python
 try:
-    dealer.send().message(part).submit()
-except SubmitError as ex:
-    if ex.result == SubmitResult.BACKPRESSURED:
-        pass  # 정상 제어 흐름이지 실제 실패가 아니다
+    # 호출자는 전송 수용을 기다리는 동안 소켓을 등록한 completion poller를 구동한다.
+    submission = dealer.send().message(part).submit()
+    await submission.admitted
+except SubmitError as exc:
+    print(exc.result, exc.internal_errno)
+    raise
 ```
 
 **Options.**
 
 | Member | 의미 |
 | --- | --- |
-| `ZlinkError(code: int, native_errno: int = 0)` | 순수 public 생성자다(기반이 protected/abstract이고 subclass를 통해서만 도달 가능한 다른 언어와 다름) |
+| `ZlinkError(code: int, internal_errno: int = 0)` | 기본 오류 타입을 직접 생성한다. |
 | `code` | property, 실패를 분류하는 zlink result code |
-| `native_errno` | property, 밑에 깔린 native errno, 없으면 `0` |
+| `internal_errno` | 실패의 원인이 된 errno를 반환하는 속성이다. 해당 값이 없으면 `0`을 반환한다. |
 | `_TypedZlinkError.result` | property, typed result enum; 모든 typed exception이 실제로 파생하는 non-public 중간 계층에 선언됨 — 이 `__init__`은 **raw code가 알려진 enum member와 맞지 않을 때 `ValueError`를 잡아서 예외를 던지거나 무관한 값으로 조용히 매핑하는 대신 raw 정수를 그대로 보존한다**, 이는 특히 더 새로운 Core가 이 binding이 아직 모르는 result를 보고할 때를 견디기 위함이다 |
+
+`native_errno`는 `internal_errno`와 같은 값을 반환하는 폐기 예정 별칭이다. 다음 호환성이 깨지는 릴리스에서 삭제한다.
 
 **Completion result.** 해당 없음 — 이건 내장 `RuntimeError`를
 확장하는 exception 계층 자체다.
 
-**선택 기준.** 구체적 typed exception(`SubmitError` 등)을 잡아 typed
-`.result`를 읽거나, exception 타입 전체에 걸쳐 `.code`/
-`.native_errno`만 일반적으로 필요할 땐 공유 `ZlinkError`를 잡는다.
+**선택 기준.** 타입이 지정된 `.result`를 읽으려면 `SubmitError`처럼 구체적인 예외를 처리한다.
+여러 예외 타입에서 공통으로 `.code`와 `.internal_errno`를 읽으려면 `ZlinkError`를 처리한다.
 no-data와 일시적 back-pressure는 절대 일반 exception으로 보고되지
 않는다 — 대신 Sockets/Messaging category의 `bool`/`None` 반환
 `recv_into`/`submit` 관례를 참고한다. 더 새로운 Core와 통신할 때

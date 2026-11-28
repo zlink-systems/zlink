@@ -85,7 +85,7 @@ handle, FFI symbol, native struct를 public type으로 노출하지 않는다.
 TLS 설정 실패는 `ConfigError`로 전달한다.
 
 SUB와 XSUB는 `set_subscription(topic)`과 `unset_subscription(topic)`으로 filter를 설정·해제한다.
-`subscription_at(index)`는 filter와 pattern 여부를 반환하고 해당 인덱스가 없으면 `None`을 반환한다. XPUB의
+`subscription_at(index)`는 filter와 pattern 여부를 반환하고 해당 인덱스가 없으면 `None`을 반환한다. 조회 규칙은 [공통 Subscription 조회](../README.ko.md#subscription-조회)를 따른다. XPUB의
 `receive_subscription_event_into(event: SubscriptionEvent, *, flags: int = 0) -> bool`는
 `create_subscription_event()`로 만든 저장소를 채운다.
 
@@ -201,6 +201,21 @@ DEALER와 ROUTER request/reply는 Core routing metadata와 `ReplyToken`을 보�
 `routing_id`, `local_addr`, `remote_addr`, `connection_id`, `transport_lane`, `flags`는
 [공통 MonitorEvent 계약](../README.ko.md#monitorevent)의 필드 의미와 native layout을 따른다.
 
+## 시간 단위
+
+socket·context option은 Core option 값을 그대로 밀리초 정수로 받는다. request의 `timeout`은 Python 관례대로
+초 단위 `float`를 받는다. 이름에 `_ms` 접미사가 없는 API는 **굵게** 표시한다.
+
+| API | 단위 | 타입 | 비고 |
+|---|---|---|---|
+| `CommonSocketOptions.linger_ms`, `send_timeout_ms`, `receive_timeout_ms`, `connect_timeout_ms` | 밀리초 | `int` | Core option 값 그대로(`-1`은 Core 규칙대로 무한) |
+| `CommonSocketOptions.reconnect_interval_ms`, `reconnect_interval_max_ms`, `submit_retry_timeout_ms` | 밀리초 | `int` | Core option 값 그대로 |
+| `DealerSocketOptions.request_timeout_ms`, `RouterSocketOptions.request_timeout_ms` | 밀리초 | `int` | Core option 값 그대로 |
+| **`ContextOptions.auto_hwm_recalc_debounce`** | 밀리초 | `int` | Core `AUTO_HWM_RECALC_DEBOUNCE_MS` |
+| **`RequestOp.timeout(timeout)`** | 초 | `float` | `None`·`0`이면 socket의 `request_timeout_ms`를 쓴다(Core `timeout_ms == 0`). Core 범위(`uint32` ms)를 넘으면 `ValueError` |
+| `Poller.wait(events, timeout_ms)` | 밀리초 | `int` | |
+| `Timer.start(interval_ns, repeat_count)` | 나노초 | `int` | |
+
 ## Receive flow state
 
 `ReceiveFlowState`는 `RUNNING = 0`, `PAUSED = 1`인 `IntEnum`이다.
@@ -213,7 +228,7 @@ errno를 담은 `ConfigError`를 발생시킨다.
 함수군별 오류는 [공통 오류 코드 표](../README.ko.md#error-code-표)의 66개 non-OK 코드를 보존한다. 코드의
 열거 타입은 함수군별 `*Result`다. `ErrorCode`는 Core 전용 errno를 열거한다.
 
-Core result를 반환하는 호출은 Python의 대응 error에 `result`, `code`, `native_errno`를 제공한다.
+Core result를 반환하는 호출은 Python의 대응 error에 `result`, `code`, `internal_errno`를 제공한다.
 입력 형식 오류는 호출 전에 검사할 수 있지만, native operation failure를 일반 `ValueError`로 바꾸지
 않는다. `SubmitError`, `RequestError`, `RecvError`, `BindError`, `ConnectError`, `ConfigError`,
 `CloseError`와 `HandlerError`는 `ZlinkError` 계열이다.

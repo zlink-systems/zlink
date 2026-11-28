@@ -529,6 +529,13 @@ condition. A local and remote owner have the same handler, metadata, and
 completion meaning. A direct call with no Instance intent is an
 existing-only operation, targeting only an already-existing Ready Spot.
 
+A message addressed by Spot ID (a direct call or a cold activation with Instance
+intent) finds its target by Spot ID and route and its handler by packet name.
+The inner application envelope header's `channelName` isn't used for this
+dispatch. The sending MeshNode may leave it as an empty string, and the
+receiving MeshNode doesn't reject the message because the value is empty or has
+any particular value.
+
 - **If close and recreate happened on the same owner after resolve, the
   current Ready Spot at the moment the target queue accepts it processes
   the message.**
@@ -614,6 +621,15 @@ The close procedure proceeds in the following order.
    or `Unavailable` when it is relocating (before or after the seal), and a send is recorded in
    diagnostics. An already accepted message is not placed again
    ([Submit and Completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification)).
+
+**When a Close for the same incarnation is already registered, a later Close request creates no new Close
+work item and joins that Close's result.** Joining is decided once, when the request arrives, by that incarnation's
+single Close registration. The request isn't decided after waiting for a catalog or lifecycle lane turn, and isn't
+decided again while it waits on the steps of the Close in progress. The registration is released when that
+Close's result is settled. If the joined caller's
+cancellation is observed before the shared result is settled, that call ends as cancelled and the Close in
+progress is unaffected. An internal reason a lifecycle turn couldn't resume (the Spot is closed) isn't the
+joined call's result; a joined call ends only with the shared result or its own cancellation. Own cancellation exists only in languages whose public Close accepts a caller cancellation (a cancellation token, signal and so on). In a language whose public Close does not (C++ `spot_context_t::close()`), a joined call ends only with the shared result.
 
 **A context Close requested before Ready starts after Ready.** Handlers and timer callbacks don't run
 before Ready ([Spot timer §1](10-spot-timer.en.md#1-timer-generation-and-cancel)), so such a request only comes from

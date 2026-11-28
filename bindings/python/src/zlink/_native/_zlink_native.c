@@ -64,15 +64,6 @@ typedef struct publisher_send_op_t
     int submitted;
 } publisher_send_op_t;
 
-typedef struct bytes_parts_owner_t
-{
-    PyObject_HEAD PyObject *parts;
-    char *open_parts;
-    char inline_open_part;
-    Py_ssize_t part_count;
-    int closed;
-} bytes_parts_owner_t;
-
 typedef struct native_parts_owner_t
 {
     PyObject_HEAD zlink_msg_t *parts;
@@ -195,125 +186,6 @@ static PyObject *result_tuple (int rc, int err)
 {
     return Py_BuildValue ("ii", rc, err);
 }
-
-static void bytes_parts_owner_dealloc (bytes_parts_owner_t *owner)
-{
-    Py_XDECREF (owner->parts);
-    if (owner->open_parts != &owner->inline_open_part)
-        PyMem_Free (owner->open_parts);
-    Py_TYPE (owner)->tp_free ((PyObject *) owner);
-}
-
-static int bytes_parts_owner_check_index (bytes_parts_owner_t *owner, Py_ssize_t index)
-{
-    if (index < 0 || index >= owner->part_count) {
-        PyErr_SetString (PyExc_IndexError, "received part index out of range");
-        return -1;
-    }
-    if (owner->closed || !owner->open_parts[index]) {
-        PyErr_SetString (PyExc_RuntimeError, "received message is closed");
-        return -1;
-    }
-    return 0;
-}
-
-static int
-bytes_parts_owner_index (bytes_parts_owner_t *owner, PyObject *index_obj, Py_ssize_t *index_out)
-{
-    Py_ssize_t index = PyLong_AsSsize_t (index_obj);
-    if (index == -1 && PyErr_Occurred ())
-        return -1;
-    if (bytes_parts_owner_check_index (owner, index) != 0)
-        return -1;
-    *index_out = index;
-    return 0;
-}
-
-static PyObject *bytes_parts_owner_part_count (bytes_parts_owner_t *owner, void *closure)
-{
-    (void) closure;
-    return PyLong_FromSsize_t (owner->part_count);
-}
-
-static PyObject *bytes_parts_owner_size (bytes_parts_owner_t *owner, PyObject *index_obj)
-{
-    Py_ssize_t index = 0;
-    PyObject *part = NULL;
-    if (bytes_parts_owner_index (owner, index_obj, &index) != 0)
-        return NULL;
-    part = PyTuple_GET_ITEM (owner->parts, index);
-    return PyLong_FromSsize_t (PyBytes_GET_SIZE (part));
-}
-
-static PyObject *bytes_parts_owner_data (bytes_parts_owner_t *owner, PyObject *index_obj)
-{
-    Py_ssize_t index = 0;
-    PyObject *part = NULL;
-    if (bytes_parts_owner_index (owner, index_obj, &index) != 0)
-        return NULL;
-    part = PyTuple_GET_ITEM (owner->parts, index);
-    return PyMemoryView_FromObject (part);
-}
-
-static PyObject *bytes_parts_owner_to_bytes (bytes_parts_owner_t *owner, PyObject *index_obj)
-{
-    Py_ssize_t index = 0;
-    PyObject *part = NULL;
-    if (bytes_parts_owner_index (owner, index_obj, &index) != 0)
-        return NULL;
-    part = PyTuple_GET_ITEM (owner->parts, index);
-    Py_INCREF (part);
-    return part;
-}
-
-static PyObject *bytes_parts_owner_close_part (bytes_parts_owner_t *owner, PyObject *index_obj)
-{
-    Py_ssize_t index = PyLong_AsSsize_t (index_obj);
-    if (index == -1 && PyErr_Occurred ())
-        return NULL;
-    if (owner->closed || index < 0 || index >= owner->part_count)
-        Py_RETURN_NONE;
-    owner->open_parts[index] = 0;
-    for (Py_ssize_t i = 0; i < owner->part_count; ++i) {
-        if (owner->open_parts[i])
-            Py_RETURN_NONE;
-    }
-    owner->closed = 1;
-    Py_RETURN_NONE;
-}
-
-static PyObject *bytes_parts_owner_close (bytes_parts_owner_t *owner, PyObject *Py_UNUSED (ignored))
-{
-    if (!owner->closed) {
-        owner->closed = 1;
-        if (owner->open_parts)
-            memset (owner->open_parts, 0, (size_t) owner->part_count);
-    }
-    Py_RETURN_NONE;
-}
-
-static PyMethodDef bytes_parts_owner_methods[] = {
-  {"size", (PyCFunction) bytes_parts_owner_size, METH_O, "Return part size."},
-  {"data", (PyCFunction) bytes_parts_owner_data, METH_O, "Return part memoryview."},
-  {"to_bytes", (PyCFunction) bytes_parts_owner_to_bytes, METH_O, "Return part bytes."},
-  {"close_part", (PyCFunction) bytes_parts_owner_close_part, METH_O, "Close one part."},
-  {"close", (PyCFunction) bytes_parts_owner_close, METH_NOARGS, "Close all parts."},
-  {NULL, NULL, 0, NULL},
-};
-
-static PyGetSetDef bytes_parts_owner_getset[] = {
-  {"_part_count", (getter) bytes_parts_owner_part_count, NULL, "part count", NULL},
-  {NULL, NULL, NULL, NULL, NULL},
-};
-
-static PyTypeObject bytes_parts_owner_type = {
-  PyVarObject_HEAD_INIT (NULL, 0).tp_name = "zlink._native._zlink_native.BytesReceivedPartsOwner",
-  .tp_basicsize = sizeof (bytes_parts_owner_t),
-  .tp_dealloc = (destructor) bytes_parts_owner_dealloc,
-  .tp_flags = Py_TPFLAGS_DEFAULT,
-  .tp_methods = bytes_parts_owner_methods,
-  .tp_getset = bytes_parts_owner_getset,
-};
 
 static void native_parts_owner_close_all (native_parts_owner_t *owner)
 {
@@ -1297,111 +1169,6 @@ static PyObject *py_publish_parts (PyObject *self, PyObject *args)
 }
 
 
-static PyObject *build_recv_result (int rc,
-                                    int err,
-                                    const zlink_routing_id_t *routing_id,
-                                    received_parts_t *received)
-{
-    PyObject *routing_obj = Py_None;
-    PyObject *parts_obj = Py_None;
-    PyObject *result = NULL;
-
-    if (rc != ZLINK_RECV_OK) {
-        Py_INCREF (Py_None);
-        Py_INCREF (Py_None);
-        return Py_BuildValue ("iiNN", rc, err, Py_None, Py_None);
-    }
-
-    if (routing_id && routing_id->size > 0) {
-        routing_obj = PyBytes_FromStringAndSize ((const char *) routing_id->data,
-                                                 (Py_ssize_t) routing_id->size);
-        if (!routing_obj)
-            return NULL;
-    } else {
-        Py_INCREF (Py_None);
-    }
-
-    parts_obj = PyTuple_New (received->count);
-    if (!parts_obj) {
-        Py_DECREF (routing_obj);
-        return NULL;
-    }
-
-    for (Py_ssize_t i = 0; i < received->count; ++i) {
-        void *data = zlink_msg_data (&received->parts[i]);
-        size_t size = zlink_msg_size (&received->parts[i]);
-        PyObject *part = PyBytes_FromStringAndSize ((const char *) data, (Py_ssize_t) size);
-        if (!part) {
-            Py_DECREF (routing_obj);
-            Py_DECREF (parts_obj);
-            return NULL;
-        }
-        PyTuple_SET_ITEM (parts_obj, i, part);
-    }
-
-    result = Py_BuildValue ("iiNN", rc, err, routing_obj, parts_obj);
-    return result;
-}
-
-static PyObject *py_recv_parts (PyObject *self, PyObject *args)
-{
-    unsigned long long handle_value = 0;
-    int flags = 0;
-    int rc = ZLINK_RECV_OK;
-    int err = 0;
-    zlink_routing_id_t routing_copy;
-    int has_routing = 0;
-    received_parts_t received = {0};
-
-    (void) self;
-    memset (&routing_copy, 0, sizeof (routing_copy));
-    if (!PyArg_ParseTuple (args, "Ki", &handle_value, &flags))
-        return NULL;
-    if (ensure_received_capacity (&received, 1) != 0) {
-        PyErr_NoMemory ();
-        return NULL;
-    }
-
-    void *handle = (void *) (uintptr_t) handle_value;
-    Py_BEGIN_ALLOW_THREADS while (1)
-    {
-        const zlink_routing_id_t *source_rid = NULL;
-        size_t part_count = 0;
-        rc = zlink_recv (handle, &source_rid, received.parts,
-                         (size_t) received.capacity, &part_count,
-                         (zlink_recv_flags_t) flags);
-        if (rc == ZLINK_RECV_BUFFER_TOO_SMALL) {
-            if (part_count <= (size_t) received.capacity
-                || ensure_received_capacity (&received, part_count) != 0) {
-                err = part_count <= (size_t) received.capacity ? EPROTO : errno;
-                rc = ZLINK_RECV_INTERNAL_ERROR;
-                break;
-            }
-            continue;
-        }
-        if (rc != ZLINK_RECV_OK) {
-            err = zlink_errno ();
-            break;
-        }
-        if (part_count == 0 || part_count > (size_t) received.capacity) {
-            err = EPROTO;
-            rc = ZLINK_RECV_INTERNAL_ERROR;
-            break;
-        }
-        received.count = (Py_ssize_t) part_count;
-        if (source_rid && source_rid->size > 0) {
-            routing_copy = *source_rid;
-            has_routing = 1;
-        }
-        break;
-    }
-    Py_END_ALLOW_THREADS
-
-      PyObject *result = build_recv_result (rc, err, has_routing ? &routing_copy : NULL, &received);
-    close_received_parts (&received);
-    return result;
-}
-
 static PyObject *py_recv_owner (PyObject *self, PyObject *args)
 {
     unsigned long long handle_value = 0;
@@ -1595,73 +1362,6 @@ static PyObject *py_router_recv_owner (PyObject *self, PyObject *args)
                           generation_obj);
 }
 
-static PyObject *py_router_routes_snapshot (PyObject *self, PyObject *args)
-{
-    unsigned long long handle_value = 0;
-    (void) self;
-    if (!PyArg_ParseTuple (args, "K", &handle_value))
-        return NULL;
-    void *handle = (void *) (uintptr_t) handle_value;
-
-    size_t capacity = 16;
-    zlink_router_route_t *routes =
-      (zlink_router_route_t *) PyMem_Malloc (capacity * sizeof (zlink_router_route_t));
-    if (!routes) {
-        PyErr_NoMemory ();
-        return NULL;
-    }
-    zlink_config_result_t rc;
-    size_t count = 0;
-    for (;;) {
-        rc = zlink_router_routes_snapshot (handle, routes, capacity, &count);
-        if (rc != ZLINK_CONFIG_BUFFER_TOO_SMALL || count <= capacity)
-            break;
-        /* Core keeps POLLROUTE readiness on this result; retry with the
-         * count it reported (the set can grow again before the retry). */
-        zlink_router_route_t *grown = (zlink_router_route_t *) PyMem_Realloc (
-          routes, count * sizeof (zlink_router_route_t));
-        if (!grown) {
-            PyMem_Free (routes);
-            PyErr_NoMemory ();
-            return NULL;
-        }
-        routes = grown;
-        capacity = count;
-    }
-
-    const int err = rc == ZLINK_CONFIG_OK ? 0 : zlink_errno ();
-    if (rc != ZLINK_CONFIG_OK) {
-        PyMem_Free (routes);
-        Py_INCREF (Py_None);
-        return Py_BuildValue ("iiN", (int) rc, err, Py_None);
-    }
-
-    PyObject *rows = PyList_New ((Py_ssize_t) count);
-    if (!rows) {
-        PyMem_Free (routes);
-        return NULL;
-    }
-    for (size_t index = 0; index < count; ++index) {
-        PyObject *rid = PyBytes_FromStringAndSize (
-          (const char *) routes[index].rid.data, (Py_ssize_t) routes[index].rid.size);
-        PyObject *generation =
-          rid ? PyLong_FromUnsignedLongLong (routes[index].route_generation) : NULL;
-        PyObject *row = generation ? PyTuple_Pack (2, rid, generation) : NULL;
-        Py_XDECREF (rid);
-        Py_XDECREF (generation);
-        if (!row) {
-            PyMem_Free (routes);
-            Py_DECREF (rows);
-            return NULL;
-        }
-        PyList_SET_ITEM (rows, (Py_ssize_t) index, row);
-    }
-    PyMem_Free (routes);
-    return Py_BuildValue ("iiN", (int) rc, err, rows);
-}
-
-/* The Python receiver owns topic growth for native and ctypes paths. Call it
- * only after the native short-topic receive reports insufficient capacity. */
 static PyObject *call_topic_receive_helper (unsigned long long handle_value,
                                             int flags)
 {
@@ -1847,7 +1547,6 @@ static PyObject *py_msg_bytes (PyObject *self, PyObject *arg)
 static PyMethodDef zlink_native_methods[] = {
   {"message_data", py_message_data, METH_VARARGS, "Build the writable ctypes-backed Message view."},
   {"msg_close", py_msg_close, METH_O, "Close one native message."},
-  {"start_request", py_start_request, METH_VARARGS, "Materialize, submit and register one managed request."},
   {"start_send", py_start_send, METH_VARARGS, "Materialize, submit and register one managed send."},
   {"completion_messages", py_completion_messages, METH_VARARGS, "Clone completion payload into independent Messages."},
   {"install_owner_methods", py_install_owner_methods, METH_O, "Install the native completion drain loop."},
@@ -1872,14 +1571,10 @@ static PyMethodDef zlink_native_methods[] = {
    "Submit routed multipart payload parts through zlink_send_rid."},
   {"publish_parts", py_publish_parts, METH_VARARGS,
    "Submit topic multipart payload parts through zlink_publish."},
-  {"recv_parts", py_recv_parts, METH_VARARGS,
-   "Receive multipart payload parts through zlink_recv."},
   {"recv_owner", py_recv_owner, METH_VARARGS,
-   "Receive multipart payload parts as a native bytes owner."},
+   "Receive multipart payload parts as a native owner."},
   {"router_recv_owner", py_router_recv_owner, METH_VARARGS,
    "Receive routed multipart payload parts as a native owner."},
-  {"router_routes_snapshot", py_router_routes_snapshot, METH_VARARGS,
-   "Read the ROUTER selected-route snapshot."},
   {"subscribe_owner", py_subscribe_owner, METH_VARARGS,
    "Receive topic multipart payload parts through the shared receiver."},
   {NULL, NULL, 0, NULL},
@@ -1898,8 +1593,6 @@ PyMODINIT_FUNC PyInit__zlink_native (void)
     if (PyType_Ready (&routed_send_op_type) < 0)
         return NULL;
     if (PyType_Ready (&publisher_send_op_type) < 0)
-        return NULL;
-    if (PyType_Ready (&bytes_parts_owner_type) < 0)
         return NULL;
     if (PyType_Ready (&native_parts_owner_type) < 0)
         return NULL;
@@ -1925,13 +1618,6 @@ PyMODINIT_FUNC PyInit__zlink_native (void)
     Py_INCREF (&publisher_send_op_type);
     if (PyModule_AddObject (module, "PublisherSendOp", (PyObject *) &publisher_send_op_type) != 0) {
         Py_DECREF (&publisher_send_op_type);
-        Py_DECREF (module);
-        return NULL;
-    }
-    Py_INCREF (&bytes_parts_owner_type);
-    if (PyModule_AddObject (module, "BytesReceivedPartsOwner", (PyObject *) &bytes_parts_owner_type)
-        != 0) {
-        Py_DECREF (&bytes_parts_owner_type);
         Py_DECREF (module);
         return NULL;
     }

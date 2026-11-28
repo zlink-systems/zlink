@@ -2,8 +2,14 @@ import ctypes
 import os
 from pathlib import Path
 
-from zlink._native import _zlink_native
+import pytest
+
+from zlink._runtime.handles.native_support import _native_extension
 from zlink._native.ffi import (
+    ContextOption,
+    ZLINK_COMPLETION_REQUEST,
+    ZLINK_COMPLETION_SEND,
+    ZLINK_COMPLETION_WRITABLE,
     ZlinkCompletion,
     ZlinkMonitorEvent,
     ZlinkMonitorStatus,
@@ -18,6 +24,21 @@ from zlink._native.ffi import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "zlink"
+
+
+def test_context_option_codes_match_core_abi():
+    assert int(ContextOption.IO_THREADS) == 1
+    assert int(ContextOption.MAX_SOCKETS) == 2
+    assert int(ContextOption.CTX_OPT_BLOCKY) == 10
+    assert int(ContextOption.AUTO_HWM_PROFILE) == 17
+    assert int(ContextOption.AUTO_HWM_MEMORY_LIMIT_BYTES) == 19
+    assert int(ContextOption.AUTO_HWM_CORE_BUDGET_BYTES) == 21
+
+
+def test_completion_kind_codes_match_core_abi():
+    kinds = (ZLINK_COMPLETION_SEND, ZLINK_COMPLETION_REQUEST, ZLINK_COMPLETION_WRITABLE)
+    assert kinds == (1, 2, 3)
+    assert all(isinstance(kind, int) for kind in kinds)
 
 
 def test_ffi_layouts_are_the_core_0_17_layouts():
@@ -54,8 +75,9 @@ def test_whole_message_and_completion_symbols_are_bound_directly():
         assert callable(getattr(native, name))
 
 
+@pytest.mark.skipif(_native_extension is None, reason="checks C extension exports")
 def test_native_extension_exposes_only_current_raw_bridges():
-    names = {name for name in dir(_zlink_native) if not name.startswith("__")}
+    names = {name for name in dir(_native_extension) if not name.startswith("__")}
     assert "dealer_recv_owner" not in names
     assert "TargetSendOp" in names
     assert "router_recv_owner" in names

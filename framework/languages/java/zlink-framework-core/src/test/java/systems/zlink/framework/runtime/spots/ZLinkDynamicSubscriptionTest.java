@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -35,8 +36,9 @@ final class ZLinkDynamicSubscriptionTest {
                 .addSpotFactory(
                         "Subscriber", Subscriber.class, factory -> factory.disableRelocation());
         try (var runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             runtime.spotManager()
                     .create("Subscriber")
                     .submit()

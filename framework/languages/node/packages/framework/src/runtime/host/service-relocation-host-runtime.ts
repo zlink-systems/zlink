@@ -30,6 +30,7 @@ import { OperationTimeoutError } from '../foundation/operation-registry';
 import { durableRequestCanReplay } from '../foundation/durable-service-request';
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { randomBytes } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   type RoutingId,
   type Type,
@@ -119,6 +120,7 @@ import {
 } from '../foundation/service-relocation-aggregate-committer';
 import {
   ServiceRelocationAuthorityError,
+  ServiceRelocationAuthorityUnsettledAtStopError,
   ServiceRelocationPostCommitError
 } from '../foundation/service-relocation-coordinator';
 import {
@@ -151,12 +153,13 @@ import {
   ReadyOwnerKind,
   type ReceiveRecord
 } from '../foundation/service-runtime-contracts';
-import type {
-  ServiceRelocationRequest,
-  ServiceRelocationRequestAdmission,
-  ServiceSpotMessageFollowSeal,
-  ServiceSpotTargetAdmission,
-  ServiceStatefulMailboxData
+import {
+  instanceRouteFromAuthority,
+  type ServiceRelocationRequest,
+  type ServiceRelocationRequestAdmission,
+  type ServiceSpotMessageFollowSeal,
+  type ServiceSpotTargetAdmission,
+  type ServiceStatefulMailboxData
 } from '../foundation/service-stateful-runtime';
 import {
   M6bServiceWireCommand,
@@ -2770,7 +2773,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
                   expectedStoreVersion: snapshot.storeVersion,
                   ownerTransition: 'newOwner' as const,
                   authorityPayload: targetPayload(snapshot, membership),
-                  membershipMutation: encodeMembershipMutation(membership)
+                  membershipMutation: Buffer.from('[]')
                 };
               });
             if (store.storeAggregateInventory === undefined) {
@@ -3448,7 +3451,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // The stop deadline prevents new Store calls without cancelling a submitted call.
       const observed = await this.readSourceSettlement(store, envelope, primary, target).catch(
         (error: unknown) => {
-          this.options.shutdownDeadline?.()?.throwIfAborted();
+          requireSourceSettlementBeforeStop(this.options.shutdownDeadline?.());
           if (!isIndeterminateLocationStoreFailure(error)) throw error;
           return undefined;
         }
@@ -3464,7 +3467,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         (this.disposed && window !== undefined);
       if (preserve && observed?.kind === 'source') {
         // An unreadable lease is an uncertain result, not an expiry.
-        this.options.shutdownDeadline?.()?.throwIfAborted();
+        requireSourceSettlementBeforeStop(this.options.shutdownDeadline?.());
         if (
           await this.exactSourceLeaseExpired(owner, undefined, store).catch((error: unknown) => {
             if (!isIndeterminateLocationStoreFailure(error)) throw error;
@@ -3474,7 +3477,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           return 'lost';
         const { payload } = observed.current;
         const publication = this.codec.read(payload);
-        this.options.shutdownDeadline?.()?.throwIfAborted();
+        requireSourceSettlementBeforeStop(this.options.shutdownDeadline?.());
         const preserved = await store
           .compareExchangeAuthority(
             { value: primaryKey(envelope) } as ZLinkAuthorityKey,
@@ -3507,9 +3510,13 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }
       if (!preserve && window !== undefined) await this.resendSourceCutover(window);
       // The caller awaits this settlement, so the retry timer keeps the loop alive.
-      await new Promise<void>((resolve) =>
-        setTimeout(resolve, RELOCATION_AUTHORITY_POLL_INTERVAL_MS)
-      );
+      const stopDeadline = this.options.shutdownDeadline?.();
+      try {
+        await delay(RELOCATION_AUTHORITY_POLL_INTERVAL_MS, undefined, { signal: stopDeadline });
+      } catch (error) {
+        requireSourceSettlementBeforeStop(stopDeadline);
+        throw error;
+      }
     }
   }
 
@@ -3528,7 +3535,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const followAuthorities = new Map<string, ZLinkAuthoritySnapshot>();
     let primaryCurrent: ZLinkAuthoritySnapshot | undefined;
     for (const participant of envelope.participants) {
-      this.options.shutdownDeadline?.()?.throwIfAborted();
+      requireSourceSettlementBeforeStop(this.options.shutdownDeadline?.());
       const current = await store.readAuthority({
         value: participant.key
       } as ZLinkAuthorityKey);
@@ -5275,7 +5282,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const key =
       request.kind === 'actor'
         ? encodeAuthorityKey('actor', request.target.actor.actorId)
-        : encodeAuthorityKey('user_spot', request.target.spot.spotId);
+        : encodeAuthorityKey(
+            request.kind === 'instanceSpot' ? 'instance_spot' : 'user_spot',
+            request.target.spot.spotId
+          );
     const generation =
       request.kind === 'actor' ? request.target.actor.generation : request.target.spot.generation;
     const nodeRid =
@@ -5344,9 +5354,36 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             this.options.actorTransfer.captureTargetRequest(meshName, confirm, ...args)
         };
       }
-      if (hidden.activation !== undefined) {
-        return { kind: 'spot', activation: hidden.activation, confirm };
-      }
+      const activation = hidden.activation;
+      if (activation === undefined) continue;
+      if (request.kind === 'spot') return { kind: 'spot', activation, confirm };
+
+      const targetSpotId = request.target.spot.spotId;
+      const { expected } = participant;
+      const plan = reservation.plan;
+      return {
+        kind: 'instanceSpot',
+        activation,
+        confirm,
+        route: instanceRouteFromAuthority(targetSpotId, {
+          allocation: {
+            ...expected.allocation,
+            descriptor: plan.targetDescriptor,
+            descriptorLifecycleGeneration: plan.targetDescriptorLifecycleGeneration
+          },
+          objectGeneration: expected.objectGeneration,
+          authorityOwnerGeneration: fence.authorityOwnerGeneration,
+          ownerId: plan.targetOwner.ownerId,
+          ownerLeaseGeneration: plan.targetOwner.leaseGeneration,
+          // This route stays in the queued record. Publication supplies the committed StoreVersion.
+          storeVersion: expected.storeVersion
+        }),
+        target: {
+          targetSpotId,
+          stableType: expected.allocation.stableType,
+          objectGeneration: expected.objectGeneration
+        }
+      };
     }
     return undefined;
   }
@@ -6007,16 +6044,10 @@ function publishRelocatedSpotRoutes(
   };
   node?.rememberSpotRoute?.(route);
   if (authority.allocation.objectKind === 'instance_spot') {
-    node?.registerInstanceIntent?.(authority.allocation.stableType, {
-      targetSpotId: spotId,
-      objectGeneration: authority.objectGeneration,
-      targetNodeRid: route.targetNodeRid,
-      targetNodeGeneration: route.targetNodeGeneration,
-      ownerId: authority.ownerId,
-      authorityOwnerGeneration: route.authorityOwnerGeneration,
-      leaseGeneration: route.ownerLeaseGeneration,
-      storeVersion: route.storeVersion
-    });
+    node?.registerInstanceIntent?.(
+      authority.allocation.stableType,
+      instanceRouteFromAuthority(spotId, authority)
+    );
   }
 }
 
@@ -6425,13 +6456,17 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     hidden.replayCompletion = Promise.all(
       hidden.replayPackets.map(async (record, index) => {
         let terminal: Promise<void> | undefined;
-        const replay = decodeRelocatedInstanceSpotRecord(record, (...result) => {
-          if (terminal !== undefined || hidden.onReplayResult === undefined) return false;
-          terminal = hidden.onReplayResult(record, BigInt(index + 1), result);
-          void terminal.catch(() => undefined);
-          return true;
-        });
-        await manager.dispatchMeshInstance(this.meshName, owner, replay, undefined, admission);
+        const replay = decodeRelocatedInstanceSpotRecord(
+          record,
+          (...result) => {
+            if (terminal !== undefined || hidden.onReplayResult === undefined) return false;
+            terminal = hidden.onReplayResult(record, BigInt(index + 1), result);
+            void terminal.catch(() => undefined);
+            return true;
+          },
+          admission
+        );
+        await manager.dispatchMeshInstance(this.meshName, owner, replay);
         await terminal;
       })
     ).then(() => undefined);
@@ -6807,7 +6842,7 @@ function appendCanonicalActorJoinRecovery(
         nodeGeneration: coordinator.nodeGeneration,
         expectedAuthorityStoreVersion: coordinator.expectedAuthorityStoreVersion
       },
-      operationId: recovery.admissionOperationId,
+      operationId: profile.completionOperationId,
       ...(recovery.replyContentType === undefined
         ? {}
         : { replyContentType: recovery.replyContentType }),
@@ -7119,6 +7154,12 @@ function wireIdText(value: { readonly high: bigint; readonly low: bigint }): str
  * than the generic internal-failure code (spec 15 §4).
  */
 export class ServiceRelocationDataLostError extends Error {}
+
+function requireSourceSettlementBeforeStop(stopDeadline: AbortSignal | undefined): void {
+  if (stopDeadline?.aborted === true) {
+    throw new ServiceRelocationAuthorityUnsettledAtStopError(stopDeadline.reason);
+  }
+}
 
 /** The local source lifecycle ended a pending relocation operation. */
 class ServiceRelocationRuntimeStoppedError extends Error {
@@ -7842,20 +7883,6 @@ function decodeActorSessionServiceWireFence(
       bindingGeneration: positive('bindingGeneration')
     }
   };
-}
-
-function encodeMembershipMutation(membership: ServiceRelocationMembership | undefined): Buffer {
-  const mutations =
-    membership === undefined
-      ? []
-      : [
-          {
-            ...membership,
-            spotObjectGeneration: membership.spotObjectGeneration.toString(),
-            membershipEpoch: membership.membershipEpoch.toString()
-          }
-        ];
-  return Buffer.from(JSON.stringify(mutations));
 }
 
 function addCapacity(left: ZLinkCapacityVector, right: ZLinkCapacityVector): ZLinkCapacityVector {

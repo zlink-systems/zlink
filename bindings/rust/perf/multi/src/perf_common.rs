@@ -1,5 +1,13 @@
 //! Multi perf common utilities.
 
+#[path = "perf_measurement.rs"]
+mod measurement;
+#[path = "perf_send_phase.rs"]
+mod send_phase;
+
+pub use measurement::*;
+pub use send_phase::*;
+
 use std::collections::VecDeque;
 use std::fs;
 use std::future::Future;
@@ -23,11 +31,18 @@ use zlink::{
 
 const DEFAULT_TIMEOUT_MS: usize = 200;
 
+/// Socket timeout option from a Core-style millisecond value: negative waits
+/// indefinitely (`None`), zero or more is that many milliseconds.
+pub fn timeout_ms(ms: i32) -> Option<std::time::Duration> {
+    u64::try_from(ms).ok().map(std::time::Duration::from_millis)
+}
+
 pub const STOP_TOKEN: &[u8] = b"__zlink_perf_stop__";
 pub const HEADER_SIZE: usize = 29;
 pub const PHASE_WARMUP: u8 = 0;
 pub const PHASE_ACTIVE: u8 = 1;
 pub const PHASE_COOLDOWN: u8 = 2;
+pub const PHASE_LATENCY: u8 = 3;
 pub const MAGIC: u32 = 0x5A4C_4E4B; // "ZLNK"
 pub const BENCHMARK_RUN_ID: u32 = 1;
 const DEFAULT_MULTI_MONITOR_HWM_BYTES: u64 = 4_096_000;
@@ -237,12 +252,16 @@ impl<F: Future> ConcurrentTasks<F> {
 }
 
 pub fn encode_header(buf: &mut [u8], phase: u8, msg_size: u32, seq: u64) {
+    encode_header_at(buf, phase, msg_size, seq, now_ns());
+}
+
+pub fn encode_header_at(buf: &mut [u8], phase: u8, msg_size: u32, seq: u64, sent: u64) {
     buf[0..4].copy_from_slice(&MAGIC.to_le_bytes());
     buf[4..8].copy_from_slice(&BENCHMARK_RUN_ID.to_le_bytes());
     buf[8] = phase;
     buf[9..13].copy_from_slice(&msg_size.to_le_bytes());
     buf[13..21].copy_from_slice(&seq.to_le_bytes());
-    buf[21..29].copy_from_slice(&(now_ns() as i64).to_le_bytes());
+    buf[21..29].copy_from_slice(&sent.to_le_bytes());
 }
 
 pub fn decode_magic(data: &[u8]) -> u32 {
@@ -548,7 +567,7 @@ pub fn emit_unsupported(pattern: &str, transport: &str, reason: &str) {
 
 pub fn is_transport_unsupported_error(err: &ZlinkError) -> bool {
     matches!(
-        err.native_errno(),
+        err.internal_errno(),
         libc::EPERM | libc::EACCES | libc::ENOTSUP
     )
 }
@@ -562,7 +581,7 @@ where
         emit_unsupported(
             pattern,
             transport,
-            &format!("{stage}_errno_{}", err.native_errno()),
+            &format!("{stage}_errno_{}", err.internal_errno()),
         );
         return true;
     }
@@ -573,6 +592,19 @@ pub fn is_stop_token(data: &[u8]) -> bool {
     data == STOP_TOKEN
 }
 
+pub fn is_stop_message(parts: &[Message]) -> bool {
+    matches!(parts, [part] if is_stop_token(part.as_bytes()))
+}
+
+pub fn is_phase_marker(data: &[u8], size: usize, phase: u8) -> bool {
+    data.len() == HEADER_SIZE
+        && decode_magic(data) == MAGIC
+        && decode_run_id(data) == BENCHMARK_RUN_ID
+        && decode_msg_size(data) as usize == size
+        && decode_phase(data) == phase
+        && data[13..HEADER_SIZE].iter().all(|byte| *byte == 0)
+}
+
 pub fn is_valid_message(data: &[u8], expected_size: usize) -> bool {
     data.len() == expected_size.max(HEADER_SIZE)
         && decode_magic(data) == MAGIC
@@ -580,34 +612,33 @@ pub fn is_valid_message(data: &[u8], expected_size: usize) -> bool {
         && decode_msg_size(data) as usize == expected_size
 }
 
-pub fn is_valid_active_message(data: &[u8], expected_size: usize) -> bool {
-    is_valid_message(data, expected_size) && decode_phase(data) == PHASE_ACTIVE
-}
-
-pub fn elapsed_since_sent_ns(data: &[u8]) -> Option<f64> {
-    let sent_ts_ns = decode_sent_ts_ns(data);
-    if sent_ts_ns <= 0 {
-        return None;
-    }
-    now_ns()
-        .checked_sub(sent_ts_ns as u64)
-        .map(|elapsed| elapsed as f64)
-}
-
-pub fn record_active_rtt_latency(
+pub fn record_measurement_receive(
     data: &[u8],
-    expected_size: usize,
+    size: usize,
+    now: u64,
+    end: u64,
+    sample_start: Option<u64>,
+    divisor: f64,
     stats: &mut LatencyStats,
 ) -> bool {
-    if !is_valid_active_message(data, expected_size) {
+    if !is_valid_message(data, size) {
         return false;
     }
-
-    stats.record_received();
-    if let Some(elapsed_ns) = elapsed_since_sent_ns(data) {
-        stats.record_latency_sample_ns(elapsed_ns / 2.0);
+    let phase = decode_phase(data);
+    if let Some(start) = sample_start {
+        if phase == PHASE_LATENCY {
+            let sent = decode_sent_ts_ns(data);
+            if sent > 0 && now >= sent as u64 {
+                stats.record_ns((now - sent as u64) as f64 / divisor);
+            }
+        }
+        matches!(phase, PHASE_WARMUP | PHASE_LATENCY) && now >= start && now < end
+    } else {
+        if phase == PHASE_ACTIVE && active_receive(now, end) {
+            stats.record_received();
+        }
+        false
     }
-    true
 }
 
 // -- Latency stats -----------------------------------------------------------
@@ -688,6 +719,7 @@ impl LatencyStats {
         StatsResult {
             count: self.received_count,
             latency_count: self.latency_count,
+            p50_ns: percentile(&self.samples, 0.5),
             mean_ns: mean,
             p95_ns: p95,
             p99_ns: p99,
@@ -725,6 +757,7 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
 pub struct StatsResult {
     pub count: u64,
     pub latency_count: u64,
+    pub p50_ns: f64,
     pub mean_ns: f64,
     pub p95_ns: f64,
     pub p99_ns: f64,
@@ -995,15 +1028,6 @@ pub fn wait_monitor_ready_count(
     );
 }
 
-pub fn poll_idle_until(deadline: Instant, max_wait: Duration) {
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if remaining.is_zero() {
-        return;
-    }
-    let wait_ms = remaining.min(max_wait).as_millis().max(1) as i64;
-    let _ = zlink::poll(&mut [], wait_ms);
-}
-
 pub fn wait_control_readable_until(poller: &Poller, events: &mut [PollEvent], deadline: Instant) {
     wait_poller_until(poller, events, deadline, Duration::from_millis(50));
 }
@@ -1229,8 +1253,8 @@ pub fn resolve_multi_connect_ready_timeout() -> Duration {
 }
 
 pub fn resolve_multi_monitor_hwm_bytes() -> u64 {
-    let primary = std::env::var("PERF_MULTI_MONITOR_HWM").ok();
-    let fallback = std::env::var("PERF_MONITOR_HWM").ok();
+    let primary = std::env::var("PERF_MULTI_MONITOR_HWM_BYTES").ok();
+    let fallback = std::env::var("PERF_MONITOR_HWM_BYTES").ok();
     resolve_nonnegative_u64(
         primary.as_deref(),
         fallback.as_deref(),
@@ -1289,8 +1313,10 @@ fn env_or_u64(name: &str, default: u64) -> u64 {
 
 fn resolve_nonnegative_u64(primary: Option<&str>, fallback: Option<&str>, default: u64) -> u64 {
     primary
-        .and_then(|value| value.parse::<u64>().ok())
-        .or_else(|| fallback.and_then(|value| value.parse::<u64>().ok()))
+        .filter(|value| !value.is_empty())
+        .or_else(|| fallback.filter(|value| !value.is_empty()))
+        .filter(|value| value.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|value| value.parse().ok())
         .unwrap_or(default)
 }
 
@@ -1666,23 +1692,13 @@ mod tests {
         assert_eq!(cancelled.drops.load(Ordering::Relaxed), 1);
     }
 
-    fn active_payload(sent_ts_ns: i64) -> Vec<u8> {
-        let mut payload = vec![0u8; 64];
-        encode_header(&mut payload, PHASE_ACTIVE, 64, 1);
-        payload[21..29].copy_from_slice(&sent_ts_ns.to_le_bytes());
-        payload
-    }
-
     #[test]
     fn rtt_metrics_count_active_headers_without_invalid_timestamp_samples() {
-        for sent_ts_ns in [0, -1, i64::MAX] {
+        for sent in [0, u64::MAX, 101] {
+            let mut payload = vec![0; 64];
+            encode_header_at(&mut payload, PHASE_ACTIVE, 64, 1, sent);
             let mut stats = LatencyStats::with_sample_cap(8);
-            assert!(record_active_rtt_latency(
-                &active_payload(sent_ts_ns),
-                64,
-                &mut stats,
-            ));
-
+            record_measurement_receive(&payload, 64, 100, 101, None, 2.0, &mut stats);
             let result = stats.finish();
             assert_eq!(result.count, 1);
             assert_eq!(result.latency_count, 0);
@@ -1692,18 +1708,22 @@ mod tests {
 
     #[test]
     fn rtt_metrics_record_one_way_half_of_a_valid_round_trip() {
-        let sent_ts_ns = now_ns().saturating_sub(1_000_000) as i64;
+        let mut payload = vec![0; 64];
+        encode_header_at(&mut payload, PHASE_LATENCY, 64, 1, 100);
         let mut stats = LatencyStats::with_sample_cap(8);
-        assert!(record_active_rtt_latency(
-            &active_payload(sent_ts_ns),
+        assert!(record_measurement_receive(
+            &payload,
             64,
+            120,
+            200,
+            Some(100),
+            2.0,
             &mut stats,
         ));
-
         let result = stats.finish();
         assert_eq!(result.count, 1);
         assert_eq!(result.latency_count, 1);
-        assert!(result.mean_ns >= 500_000.0);
+        assert_eq!(result.mean_ns, 10.0);
         assert!(result.is_valid());
     }
 
@@ -1740,6 +1760,7 @@ mod tests {
         let stats = StatsResult {
             count: 10,
             latency_count: 10,
+            p50_ns: 1.0,
             mean_ns: 1.0,
             p95_ns: 1.0,
             p99_ns: 1.0,
@@ -1791,9 +1812,12 @@ mod tests {
             12_345
         );
         assert_eq!(resolve_nonnegative_u64(Some("0"), None, 1), 0);
+        assert_eq!(resolve_nonnegative_u64(Some(""), Some("67890"), 1), 67_890);
+        assert_eq!(resolve_nonnegative_u64(Some("-1"), Some("67890"), 1), 1);
+        assert_eq!(resolve_nonnegative_u64(Some("+1"), None, 99), 99);
         assert_eq!(
-            resolve_nonnegative_u64(Some("-1"), Some("67890"), 1),
-            67_890
+            resolve_nonnegative_u64(Some("18446744073709551616"), None, 99),
+            99
         );
         assert_eq!(resolve_nonnegative_u64(Some("invalid"), None, 99), 99);
     }

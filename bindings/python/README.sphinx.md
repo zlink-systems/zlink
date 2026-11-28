@@ -24,6 +24,5 @@ bindings/python/docs/_build/html/index.html
 ## Scope
 
 - All public symbols exported by `zlink.__init__`
-- Socket types, domain objects, enums (including `CompletionKind`), and service
-  wrappers
-- Internal modules (`_ffi`, `_native`) are not exported and will not appear
+- Raw socket types, message and event types, options, result enums, and errors
+- Public socket and message methods inherited from shared protocols

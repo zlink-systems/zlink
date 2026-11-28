@@ -408,7 +408,7 @@ public crate must cover the following stable, user-facing capabilities.
 - Context lifecycle, options, shutdown, auto-HWM recalculation, version, capability lookup, strerror.
 - Message ownership, multipart payload, routing id, received metadata, topic message, subscription event,
   and the `StreamPacket` value used for pull receive.
-- Every socket family and its typed options. `SubSocket::subscription_at(index)` and `XSubSocket::subscription_at(index)` return that index's subscription filter and whether it is a pattern. If that index doesn't exist, they return `None`.
+- Every socket family and its typed options. `SubSocket::subscription_at(index)` and `XSubSocket::subscription_at(index)` return that index's subscription filter and whether it is a pattern. If that index doesn't exist, they return `Ok(None)`. The query rule is [the common Subscription Query](../README.en.md#subscription-query).
 - Monitor, poller, timer, readiness semantics.
 
 Rust names and the ownership model may differ from C, but behavior must

@@ -74,15 +74,18 @@ export function decodeLegacyAggregate(key: ZLinkStoreKey, bytes: Uint8Array): Le
     if (separator <= 0) throw new TypeError('Invalid aggregate root key.');
     const id = decodeURIComponent(suffix.slice(0, separator));
     const aggregateGeneration = generation(suffix.slice(separator + 1));
+    const common = node && header.aggregateId !== undefined;
     if (
-      !node &&
-      (text(header.aggregateId).replaceAll('-', '').toLowerCase() !== id ||
+      (!node || common) &&
+      ((common
+        ? text(header.aggregateId)
+        : text(header.aggregateId).replaceAll('-', '').toLowerCase()) !== id ||
         generation(header.aggregateGeneration) !== aggregateGeneration)
     ) {
       throw new TypeError('The aggregate header does not match its root key.');
     }
     const target = jsonObject(header.targetDescriptor);
-    const ridHex = node ? nodeRoutingIdHex(target.rid) : text(target.routingIdHex);
+    const ridHex = node && !common ? nodeRoutingIdHex(target.rid) : text(target.routingIdHex);
     return {
       layout: node ? 'node' : 'dotnet',
       phase: phase(node ? record.state : record.status),
@@ -216,7 +219,10 @@ function phase(value: unknown): LegacyAggregate['phase'] {
 
 function owner(value: unknown) {
   const record = jsonObject(value);
-  return { ownerId: text(record.ownerId), leaseGeneration: generation(record.leaseGeneration) };
+  return {
+    ownerId: text(record.ownerId),
+    leaseGeneration: generation(record.ownerLeaseGeneration ?? record.leaseGeneration)
+  };
 }
 
 export function generation(value: unknown): bigint {

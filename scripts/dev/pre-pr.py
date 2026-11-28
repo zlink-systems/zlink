@@ -60,6 +60,7 @@ NODE_EXTRA = (
     "Run Node M5 foundation gate",
     "Run the tutorial StreamClient receiving check",
     "Verify packed Node packages in clean consumers",
+    "Build and test Node framework perf",
 )
 NODE_BROWSER = "Run actual Chromium Stream Connector E2E"
 NODE_DRIFT = "Verify the build left the committed WebGL bundle unchanged"
@@ -287,14 +288,33 @@ def cpp(temp):
 
 
 def java(temp, selected, results):
-    job = Job(ROOT, temp, "framework-java", "framework-java")
-    if "java-private-access" in selected:
-        results["java-private-access"] = verdict(job.run("Check Java test private access"))
     if "java" in selected:
         redis_required()
-        if results["java-private-access"] == "fail":
-            results["java"] = "fail"
-            return
+        with node_workspace(temp) as (root, git_env):
+            version = next(step["with"]["node-version"] for step in
+                           workflow("framework-java")["jobs"]["framework-java"]["steps"]
+                           if step.get("uses") == "actions/setup-node@v5")
+            path, _ = node_path(version)
+            if path is None:
+                results["java"] = "fail"
+                return
+            git_env.update(PATH=path, NODE_OPTIONS="")
+            node_job = Job(root, temp, "framework-node", "framework-node", env=git_env)
+            if not node_job.run(*NODE_COMMON[1:-1]):
+                results["java"] = "fail"
+                return
+            java_checks(Job(root, temp, "framework-java", "framework-java", env=git_env),
+                        selected, results)
+    else:
+        java_checks(Job(ROOT, temp, "framework-java", "framework-java"), selected, results)
+
+
+def java_checks(job, selected, results):
+    if "java-private-access" in selected:
+        results["java-private-access"] = verdict(job.run("Check Java test private access"))
+    if "java" in selected and results["java-private-access"] == "fail":
+        results["java"] = "fail"
+        return
     if selected & {"java", "jvm-api-snapshot"} and not job.run(*JAVA[:2]):
         results["java" if "java" in selected else "jvm-api-snapshot"] = "fail"
         return
@@ -384,6 +404,18 @@ def node_workspace(temp):
         index.unlink()
 
 
+def node_path(version):
+    """PATH with PRE_PR_NODE<version> first and its node, or (None, None) if that Node is missing."""
+    path = os.environ.get(f"PRE_PR_NODE{version}")
+    path = os.pathsep.join((path, os.environ["PATH"])) if path else os.environ["PATH"]
+    executable = shutil.which("node", path=path)
+    if not executable or not command(executable, "--version", stdout=subprocess.PIPE,
+                                     text=True).startswith(f"v{version}."):
+        print(f"pre-pr: Node {version} is required (set PRE_PR_NODE{version} to its bin directory)", file=sys.stderr)
+        return None, None
+    return path, executable
+
+
 def node(temp):
     redis_required()
     ok = True
@@ -391,15 +423,11 @@ def node(temp):
     definition = workflow("framework-node")["jobs"]["framework-node"]
     versions = definition["strategy"]["matrix"]["node-version"]
     for version in versions:
-        path = os.environ.get(f"PRE_PR_NODE{version}")
-        path = os.pathsep.join((path, os.environ["PATH"])) if path else os.environ["PATH"]
-        env = {"PATH": path, "NODE_OPTIONS": "--experimental-websocket" if version == "20" else ""}
-        executable = shutil.which("node", path=path)
-        if not executable or not command(executable, "--version", stdout=subprocess.PIPE,
-                                         text=True).startswith(f"v{version}."):
-            print(f"pre-pr: Node {version} is required (set PRE_PR_NODE{version} to its bin directory)", file=sys.stderr)
+        path, executable = node_path(version)
+        if path is None:
             ok = False
             continue
+        env = {"PATH": path, "NODE_OPTIONS": "--experimental-websocket" if version == "20" else ""}
         with node_workspace(temp) as (root, git_env):
             env["PLAYWRIGHT_BROWSERS_PATH"] = os.environ.get(
                 "PLAYWRIGHT_BROWSERS_PATH", str(ROOT / "framework/languages/node/.cache/ms-playwright"))

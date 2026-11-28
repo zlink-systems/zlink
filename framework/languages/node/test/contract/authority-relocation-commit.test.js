@@ -173,10 +173,14 @@ test('provider relocation publishes the committed record before materialization'
       prepared.targetOwner
     );
   }
-  const beforePublish = await overlapping;
-  assert.equal(beforePublish.ownerId, source.token.ownerId);
-  assert.equal(beforePublish.relocation.phase, 'prepared');
-  assert.equal(beforePublish.relocation.completion, undefined);
+  const overlappingSnapshot = await overlapping;
+  // The captured participant row is Prepared, but the aggregate read observes the commit.
+  assert.equal(overlappingSnapshot.ownerId, target.token.ownerId);
+  assert.equal(overlappingSnapshot.ownerLeaseGeneration, target.token.leaseGeneration);
+  assert.equal(overlappingSnapshot.authorityOwnerGeneration, atPublish[0].authorityOwnerGeneration);
+  assert.deepEqual(overlappingSnapshot.payload, atPublish[0].payload);
+  assert.equal(overlappingSnapshot.relocation.phase, 'prepared');
+  assert.equal(overlappingSnapshot.relocation.completion, undefined);
   assert.equal(
     (await store.commitAggregate({ ...prepared.fence, acceptedRequests: new Map() })).kind,
     'alreadyCommitted'

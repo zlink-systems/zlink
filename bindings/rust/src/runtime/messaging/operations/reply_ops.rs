@@ -19,13 +19,13 @@ impl ReplyOpStorage {
         token: crate::ReplyToken,
     ) -> ReplyOp<Empty> {
         ReplyOp {
-            inner: ReplyOpStorage {
+            inner: Ok(ReplyOpStorage {
                 routed,
                 owner,
                 target,
                 token,
                 parts: MessageParts::default(),
-            },
+            }),
             _state: PhantomData,
         }
     }
@@ -42,10 +42,7 @@ impl ReplyOpStorage {
         }
         let handle = op.routed.handle();
         if handle.is_null() {
-            return Err(SubmitError::new(
-                SubmitResult::InternalError,
-                libc::ECANCELED,
-            ));
+            return Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN));
         }
         let target = op.target.as_raw() as *const _;
         let value = op.token.value();

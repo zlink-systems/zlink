@@ -143,7 +143,12 @@ export class ZLinkAggregateInventoryStore {
         await parallelForEach(tree.pages, async ({ position, bytes }) => {
           await this.putImmutable(request, pageKey(request, position), bytes, writeSignal);
         });
-        await this.putImmutable(request, rootKey(request), encode(tree.root), writeSignal);
+        await this.putImmutable(
+          request,
+          rootKey(request),
+          encodeAggregateStorageJson(tree.root),
+          writeSignal
+        );
       }
     };
   }
@@ -227,7 +232,7 @@ export class ZLinkAggregateInventoryStore {
     for (const reference of root.topPages) await readPage(reference, root.topLevel);
     const entryError = invalidEntry(entries);
     if (entryError !== undefined) throw dataLost(fence, entryError);
-    if (!encode(buildTree(entries).root).equals(Buffer.from(rootBytes))) {
+    if (!encodeAggregateStorageJson(buildTree(entries).root).equals(Buffer.from(rootBytes))) {
       throw dataLost(fence, 'root checksum or canonical page partition is invalid');
     }
     const participants: StoredAggregateInventoryEntry[] = [];
@@ -341,7 +346,7 @@ function buildTree(entries: readonly InventoryEntry[]) {
     );
   }
   const body: InventoryRootBody = { totalCount: entries.length, topLevel, topPages };
-  return { root: { ...body, digestSha256: sha256(encode(body)) }, pages };
+  return { root: { ...body, digestSha256: sha256(encodeAggregateStorageJson(body)) }, pages };
 
   function pack<T extends InventoryEntry | InventoryReference>(
     level: number,
@@ -350,7 +355,7 @@ function buildTree(entries: readonly InventoryEntry[]) {
     end: (value: T) => number
   ): InventoryReference[] {
     const references: InventoryReference[] = [];
-    const serialized = values.map(encode);
+    const serialized = values.map(encodeAggregateStorageJson);
     for (let offset = 0; offset < values.length;) {
       const index = references.length;
       const startIndex = start(values[offset]!);
@@ -455,7 +460,7 @@ function isCount(value: number): boolean {
   return Number.isInteger(value) && value >= 0 && value <= MAX_COUNT;
 }
 
-function encode(value: unknown): Buffer {
+export function encodeAggregateStorageJson(value: unknown): Buffer {
   return Buffer.from(
     JSON.stringify(value, (_, item: unknown) => {
       if (item === null || typeof item !== 'object' || Array.isArray(item)) return item;

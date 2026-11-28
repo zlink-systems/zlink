@@ -53,7 +53,7 @@ option facade.
 ```rust
 let options = socket.common_options();
 options.set_send_high_water_mark(100_000)?;
-options.set_linger(Duration::from_secs(1))?;
+options.set_linger(Some(Duration::from_secs(1)))?;
 options.set_submit_retry_mode(SubmitRetryMode::LocalFailure)?;
 ```
 
@@ -61,11 +61,11 @@ options.set_submit_retry_mode(SubmitRetryMode::LocalFailure)?;
 
 | Member | 의미 |
 | --- | --- |
-| `linger()` / `set_linger(Duration)` | `close()`가 대기 중인 send를 flush하기 위해 기다리는 상한 |
+| `linger()` / `set_linger(Option<Duration>)` | `close()`가 대기 중인 send를 flush하기 위해 기다리는 상한. `None`은 무기한, `Some(Duration::ZERO)`는 기다리지 않음 |
 | `send_high_water_mark()` / `set_send_high_water_mark(u64)` | outbound accounted-byte HWM; `0`은 무제한 |
 | `receive_high_water_mark()` / `set_receive_high_water_mark(u64)` | inbound accounted-byte HWM; `0`은 무제한 |
-| `send_timeout()` / `set_send_timeout(Duration)` | blocking send가 기다리는 상한 |
-| `receive_timeout()` / `set_receive_timeout(Duration)` | blocking receive가 기다리는 상한 |
+| `send_timeout()` / `set_send_timeout(Option<Duration>)` | blocking send가 기다리는 상한. `None`은 무기한, `Some(Duration::ZERO)`는 막히면 즉시 반환 |
+| `receive_timeout()` / `set_receive_timeout(Option<Duration>)` | blocking receive가 기다리는 상한. `None`은 무기한, `Some(Duration::ZERO)`는 즉시 반환 |
 | `immediate()` / `set_immediate(bool)` | send가 지금 당장 살아있는 연결을 요구하는지, 아니면 연결이 생길 때까지 큐잉하는지 |
 | `rid_duplicate_policy()` / `set_rid_duplicate_policy(RidDuplicatePolicy)` | peer가 기존 routing id를 재사용할 때 벌어지는 일 |
 | `connect_timeout()` / `set_connect_timeout(Duration)` | connect handshake가 기다리는 상한 |
@@ -94,7 +94,7 @@ ConfigError>`를 반환한다.
 라우팅이 없는 배타적 1:1 peering socket.
 
 ```rust
-let pair = ctx.pair_socket()?;
+let pair = ctx.create_pair_socket()?;
 pair.send().message(Message::try_from("ping")?).submit_sync()?;
 let mut received = Received::empty();
 if pair.recv(&mut received, RecvFlags::NONE)? { /* ... */ }
@@ -122,7 +122,7 @@ if pair.recv(&mut received, RecvFlags::NONE)? { /* ... */ }
 있다.
 
 ```rust
-let dealer = ctx.dealer_socket()?;
+let dealer = ctx.create_dealer_socket()?;
 dealer.set_routing_id(&"worker-3".into())?;
 dealer.request()
     .message(Message::try_from("payload")?)
@@ -153,7 +153,7 @@ routing id로 지정된 peer에게 메시지를 보내고, 특정 peer의 reques
 reply할 수 있다.
 
 ```rust
-let router = ctx.router_socket()?;
+let router = ctx.create_router_socket()?;
 router.send(&peer_rid).message(Message::try_from("hello")?).submit_sync()?;
 ```
 
@@ -191,10 +191,10 @@ publish하고, SUB는 구독을 socket option으로 설정하는 방식으로
 `impl_pubsub_common!` macro를 통해 lifecycle/TLS 표면을 공유한다.
 
 ```rust
-let pub_socket = ctx.pub_socket()?;
+let pub_socket = ctx.create_pub_socket()?;
 pub_socket.publish("prices").message(Message::try_from(tick)?).submit()?;
 
-let sub = ctx.sub_socket()?;
+let sub = ctx.create_sub_socket()?;
 sub.set_subscription("prices.")?;
 let mut msg = TopicMessage::empty();
 if sub.subscribe(&mut msg, RecvFlags::NONE)? { /* ... */ }
@@ -209,10 +209,14 @@ if sub.subscribe(&mut msg, RecvFlags::NONE)? { /* ... */ }
 | | `pub_options() -> PubSocketOptions<'_>` | 타입별 option facade |
 | `SubSocket` / `XSubSocket` | `subscribe(&self, out: &mut TopicMessage, flags: RecvFlags) -> Result<bool, RecvError>` | `out`을 다음 매칭 publish로 채움 |
 | | `set_subscription(&self, filter: &str)` / `unset_subscription(&self, filter: &str)` | topic filter를 추가/제거; 구독은 누적된다 |
-| | `subscription_at(&self, index: usize) -> Result<Option<(String, bool)>, ConfigError>` | 명명된 struct/record가 아니라 `(filter, is_pattern)` tuple — 해당 index의 filter |
+| | `subscription_at(&self, index: usize) -> Result<Option<(String, bool)>, ConfigError>` | 해당 index의 `Ok(Some((filter, is_pattern)))`. Core가 `ENOENT`를 반환하면 `Ok(None)` |
 | | `common_options()` | 공유 option facade |
 | | `sub_options() -> SubSocketOptions<'_>` | 타입별 option facade |
 | `XPubSocket` | `receive_subscription_event(&self, out: &mut SubscriptionEvent, flags: RecvFlags) -> Result<bool, RecvError>` | `PubSocket` 형태 위에 이걸 더함, 자신만의 `impl` block(`PubSocket` 타입의 확장이 아님); `out`을 다음 subscribe/unsubscribe로 채움 |
+
+바인딩은 자체 버퍼를 넘겨 `zlink_subscription_at`를 호출한다. 빈 filter를 포함해 성공하면
+조회를 끝낸다. Core가 `ENOBUFS`를 반환하면 Core가 알려 준 길이로 한 번 더 호출한다.
+그 밖의 Core 실패는 `Err(ConfigError)`로 반환한다.
 
 **`PubSocket`도 `XPubSocket`도 `set_routing_id`/`routing_id`를 선언하지
 않는다**(이 binding의 두 타입 모두에 routing-id 표면이 전혀 없다).
@@ -228,7 +232,7 @@ if sub.subscribe(&mut msg, RecvFlags::NONE)? { /* ... */ }
 수동 admission을 하려면 특별히 `XPubSocket`을 사용한다. 구독을 일반
 메시지로 실어 날라야 할 때만 특별히 `XSubSocket`을 사용한다 — 두 타입의
 method 집합이 동일하므로 선택은 전적으로 어떤 생성자를 호출하는지
-(`ctx.sub_socket()` vs `ctx.xsub_socket()`)에 달려 있다.
+(`ctx.create_sub_socket()` vs `ctx.create_xsub_socket()`)에 달려 있다.
 
 ---
 
@@ -238,7 +242,7 @@ method 집합이 동일하므로 선택은 전적으로 어떤 생성자를 호�
 framed packet을 직접 주고받는다.
 
 ```rust
-let stream = ctx.stream_socket()?;
+let stream = ctx.create_stream_socket()?;
 stream.stream_options().set_recv_mode(StreamRecvMode::Packet)?;
 let mut packet = StreamPacket::empty();
 if stream.recv_packet(&mut packet, RecvFlags::NONE)? { /* packet 사용 */ }

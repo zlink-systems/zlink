@@ -8,8 +8,6 @@ import type {
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import type { ZLinkRemoteBoundSessionTarget } from '../actors';
-import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from '../actors/actor-handoff';
 import type { ZLinkApplicationWorkClaim } from '../admission';
 import {
   type ZLinkBackendActorRecvInfo,
@@ -26,10 +24,7 @@ import type { ZLinkActorPacketDelivery } from './spot-actor-packet-dispatch';
 import { ZLinkSpotActorPacketDrain, type ZLinkActorDispatchPart } from './spot-actor-packet-drain';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
 import { ZLinkSpotRoutedFrameDispatch } from './spot-routed-frame-dispatch';
-import type {
-  ZLinkSpotActorTransferRuntime,
-  ZLinkSpotBoundSessionRuntime
-} from './spot-runtime-ports';
+import type { ZLinkSpotBoundSessionRuntime } from './spot-runtime-ports';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLinkSpotSubscriptionDispatch } from './spot-subscription-dispatch';
 const ACTOR_JOIN_POLL_INTERVAL_MS = 5;
@@ -55,20 +50,7 @@ interface ZLinkSpotActorAdmissionRuntime {
   readonly resolveActor: (actorId: string) => ZLinkActor | undefined;
   readonly getTarget: () => ZLinkActorJoinAdmissionTarget;
   readonly defaultAccept: boolean;
-  readonly transfer:
-    | {
-        readonly kind: 'disabled';
-      }
-    | {
-        readonly kind: 'enabled';
-        readonly runtime: ZLinkSpotActorTransferRuntime;
-      };
   readonly commitActorDeparture?: (actorId: string) => void;
-  readonly commitTransferredActor?: (
-    actor: ZLinkActor,
-    backlog: readonly ZLinkActorHandoffPacket[],
-    sealedSession: ZLinkRemoteBoundSessionTarget | undefined
-  ) => Promise<readonly ZLinkActorHandoffResult[]>;
 }
 
 interface ZLinkSpotActorPacketRuntime {
@@ -113,7 +95,6 @@ export class ZLinkSpotActorJoinDispatch {
 
   constructor(private readonly options: ZLinkSpotActorJoinDispatchOptions) {
     const actors = options.actors;
-    const transfer = actors.transfer.kind === 'enabled' ? actors.transfer : undefined;
     this.nativeSpot = options.nativeSpot;
     this.nativeSpotId = String(options.nativeSpot.routingId);
     this.actorLifecycleDrain = new ZLinkSpotActorLifecycleDrain({
@@ -138,8 +119,6 @@ export class ZLinkSpotActorJoinDispatch {
       resolveActor: actors.resolveActor,
       getTarget: () => actors.getTarget() as ZLinkActorJoinAdmissionTarget & ZLinkSpot,
       defaultAccept: actors.defaultAccept,
-      routedActorTransferProvider: transfer?.runtime.materializeRoutedActor.bind(transfer.runtime),
-      commitTransferredActor: actors.commitTransferredActor,
       actorPacketHandler: options.packets?.handle,
       bindRemoteSession:
         options.packets?.bindRemoteSession === undefined

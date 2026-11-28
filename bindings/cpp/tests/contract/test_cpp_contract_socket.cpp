@@ -537,8 +537,8 @@ void test_pair_multipart_invalid_part_returns_lvalues ()
         socket.send ().message (first).message (invalid).message (third).submit ();
     }
     catch (const zlink::submit_error_t &error) {
-        rejected = error.result () == zlink::submit_result_t::invalid_argument
-          && error.internal_errno () == EINVAL;
+        rejected = error.result () == zlink::submit_result_t::invalid_handle
+          && error.internal_errno () == EFAULT;
     }
 
     // Multipart staging owns the record until Core accepts every part. An
@@ -728,8 +728,8 @@ void test_subscription_at_grows_on_core_buffer_too_small ()
     const std::string filter (300, 'f');
     subscriber.set_subscription (filter);
 
-    const zlink::subscription_filter_t entry = subscriber.subscription_at (0);
-    assert (entry.filter == filter);
+    const auto entry = subscriber.subscription_at (0);
+    assert (entry && entry->filter == filter);
     subscriber.close ();
 }
 

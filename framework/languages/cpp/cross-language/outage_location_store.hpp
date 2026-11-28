@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
 #include <cstdlib>
 #include <functional>

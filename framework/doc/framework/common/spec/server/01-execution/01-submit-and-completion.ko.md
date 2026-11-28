@@ -74,6 +74,10 @@ admission을 기다린다. `admitted`는 `Backpressured` 상태를 드러내지 
 
 검증은 Framework가 실제로 노출하는 종결자의 완료 표현과 관측 결과를 사용하여, 이미 반환된 다른 호출의 결과와 이후 호출의 결과가 공유 상태 때문에 오염되지 않는지 확인한다. `Backpressured` 결과를 Framework에 노출하도록 요구하지 않는다.
 
+**여러 application thread의 동시 제출.** 서로 다른 call은 어느 application thread에서든 동시에 제출할 수 있으며, Framework는 제출 경로에 호출 사이 공유 lock을 두지 않고 각 call을 독립적으로 완료한다(binding의 동시 send 규칙과 같다). 같은 call을 여러 thread가 동시에 terminal 제출하면 정확히 한 제출만 수락되고 나머지는 `InvalidOperation`으로 끝난다. 그 실패를 동기 예외로 내는지 실패한 완료 표현으로 내는지는 §16의 언어별 interface가 정한다.
+
+**같은 수신 결과 객체로 동시에 recv하지 않는다.** 각 socket의 수신은 ingress owner 하나가 맡고([Messaging hot path 「4.4」](08-messaging-hot-path.ko.md#44-실행-자원-배치--수신-역할-인계)), 그 역할은 독점으로 인계되므로 Framework 안에서 같은 binding 결과 객체(`Received`·`StreamPacket` 등)로 두 recv가 겹치지 않는다. Python을 포함한 모든 언어 runtime에 같다.
+
 격리의 책임은 그 완료 표현을 반환하는 계층에 있다. Framework queue 대기의 취소, binding operation의 caller wait 취소와 late completion 정리의 소유권은 [Cancellation과 shutdown §3](03-cancellation-and-shutdown.ko.md#3-cancellation의-경쟁-처리)을 따른다. 반환 표현의 격리를 위해 cancellation을 지원하는 pending stage의 cancellation 연결을 제거하거나, binding의 operation state·registry·재제출을 Framework에 추가하지 않는다.
 
 **Application이 직접 완료시키는 비동기 결과와 제한 시간 관찰.** Application은 외부 사건으로 완료되는 비동기 결과를 만들고, application thread에서 그 결과를 제한 시간 동안 관찰할 수 있다.
@@ -527,7 +531,9 @@ dispatcher에 넣고, 아래에서 정한 새 execution turn 조건에 따라 �
 시작해 돌아갈 lane이 없어도, Framework가 전달하는 완료 callback과 비동기 재개는 위 새 execution turn 조건과
 Messaging hot path 「4.4」의 실행 자원 배치를 따른다.
 
-내부 결과의 값 변환과 자원 정리는 application callback 배달이 아니다. Framework가 배달하는 callback과 suspended continuation은 결과의 즉시 확정 여부와 관계없이 이 절의 새 execution turn을 따른다. 언어 완료 표현의 이미 완료된 값을 직접 소비하거나 의존 작업을 직접 등록하는 동작은 해당 언어 API 계약을 따른다. 동기 blocking 대기가 반환하는 thread도 해당 언어 API 계약을 따른다.
+**Python의 asyncio 완료 표현.** Python runtime은 비동기 종결자를 제출한 coroutine의 **그 시점 running event loop**에서 `asyncio.Future`를 만든다(runtime 시작 때 잡아 둔 loop를 쓰지 않는다). 완료는 그 loop에 thread-safe 진입점(`call_soon_threadsafe`)으로 게시해 새 execution turn에서 정하며, 완료를 정하는 thread가 그 loop의 thread여도 inline으로 완료하지 않는다. 그 event loop thread에서 동기 blocking 종결자를 부르면 Framework 완료를 같은 loop로 배달해야 해서 교착하므로 `InvalidOperation`으로 실패한다(§4.1의 Node.js와 같은 이유).
+
+내부 결과의 값 변환과 자원 정리는 application callback 배달이 아니다. Framework가 배달하는 callback과 suspended continuation은 결과의 즉시 확정 여부와 관계없이 이 절의 새 execution turn을 따른다. 언어 완료 표현의 이미 완료된 값을 직접 소비하거나 의존 작업을 직접 등록하는 동작은 해당 언어 API 계약을 따른다. 동기 blocking 대기가 반환하는 thread도 해당 언어 API 계약을 따른다. 다만 공개 API가 돌려주는 언어 완료 표현(Request·Send의 결과와 Actor·Spot의 Create·GetOrCreate·Destroy 같은 lifecycle 결과를 모두 포함한다)을 Framework가 완료하는 일은 이 절의 새 execution turn에서 한다. Store·transport 응답을 처리하는 호출 stack이나 그 client의 I/O thread에서 직접 완료하지 않는다. 그래서 응용이 그 표현에 직접 등록한 의존 작업도 infrastructure 실행 자원을 붙잡지 않는다.
 
 **완료 callback을 dispatcher에 넣는 일은 실패하지 않는다.** Dispatcher에 상한이 없기
 때문이다. 자리가 없다는 이유로 request를 거부하거나, 이미 수락한 호출의 완료를 버리는

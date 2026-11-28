@@ -126,6 +126,7 @@ if [[ "${IS_WINDOWS_NATIVE}" -eq 1 ]]; then
 fi
 
 RUN_DIR="$(mktemp -d)"
+ACTOR_DESTROY_CONTROL_DIR=""
 PIDS=()
 REDIS_PIDS=()
 REDIS_CONTAINERS=()
@@ -157,6 +158,9 @@ stop_all() {
 cleanup() {
   local code=$?
   stop_all
+  if [[ -n "${ACTOR_DESTROY_CONTROL_DIR:-}" ]]; then
+    rm -rf "${ACTOR_DESTROY_CONTROL_DIR}"
+  fi
   if [[ "${ZLINK_CPP_CROSS_KEEP_RUN_DIR:-}" == "1" ]]; then
     echo "runDir=${RUN_DIR}"
   else
@@ -182,6 +186,7 @@ if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "java-cross" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-node-java" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-dotnet-java" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "user-spot-join-java-node" ]] \
+  && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "actor-destroy" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != "login-admission" ]] \
   && [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" != actor-join-sealed-remote-* ]] \
   && [[ ! -x "${CPP_HOST}" ]]; then
@@ -249,9 +254,13 @@ start_cpp() {
 start_dotnet() {
   local name="$1"
   shift
+  local command=(dotnet run --project "${DOTNET_TEST_HOST}" --framework net8.0 --)
+  if [[ "${DOTNET_TEST_HOST}" == *.dll ]]; then
+    command=(dotnet "${DOTNET_TEST_HOST}")
+  fi
   # --framework net8.0 matches the TestHost target the Node smoke uses; the
   # stop file is the host's own graceful-stop contract.
-  dotnet run --project "${DOTNET_TEST_HOST}" --framework net8.0 -- \
+  "${command[@]}" \
     --ready-file "${RUN_DIR}/${name}.ready" \
     --stop-file "${RUN_DIR}/${name}.stop" \
     "$@" >"${RUN_DIR}/${name}.log" 2>&1 &
@@ -297,10 +306,15 @@ start_java() {
 wait_for_ready() {
   local file="$1"
   local timeout_seconds="${2:-60}"
+  local pid="${3:-}"
   local deadline=$((SECONDS + timeout_seconds))
   while ((SECONDS < deadline)); do
     if [[ -f "${file}" ]]; then
       return 0
+    fi
+    if [[ -n "${pid}" ]] && ! kill -0 "${pid}" 2>/dev/null; then
+      echo "host exited before writing ready file ${file}" >&2
+      return 1
     fi
     sleep 0.2
   done
@@ -1321,19 +1335,23 @@ outage_command() {
     "outage-error|run=${run_id}|"
 }
 
+start_cross_language_host() {
+  local language="$1" name="$2" mode="$3"
+  shift 3
+  case "${language}" in
+    node) start_node_user_spot_join "${name}" "${mode}" "$@" ;;
+    dotnet) start_dotnet "${name}" "${mode}" "$@" ;;
+    java) start_java "${name}" "${mode}" "$@" ;;
+    cpp) start_cpp "${name}" "${mode}" "$@" --ready-file "${RUN_DIR}/${name}.ready" ;;
+    *) echo "unsupported cross-language host: ${language}" >&2; return 1 ;;
+  esac
+}
+
 start_user_spot_host() {
   local language="$1" name="$2" role="$3"
   shift 3
-  case "${language}" in
-    node)
-      if [[ "${role}" == source ]]; then role=join-source; fi
-      start_node_user_spot_join "${name}" "user-spot-${role}" "$@"
-      ;;
-    dotnet) start_dotnet "${name}" "user-spot-${role}" "$@" ;;
-    java) start_java "${name}" "user-spot-${role}" "$@" ;;
-    cpp) start_cpp "${name}" "user-spot-${role}" "$@" --ready-file "${RUN_DIR}/${name}.ready" ;;
-    *) echo "unsupported User Spot host: ${language}" >&2; return 1 ;;
-  esac
+  if [[ "${language}" == node && "${role}" == source ]]; then role=join-source; fi
+  start_cross_language_host "${language}" "${name}" "user-spot-${role}" "$@"
 }
 
 stage_outage_relocation() {
@@ -1415,10 +1433,10 @@ PYTHON
 
   local redis_port setup_port sender_port owner_port
   read -r redis_port setup_port sender_port owner_port <<<"$(free_port 4)"
-  # Node source -> .NET target Join does not finish on main (#5046), so the
-  # setup node that performs the Join into a .NET owner is a Java source.
+  # Node setup does not finish Join into .NET (#5046) or Java; use Java
+  # setup for those owners to exercise the sealed completion contract.
   local setup_lang=node
-  [[ "${owner}" == dotnet ]] && setup_lang=java
+  [[ "${owner}" == dotnet || "${owner}" == java ]] && setup_lang=java
   local setup_rid=${setup_lang}-user-spot-join-source
   local sender_rid="${sender}-late-actor-sender"
   local owner_rid="${owner}-user-spot-join-target"
@@ -1451,8 +1469,7 @@ PYTHON
   touch "${start_file}"
   assert_source_actor_create "${setup_events}" "${setup_rid}" "${owner_rid}"
   wait_for_line "${setup_events}" 'user-spot-join-request-reply|accepted=true' 60
-  # Only a Node setup and owner log the canonical command 28; the Java setup
-  # used for a .NET owner does not.
+  # The Java setup used for .NET and Java owners does not log command 28.
   if [[ "${setup_lang}" == node ]]; then
     wait_for_canonical_actor_join "${owner_events}.flow"
   fi
@@ -2340,6 +2357,12 @@ case "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" in
     sealed_cell="${ZLINK_CPP_CROSS_LANGUAGE_STAGE#actor-join-sealed-remote-}"
     stage_actor_join_sealed_remote "${sealed_cell%%-*}" "${sealed_cell#*-}"
     exit 0
+    ;;
+  actor-destroy)
+    # shellcheck source=framework/languages/cpp/cross-language/actor_destroy_stage.sh
+    source "${SCRIPT_DIR}/actor_destroy_stage.sh"
+    stage_actor_destroy
+    exit
     ;;
   login-admission)
     source "${SCRIPT_DIR}/login_admission.sh"

@@ -234,6 +234,32 @@ test('source Preserve observes NewOwner if target commits before the pending cap
   );
   assert.equal(unrelated.kind, 'conflict');
 
+  const rootKey = { value: `zlink:v11:aggregate:${request.aggregateId.value}:1` };
+  const root = await provider.read(rootKey);
+  assert.equal(root.kind, 'found');
+  const rootJson = Buffer.from(root.value.bytes).toString();
+  const rootRecord = JSON.parse(rootJson);
+  assert.match(rootRecord.inventoryDigestSha256, /^[0-9a-f]{64}$/);
+  const expectedRoot = {
+    aggregateGeneration: '1',
+    aggregateId: request.aggregateId.value,
+    capacity: {
+      actors: 0,
+      spotType: { count: 1, objectKind: 'userSpot', stableType: 'lobby' },
+      spots: 1
+    },
+    inventoryDigestSha256: rootRecord.inventoryDigestSha256,
+    participantCount: 1,
+    state: 'prepared',
+    targetDescriptor: { meshName: 'play', routingIdHex: '746172676574' },
+    targetDescriptorLifecycleGeneration: '1',
+    targetOwner: {
+      ownerId: target.owner.ownerId,
+      ownerLeaseGeneration: String(target.owner.leaseGeneration)
+    }
+  };
+  assert.equal(rootJson, JSON.stringify(expectedRoot));
+
   const write = provider.write.bind(provider);
   let targetCommit;
   t.mock.method(provider, 'write', async (batch, signal) => {

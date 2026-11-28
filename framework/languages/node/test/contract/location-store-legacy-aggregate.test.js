@@ -369,55 +369,71 @@ test('startup publishes a previously committed .NET participant before deleting 
   for (const key of [dotnetRoot, meta, payload]) assert.equal(rows[key], undefined, key);
 });
 
-test('startup publishes a committed Node participant stored in the common inventory', async (t) => {
-  const store = new framework.ZLinkInMemoryProviderLocationStore();
-  const repository = new framework.ZLinkLocationStoreRepository(store);
-  const uuid = '21020304-0506-0708-090a-0b0c0d0e0f10';
-  const authority = 'authority\0actor\0node';
-  const authorityPayload = Buffer.from('committed target payload');
-  const membershipMutation = Buffer.from('[]');
-  const participant = {
-    authorityKey: encodeAuthorityKey('actor', 'node'),
-    expectedStoreVersion: { value: 'source-version' },
-    ownerTransition: 'newOwner',
-    authorityPayload,
-    membershipMutation
-  };
-  const inventoryDigestSha256 = await repository.storeAggregateInventory({
-    aggregateId: { value: uuid },
-    aggregateGeneration: 1n,
-    participants: [participant]
-  });
-  await seed(store, [
-    [root(uuid), { ...aggregate('committed'), inventoryDigestSha256 }],
-    [
-      authority,
-      {
-        ...actorAuthority('source payload'),
-        visibleStoreVersion: participant.expectedStoreVersion.value,
-        aggregate: {
-          aggregateId: uuid,
-          aggregateGeneration: '1',
-          index: 0,
-          expectedStoreVersion: participant.expectedStoreVersion.value,
-          ownerTransition: 'newOwner',
-          targetAuthorityOwnerGeneration: '5',
-          authorityPayloadSha256: createHash('sha256').update(authorityPayload).digest('hex'),
-          membershipMutationSha256: createHash('sha256').update(membershipMutation).digest('hex')
+for (const layout of ['legacy Node', 'common']) {
+  test(`startup publishes a committed ${layout} participant stored in the common inventory`, async (t) => {
+    const store = new framework.ZLinkInMemoryProviderLocationStore();
+    const repository = new framework.ZLinkLocationStoreRepository(store);
+    const uuid = '21020304-0506-0708-090a-0b0c0d0e0f10';
+    const authority = 'authority\0actor\0node';
+    const authorityPayload = Buffer.from('committed target payload');
+    const membershipMutation = Buffer.from('[]');
+    const participant = {
+      authorityKey: encodeAuthorityKey('actor', 'node'),
+      expectedStoreVersion: { value: 'source-version' },
+      ownerTransition: 'newOwner',
+      authorityPayload,
+      membershipMutation
+    };
+    const inventoryDigestSha256 = await repository.storeAggregateInventory({
+      aggregateId: { value: uuid },
+      aggregateGeneration: 1n,
+      participants: [participant]
+    });
+    const progress =
+      layout === 'common'
+        ? {
+            aggregateGeneration: '1',
+            aggregateId: uuid,
+            capacity: { actors: 0, spotType: null, spots: 0 },
+            inventoryDigestSha256,
+            participantCount: 1,
+            state: 'committed',
+            targetDescriptor: { meshName: 'mesh', routingIdHex: '746172676574' },
+            targetDescriptorLifecycleGeneration: '1',
+            targetOwner: { ownerId: 'target-owner', ownerLeaseGeneration: '1' }
+          }
+        : { ...aggregate('committed'), inventoryDigestSha256 };
+    await seed(store, [
+      [root(uuid), progress],
+      [
+        authority,
+        {
+          ...actorAuthority('source payload'),
+          visibleStoreVersion: participant.expectedStoreVersion.value,
+          aggregate: {
+            aggregateId: uuid,
+            aggregateGeneration: '1',
+            index: 0,
+            expectedStoreVersion: participant.expectedStoreVersion.value,
+            ownerTransition: 'newOwner',
+            targetAuthorityOwnerGeneration: '5',
+            authorityPayloadSha256: createHash('sha256').update(authorityPayload).digest('hex'),
+            membershipMutationSha256: createHash('sha256').update(membershipMutation).digest('hex')
+          }
         }
-      }
-    ]
-  ]);
+      ]
+    ]);
 
-  await startup(t, store);
-  const rows = await snapshot(store);
-  const stored = JSON.parse(rows[authority].toString());
-  assert.equal(rows[marker]?.toString(), 'converted');
-  assert.deepEqual(Buffer.from(stored.payload, 'base64'), authorityPayload);
-  assert.equal(stored.ownerId, 'target-owner');
-  assert.equal(stored.objectGeneration, '3');
-  assert.equal(stored.authorityOwnerGeneration, '5');
-  assert.equal(stored.aggregate, undefined);
-  assert.equal(rows[root(uuid)], undefined);
-  assert.equal(rows[`zlink:v11:aggregate-inventory:${uuid}:1:root`], undefined);
-});
+    await startup(t, store);
+    const rows = await snapshot(store);
+    const stored = JSON.parse(rows[authority].toString());
+    assert.equal(rows[marker]?.toString(), 'converted');
+    assert.deepEqual(Buffer.from(stored.payload, 'base64'), authorityPayload);
+    assert.equal(stored.ownerId, 'target-owner');
+    assert.equal(stored.objectGeneration, '3');
+    assert.equal(stored.authorityOwnerGeneration, '5');
+    assert.equal(stored.aggregate, undefined);
+    assert.equal(rows[root(uuid)], undefined);
+    assert.equal(rows[`zlink:v11:aggregate-inventory:${uuid}:1:root`], undefined);
+  });
+}

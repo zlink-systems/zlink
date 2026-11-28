@@ -1,7 +1,7 @@
 import socket
 
 import zlink
-from sample_support import tcp_endpoint, wait_socket_monitor_event
+from sample_support import CONNECTION_TIMEOUT_MS, tcp_endpoint, wait_socket_monitor_event
 
 
 def main():
@@ -13,7 +13,9 @@ def main():
             server.stream_options.recv_mode = zlink.StreamRecvMode.RAW
             with server.monitor_open(zlink.MonitorEventMask.ACCEPTED) as server_monitor:
                 server.bind(endpoint)
-                with socket.create_connection(("127.0.0.1", port), timeout=3.0) as client:
+                with socket.create_connection(
+                    ("127.0.0.1", port), timeout=CONNECTION_TIMEOUT_MS / 1000
+                ) as client:
                     wait_socket_monitor_event(server_monitor, zlink.MonitorEventMask.ACCEPTED)
                     client.sendall(b"hello-stream")
                     received = zlink.create_received()
@@ -28,7 +30,7 @@ def main():
                     reply = client.recv(64)
                     if reply != b"hello-stream":
                         raise AssertionError(f"unexpected stream reply: {reply!r}")
-            print('[stream/recv] send: "hello-stream" → recv: "hello-stream"')
+            print('[stream/recv] send: "hello-stream" -> recv: "hello-stream"')
 # --8<-- [end:doc]
 
 

@@ -780,6 +780,10 @@ Fixed RID 재claim의 무효 관찰 뒤 대기와 유효 lease의 `Conflict` 처
 그 밖의 claim 결과 `Conflict`와 `GenerationExhausted`는 startup 오류다. Caller가 startup을
 cancellation하면 startup은 취소로 끝나며 이 규칙으로 성공이 되지 않는다. 이미 시작한 claim은
 §10대로 같은 key를 다시 읽어 확인하고, 확인된 lease는 정상 해제하며 heartbeat를 시작하지 않는다.
+이 확인과 해제는 startup의 renew timeout에 묶이지 않는다. Host의 Stop deadline이 유일한 기한이며,
+그 안에서 시작한 claim 요청의 결과를 끝까지 받고, 결과를 받지 못하면 §10대로 다시 읽고, 자기 lease로
+확인되면 해제한다. Stop deadline이 먼저 끝나면 Store를 더 부르지 않고 lease는 TTL 만료에 맡기며,
+진단 레코드 한 건(`location.startup_claim_cleanup_abandoned`)을 남긴다.
 
 ### 5.1 짧은 장애의 보존과 재참여
 
@@ -1511,6 +1515,14 @@ User Spot membership을 바꾸지 않는 Actor 이동은 `NewOwner` CAS 한 번�
 같은 target process에서 준비를 다시 하면 target 시도 번호와 준비 정보만 교체한다. 다른
 target으로 교체하지 않는다. 이전 시도는 owner를 바꿀 수 없다.
 
+- **같은 relocation의 첫 target 시도 번호는 `1`이고, 시도를 바꿀 때마다 1씩 늘린다.** 비교는 equality로만 한다.
+- **Target 시도 번호는 대표 authority 하나가 소유한다.** `Prepared` 뒤 같은 target의 새 시도는 대표
+  authority의 `target.attemptGeneration`을 그 `StoreVersion` 조건 CAS 한 번으로 바꾼다. Aggregate 기록은
+  준비 요청 내용이 같으므로 바꾸지 않고(`AlreadyPrepared`), participant record와 이동 대상 목록도 바꾸지 않는다.
+  Commit CAS는 대표 authority의 현재 시도 번호를 조건으로 하므로 이전 시도는 commit할 수 없다.
+- Target의 Restore는 대표가 `Captured`이거나, `Prepared`이고 기록된 target이 자기 자신인 경우를 받는다.
+  `Prepared`에 다른 target이 기록돼 있으면 `Conflict`다.
+
 | 이동 종류 | Location Store에서 함께 바꾸는 값 |
 |---|---|
 | Actor 하나의 host relocation | Actor owner와 `AuthorityOwnerGeneration`. Entry Spot member라면 source와 target Entry membership도 바꾼다. |
@@ -1563,6 +1575,16 @@ JSON이 아니라 bytes를 그대로 저장한다. 새 authority payload record�
 authority `payload`가 될 application 정의 opaque bytes이고, membership 변경 record는 규범 schema의
 `aggregate-participant-mutation-bytes` 본문 bytes다. 이 type의 u32 길이 prefix는 wire에서만 쓰며 record에는
 저장하지 않는다. 크기 제한과 SHA-256은 본문 bytes에 적용한다. 아래 본문 공통 규칙은 이 두 record에 적용하지 않는다.
+
+**Participant 변경 bytes에는 target에 따라 정해지는 값을 넣지 않는다.** 이 record는 target을 고르기 전 seal 때
+쓰고 target 시도가 바뀌어도 그대로 쓰기 때문이다. Target node·route·target 쪽 membership처럼 target 선택에
+따라 정해지는 값은 aggregate 기록의 target field(`targetDescriptor`, `targetDescriptorLifecycleGeneration`,
+`targetOwner`)와 Restore 요청(command 40)이 소유하고, commit은 그 값으로 target 쪽 변경을 만든다.
+
+**Membership 변경 bytes는 opaque이며 다른 runtime은 내용을 해석하지 않고 SHA-256만 비교한다.** Membership 변경이
+없는 participant의 본문은 UTF-8 `[]`(2 bytes)다. 빈 본문은 쓰지 않는다. 논리 Spot ID와 generation이 그대로인
+`SpotWide` host 이동에서 이미 그 Spot에 속한 Actor의 membership은 바뀌지 않으므로 그 본문은 `[]`다 —
+기존 membership을 다시 직렬화하지 않는다.
 
 **본문 공통 규칙.** Aggregate 기록, 목록 root와 page의 본문은 UTF-8 JSON object이며
 [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)(JSON Canonicalization Scheme, JCS)로
@@ -1644,6 +1666,11 @@ Page 분할은 저장 bytes만으로 정해서, 같은 목록은 어느 언어�
 `(aggregateId, aggregateGeneration)`의 record를 다른 내용으로 다시 쓰지 않으며, 다른 내용이 필요하면
 새 `aggregateGeneration`을 쓴다. Commit 또는 abort 뒤 이 record들의 정리는 §8.1의 진행 정보
 제거 변경이 맡는다.
+
+**정리는 page와 participant 변경 record를 먼저, 목록 root를 그다음, aggregate 기록을 마지막에 지운다.** Batch
+key 상한 때문에 여러 batch로 나눌 수 있다. 읽는 쪽은 aggregate 기록이 `committed`·`aborted`인데 목록 root가
+없으면 정리가 끝난 것으로 보고, aggregate 기록이 `preparing`·`prepared`인데 root나 page가 없으면 손상된
+record로 처리한다.
 
 ## 9. Restore·완료 기록과 Store의 관계
 
@@ -2028,6 +2055,8 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   [MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)을 따른다.
 - Startup을 cancellation하면 결과는 취소이며, 이미 commit된 claim은 해제되고 heartbeat가
   시작되지 않는다.
+- 취소 뒤 startup의 renew timeout보다 늦게 commit된 claim도 Stop deadline 안이면 읽어서 해제한다.
+  Stop deadline이 지나면 Store 호출 없이 TTL에 맡기고 진단 레코드 한 건을 남긴다.
 
 **Descriptor와 위치 조회**
 

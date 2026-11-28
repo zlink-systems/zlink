@@ -194,10 +194,7 @@ test('target commit fixes capture plus pre-boundary request counts, excluding Se
     kind: 'committed',
     authorities: new Map([[key.value, authority]])
   });
-  assert.equal(
-    await runtime.commitTargetReservation(stage, reservation),
-    authority
-  );
+  assert.equal(await runtime.commitTargetReservation(stage, reservation), authority);
   assert.equal(calls, 1);
   assert.equal(stage.boundaryRelay.length, 0);
 });

@@ -49,6 +49,10 @@ zlink::message_t copy = zlink::message_t::from (std::string ("payload"));
 **완료 결과.** 모든 member는 동기다. 메시지를 보내면 payload가 소비된다 — native
 frame이 성공적인 send에서 transport로 옮겨지고 instance는 invalid 상태로 남는다.
 보내지 않을 메시지를 해제하려면 `close()`를 호출한다.
+소비되거나 닫힌 메시지의 `data()`는 `nullptr`, `size()`는 `0`을 반환한다.
+이 메시지를 다시 보내면 바인딩이 Core에 제출하기 전에
+`submit_error_t`(`submit_result_t::invalid_handle`)를 던진다.
+Multipart 제출이 이 오류로 실패하면 유효한 lvalue part는 호출자가 계속 소유한다.
 
 **선택 기준.** caller가 raw 소유권을 유지할 필요가 없는 데이터로 outbound
 payload를 만들 땐 크기 지정 생성자나 복사하는 `from(...)` factory를 사용한다.
@@ -144,8 +148,8 @@ if (xpub.receive_subscription_event (evt) == 0) { /* ... */ }
 **완료 결과.** 둘 다 dispose나 async 동작이 없는 순수 데이터 struct다.
 
 **선택 기준.** XPUB socket의 subscription-event receive 경로(Sockets category)에서
-구독자 변동을 관찰할 때 사용한다. socket의 `subscription_at(index)` 값 반환 overload의
-반환 타입으로 `subscription_filter_t`를 사용한다.
+구독자 변동을 관찰할 때 사용한다. SUB와 XSUB의 `subscription_at(index)`는 항목을 찾으면
+`std::optional<subscription_filter_t>`에 filter와 pattern 여부를 담아 반환한다.
 
 ---
 

@@ -6,6 +6,8 @@
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/request_deadline.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
+#include "runtime/channels/channel_reply_writer.hpp"
+#include "runtime/spots/instance_spot_application.hpp"
 #include "channel-header-v1.pb.h"
 
 #include <service_wire_pilot_codec.hpp>
@@ -977,6 +979,55 @@ static void test_native_service_wire_length_boundaries_and_goldens ()
       protocol::encode_application_payload (traced_multipart_with_flow), multipart_golden);
 }
 
+static void test_instance_spot_application_envelope ()
+{
+    using messaging::message_kind_t;
+    const std::string name = "$zlink.admission-queue.enqueue";
+    const std::string flow = "018f0ca4-7e70-7c01-bba2-d41c203c1654";
+    const std::vector<std::uint8_t> json{'{', '}'};
+    const auto frame = messaging::encode_instance_spot_application (
+      {.kind = message_kind_t::request,
+       .channel_name = "unrelated-channel",
+       .message_name = name,
+       .content_type = "application/json",
+       .flow_id = messaging::header_text_t (flow),
+       .flow_origin = zlink::framework::flow_origin_t::application},
+      zlink::message_t::from (json));
+    assert (frame.packet_name () == protocol::framework_multipart_packet_name);
+    const auto bytes = protocol::encode_application_payload (frame);
+    assert (bytes.front () == 1);
+    const auto request = messaging::decode_instance_spot_application (
+      protocol::decode_application_payload (bytes), message_kind_t::request, true);
+    assert (request);
+    assert (request.value ().header.message_name == name);
+    assert (request.value ().header.channel_name == "unrelated-channel");
+    assert (request.value ().header.content_type == "application/json");
+    assert (request.value ().header.flow_id && *request.value ().header.flow_id == flow);
+    assert (request.value ().header.flow_origin == zlink::framework::flow_origin_t::application);
+    assert (request.value ().body.to_bytes () == json);
+
+    const zlink::framework::detail::channel_reply_writer_t replies;
+    const auto reply = messaging::encode_instance_spot_application (
+      replies.create_reply_header (message_kind_t::response, {}, request.value ().header),
+      zlink::message_t::from (json));
+    const auto decoded_reply = messaging::decode_instance_spot_application (
+      protocol::decode_application_payload (protocol::encode_application_payload (reply)),
+      message_kind_t::response);
+    assert (decoded_reply && decoded_reply.value ().header.message_name == name + ".reply");
+    assert (decoded_reply.value ().body.to_bytes () == json);
+    assert (!messaging::decode_instance_spot_application (reply, message_kind_t::request));
+
+    protocol::application_payload_t::multipart_t missing_body;
+    missing_body.push_back (messaging::envelope_codec_t{}.encode_header (request.value ().header));
+    assert (!messaging::decode_instance_spot_application (
+      protocol::application_payload_t::from_parts (std::move (missing_body)),
+      message_kind_t::request));
+    const auto recovered = messaging::decode_instance_spot_application (
+      {name, "application/json", json}, message_kind_t::request);
+    assert (recovered && recovered.value ().header.message_name == name);
+    assert (recovered.value ().body.to_bytes () == json);
+}
+
 // Existing codec accessors expose both container and native payload identity.
 static void test_moved_multipart_ownership ()
 {
@@ -1204,6 +1255,7 @@ int main (int argc, char **argv)
     }
 
     test_application_payload_wire_bytes ();
+    test_instance_spot_application_envelope ();
     test_retained_multipart_wire_bytes ();
     test_moved_multipart_ownership ();
     test_native_service_headers ();

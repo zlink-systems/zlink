@@ -1664,11 +1664,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   leaveActor(
     actor: ZLinkBackendActorRef,
     expectedMembershipEpoch: bigint,
+    expectedAuthorityOwnerGeneration: bigint,
     timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorLeave,
-      this.requireStateful().leaveActor(actor, expectedMembershipEpoch, timeoutMs)
+      this.requireStateful().leaveActor(
+        actor,
+        expectedMembershipEpoch,
+        expectedAuthorityOwnerGeneration,
+        timeoutMs
+      )
     );
   }
 
@@ -2780,7 +2786,8 @@ function replyActorJoinNotSupported(): SubmitResultValue {
 
 export function decodeRelocatedInstanceSpotRecord(
   frozen: import('../../foundation/service-stateful-wire-codec').ServiceWireFrozenRecord,
-  reply: NonNullable<ServiceStatefulMailboxData['reply']>
+  reply: NonNullable<ServiceStatefulMailboxData['reply']>,
+  spotTargetAdmission: NonNullable<ServiceStatefulMailboxData['spotTargetAdmission']>
 ): ReceiveRecord {
   const record = frozen.instanceSpot!;
   const payload = frozen.applicationPayload!;
@@ -2799,6 +2806,7 @@ export function decodeRelocatedInstanceSpotRecord(
         operationKind: frozen.operationKind,
         sourceSpotId: record.sourceSpotId,
         activationRecord: record,
+        spotTargetAdmission,
         applicationMetadata: frozen.metadataFrame,
         ...(record.replyRouteId === undefined ? {} : { reply })
       },

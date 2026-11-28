@@ -94,6 +94,17 @@ public final class Program {
             .initializers(applicationContext ->
                 applicationContext.getBeanFactory().registerSingleton("hostArgs", parsed))
             .run();
+        if (ActorDestroyScenario.enabled(parsed)) {
+            try (context) {
+                var store = (ActorDestroyStore) context.getBean(ZLinkLocationStore.class);
+                var scenario = new ActorDestroyScenario(parsed, context, store);
+                awaitServing(context.getBean(ZLinkFrameworkLifecycle.class).runtimeBean());
+                store.events().emit("hostReady", "pid", ProcessHandle.current().pid());
+                writeReadyFile(parsed);
+                scenario.run();
+            }
+            return;
+        }
         writeReadyFile(parsed);
         watchStopFile(parsed, context);
     }
@@ -135,14 +146,21 @@ public final class Program {
     }
 
     @Bean
-    ZLinkLocationStore relocationLocationStore(HostArgs args) {
-        String redisEndpoint = args.option("redis-endpoint", null);
+    SealedJoinObservation sealedJoinObservation(HostArgs args, EventSink sink) {
+        return new SealedJoinObservation(args, sink);
+    }
+
+    @Bean
+    ZLinkLocationStore relocationLocationStore(HostArgs args, EventSink sink) {
+        String redisEndpoint = ActorDestroyScenario.enabled(args)
+            ? args.require("redis-endpoint") : args.option("redis-endpoint", null);
         if (redisEndpoint == null || redisEndpoint.isBlank()) {
             return null;
         }
         ZLinkRedisLocationStore redis = new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions()
             .setConnectionString(redisEndpoint)
             .setKeyPrefix(args.option("redis-key-prefix", "zlink-cross-relocation") + ":location"));
+        if (ActorDestroyScenario.enabled(args)) return new ActorDestroyStore(redis, args, sink);
         if (args.option("outage-control-prefix", null) == null) return redis;
         return new CrossLanguageOutageStore(redis, args.require("mesh-name"), args.require("node-rid"),
             args.option("actor-id", "cross-lang-user-spot-actor"));
@@ -162,6 +180,7 @@ public final class Program {
     @Bean
     ZLinkFrameworkConfigurer crossLanguageFramework(
         HostArgs args,
+        SealedJoinObservation sealedJoin,
         ObjectProvider<ZLinkLocationStore> locationStoreProvider,
         ObjectProvider<ZLinkRedisRelocationStore> relocationStoreProvider) {
         // The store beans are null in modes without --redis-endpoint
@@ -180,6 +199,10 @@ public final class Program {
                 locations.setStoreFailureGrace(OutageLeaseProfile.duration("storeFailureGraceMs"));
             }
             String mode = args.mode();
+            if (ActorDestroyScenario.enabled(args)) {
+                ActorDestroyScenario.configure(options, args, locationStore);
+                return;
+            }
             if ("login-admission-server".equals(mode)) {
                 options.addStreamNode("stream.login-admission")
                     .bind(args.require("stream-endpoint"))
@@ -235,9 +258,8 @@ public final class Program {
                 // section 9) -- this host never selects the transport.
                 boolean target = "user-spot-target".equals(mode);
                 String meshName = args.require("mesh-name");
-                // Message-flow evidence lands in the host log (the framework
-                // traces through SLF4J); no <event-file>.flow is produced by
-                // the Java host, so no canonical-28 wire probe exists here.
+                // Framework message flow is emitted through SLF4J. The sealed
+                // Join observer captures it; Java does not log the wire command.
                 options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
                 if (locationStore != null) {
                     options.addLocationStore(locationStore);
@@ -514,7 +536,8 @@ public final class Program {
                 startDaemon("user-spot-target-discovery",
                     () -> observeSourcePeer(sink, routes, meshRuntime, meshName, sourceNodeRid));
             }
-            if (args.option("outage-control-prefix", null) == null) {
+            if (args.option("outage-control-prefix", null) == null
+                && !SealedJoinObservation.injectsCompletionFailure()) {
                 startDaemon("user-spot-target-probe",
                     () -> probeJoinedActor(sink, observer, actorClient, actorId, targetNodeRid));
             }

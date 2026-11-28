@@ -445,7 +445,7 @@ Socket의 공통 option facade에 있는
   message, subscription event, pull 수신에 사용하는 `StreamPacket` 값.
 - 모든 socket family와 그 typed option. `SubSocket::subscription_at(index)`와
   `XSubSocket::subscription_at(index)`는 해당 인덱스의 subscription filter와
-  pattern 여부를 반환한다. 해당 인덱스가 없으면 `None`을 반환한다.
+  pattern 여부를 반환한다. 해당 인덱스가 없으면 `Ok(None)`을 반환한다. 조회 규칙은 [공통 Subscription 조회](../README.ko.md#subscription-조회)를 따른다.
 - Monitor, poller, timer, readiness 의미.
 
 Rust 이름과 ownership 모델은 C와 다를 수 있지만, 동작은 core 능력의 의미와

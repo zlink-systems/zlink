@@ -710,9 +710,20 @@ latency는 패턴 유형에 따라 측정 방식을 분리한다.
 각 size는 아래 순서로 측정한다.
 
 1. ready → active phase(포화 송신) → bounded drain → paced latency phase → drain
-- throughput은 active phase에서만 산출한다.
-- latency는 paced latency phase에서만 산출한다. 목표 송신률은 active phase 수신률 × 0.8이며,
-  sender마다 active phase 송신 수락 비율로 나눈다. 각 sender는 `epoch + k / rate` 일정으로 보낸다.
+- throughput은 active phase에서만 산출한다. active phase의 송신은 패턴의 모든 sender(client 소켓)에 고르게 돌린다.
+  한 sender가 막힐 때까지 그 sender로만 보내지 않는다. 그래서 "N clients" 칸은 연결 N개의 합계 처리량이다.
+  한 sender에 연속으로 보내는 수는 최대 64이고, 그 뒤 다음 sender로 넘긴다. 이 64는 수신 쪽 구독자당 처리 묶음과 같은
+  값이며 C 공통 상수 하나(`perf_multi_measurement`)가 소유한다. active·paced, 송신·수신이 같은 상수를 쓴다.
+- latency는 paced latency phase에서만 산출한다. 목표 송신률은 active phase 수신률 × 0.8이다.
+  한 패턴의 sender들은 `epoch + k / rate` 일정 하나를 공유하고, 일정의 다음 송신은 지금 보낼 수 있는
+  sender가 맡는다. sender마다 일정을 나누지 않는다. 기준 구현은 C
+  `bindings/c/perf/multi/src/perf_multi_dealer_dealer_client.cpp`의 공유 `schedule_t`다.
+  한 스레드가 송신과 reply 수신을 함께 하는 SENDSEND 클라이언트는 paced latency phase의 수신 turn 중에도
+  reply `max_burst_per_sender`(64)건마다 예정 송신을 진행한다. 예정 송신 여부는 공유 일정이 판정한다.
+- poller로 다음 송신 시각까지 기다릴 때는 남은 시간을 ms로 내림하고 최대 50ms로 한다. 1ms 미만이 남으면
+  기다리지 않고(0ms) 바로 다시 확인한다. 바쁜 대기는 다음 송신 직전 1ms 안쪽에서만 생기고, 송신 간격이 그보다
+  길면 poller에서 기다린다. 측정 도구가 1ms를 넘게 자서 지연을 만들지 않게 하려는 것이다.
+  이 규칙은 C `schedule_t::wait_ms`가 소유한다. STREAM 클라이언트는 poll이 아니라 asio 타이머로 그 시각에 깨어난다.
 - PUBSUB 외 패턴은 송신 시각이 `[epoch + 0.5 s, epoch + 0.5 s + latency duration)`인 메시지를 표본으로 쓴다.
 - PUBSUB는 catch-up 판정 뒤 표본을 모은다. 규칙은
   [PERF_POLICY.md "PUBSUB multi latency"](PERF_POLICY.md#pubsub-multi-latency)를 따른다.
@@ -1033,7 +1044,7 @@ run_benchmarks_multi.sh / .ps1                         # 공식 multi entrypoint
 | `--pattern-transition-ms N` | pattern 전환 cooldown(ms) | 3000 |
 | `--server-ready-timeout-ms N` | server READY 대기 타임아웃(ms) | 10000 |
 | `--connect-ready-timeout-ms N` | 연결 준비 대기 타임아웃(ms) | 10000 |
-| `--monitor-hwm N` | 모니터 큐 HWM(byte). C/Go runner의 동등 옵션은 `--monitor-hwm-bytes`다 | 4,096,000 |
+| `--monitor-hwm-bytes BYTES` | 모니터 큐 HWM(byte) | 4,096,000 |
 | `--server-shutdown-timeout-ms N` | server 종료 대기 타임아웃(ms) | 5000 |
 | `--server-bind-port N` | server 바인드 포트 (0=자동 할당) | 0 |
 | `--auto-hwm-profile NAME` | context auto-HWM profile (`compact`, `low_latency`, `balanced`, `throughput`) | `balanced` |
@@ -1311,7 +1322,7 @@ bindings/c/perf/run_benchmarks_multi.sh --pattern STREAM --transports tcp --msg-
 | `PERF_MULTI_SNDBUF` | debug 전용 송신 OS buffer override. allow flag가 켜진 경우에만 사용 | 비활성 |
 | `PERF_MULTI_RCVBUF` | debug 전용 수신 OS buffer override. allow flag가 켜진 경우에만 사용 | 비활성 |
 | `PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES` | 수동 HWM/SNDBUF/RCVBUF override 허용 플래그 | 0 |
-| `PERF_MULTI_MONITOR_HWM` | 모니터 큐 HWM(byte). C/Go는 단위가 명시된 `PERF_MULTI_MONITOR_HWM_BYTES`를 사용한다 | 4,096,000 |
+| `PERF_MULTI_MONITOR_HWM_BYTES` | 모니터 큐 HWM(byte) | 4,096,000 |
 | `PERF_MULTI_PUBSUB_XPUB_NODROP` | PUBSUB 서버의 `ZLINK_XPUB_NODROP` 진단 override | 0 |
 | `PERF_MULTI_PRINT_AUTO_HWM_DETAIL` | auto-HWM detail 출력 여부. `0`이면 출력하지 않는다 | 1 |
 
@@ -1400,7 +1411,7 @@ pattern별 공식 start contract 를 사용한다.
 | `STREAM` server start gate | runner의 `START` 뒤 target `CONNECTION_READY` 수 확인, context auto-HWM 재계산, connected snapshot 수집, `SERVER_START_READY` 출력 |
 | 대기 방식 | app thread에서 타임아웃 기반 bounded wait — busy-wait/sleep 금지 |
 | 타임아웃 | `PERF_MULTI_CONNECT_READY_TIMEOUT_MS` (기본 10000ms) 초과 시 run 실패 처리 |
-| Monitor HWM | raw monitor 사용 시 4,096,000 byte. C/Go는 `PERF_MULTI_MONITOR_HWM_BYTES`, 나머지 binding은 `PERF_MULTI_MONITOR_HWM`을 사용한다 |
+| Monitor HWM | raw monitor 사용 시 4,096,000 byte. `PERF_MULTI_MONITOR_HWM_BYTES`로 설정한다 |
 
 - raw socket client pattern이 monitor lifecycle을 소유한다. configured open은 공용
   helper로 감쌀 수 있으며, ready gate는 expected client 수 `CONNECTION_READY`

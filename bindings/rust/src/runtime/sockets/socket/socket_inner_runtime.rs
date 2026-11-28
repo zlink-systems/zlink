@@ -1,5 +1,7 @@
 use super::*;
 
+const DEFAULT_OPTION_BUFFER_SIZE: usize = 256;
+
 /// Core's endpoint field is `char[256]`: reject NUL bytes and anything over 255
 /// bytes here instead of letting Core truncate.
 fn endpoint_cstring(addr: &str) -> Option<CString> {
@@ -160,52 +162,29 @@ impl crate::internal::SocketStorage {
         &self,
         index: usize,
     ) -> Result<Option<(String, bool)>, ConfigError> {
-        let mut len = 0usize;
-        let mut is_pattern = 0i32;
-        let rc = unsafe {
+        let mut buffer = vec![0u8; DEFAULT_OPTION_BUFFER_SIZE];
+        let mut len = buffer.len();
+        let mut is_pattern = 0;
+        let mut query = |buffer: &mut [u8], len: &mut usize| unsafe {
             ffi::zlink_subscription_at(
                 self.handle,
                 index,
-                ptr::null_mut(),
-                &mut len,
+                buffer.as_mut_ptr().cast(),
+                len,
                 &mut is_pattern,
             )
         };
-        if rc != 0 && len == 0 {
-            let err = check_config_rc(rc).expect_err("nonzero subscription_at result");
-            if err.code() == crate::contracts::errors::errors::ConfigResult::NotFound {
-                return Ok(None);
-            }
-            return Err(err);
+        let mut rc = query(&mut buffer, &mut len);
+        if rc == ffi::zlink_config_result_t::ZLINK_CONFIG_BUFFER_TOO_SMALL as i32 {
+            buffer.resize(len, 0);
+            rc = query(&mut buffer, &mut len);
         }
-        if len == 0 {
-            check_config_rc(unsafe {
-                ffi::zlink_subscription_at(
-                    self.handle,
-                    index,
-                    ptr::null_mut(),
-                    &mut len,
-                    &mut is_pattern,
-                )
-            })?;
-            return Ok(Some((String::new(), is_pattern != 0)));
+        if rc == ffi::zlink_config_result_t::ZLINK_CONFIG_NOT_FOUND as i32 {
+            return Ok(None);
         }
-        let mut buffer = vec![0i8; len];
-        check_config_rc(unsafe {
-            ffi::zlink_subscription_at(
-                self.handle,
-                index,
-                buffer.as_mut_ptr(),
-                &mut len,
-                &mut is_pattern,
-            )
-        })?;
-        let bytes = buffer
-            .iter()
-            .take(len)
-            .map(|value| *value as u8)
-            .collect::<Vec<_>>();
-        let filter = String::from_utf8(bytes).map_err(|_| config_validation_error())?;
+        check_config_rc(rc)?;
+        buffer.truncate(len);
+        let filter = String::from_utf8(buffer).map_err(|_| config_validation_error())?;
         Ok(Some((filter, is_pattern != 0)))
     }
 
@@ -269,40 +248,39 @@ impl crate::internal::SocketStorage {
         get_u64_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_RCVHWM)
     }
 
-    pub(crate) fn set_linger(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(
-            self.handle,
-            ffi::zlink_option_t::ZLINK_OPT_LINGER,
-            milliseconds,
-        )
+    pub(crate) fn set_linger(&self, duration: Option<Duration>) -> Result<(), ConfigError> {
+        set_optional_duration_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_LINGER, duration)
     }
 
-    pub(crate) fn linger(&self) -> Result<i32, ConfigError> {
-        get_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_LINGER)
+    pub(crate) fn linger(&self) -> Result<Option<Duration>, ConfigError> {
+        get_optional_duration_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_LINGER)
     }
 
-    pub(crate) fn set_send_timeout(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(
+    pub(crate) fn set_send_timeout(&self, duration: Option<Duration>) -> Result<(), ConfigError> {
+        set_optional_duration_opt(
             self.handle,
             ffi::zlink_option_t::ZLINK_OPT_SNDTIMEO,
-            milliseconds,
+            duration,
         )
     }
 
-    pub(crate) fn send_timeout(&self) -> Result<i32, ConfigError> {
-        get_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_SNDTIMEO)
+    pub(crate) fn send_timeout(&self) -> Result<Option<Duration>, ConfigError> {
+        get_optional_duration_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_SNDTIMEO)
     }
 
-    pub(crate) fn set_receive_timeout(&self, milliseconds: i32) -> Result<(), ConfigError> {
-        set_int_opt(
+    pub(crate) fn set_receive_timeout(
+        &self,
+        duration: Option<Duration>,
+    ) -> Result<(), ConfigError> {
+        set_optional_duration_opt(
             self.handle,
             ffi::zlink_option_t::ZLINK_OPT_RCVTIMEO,
-            milliseconds,
+            duration,
         )
     }
 
-    pub(crate) fn receive_timeout(&self) -> Result<i32, ConfigError> {
-        get_int_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_RCVTIMEO)
+    pub(crate) fn receive_timeout(&self) -> Result<Option<Duration>, ConfigError> {
+        get_optional_duration_opt(self.handle, ffi::zlink_option_t::ZLINK_OPT_RCVTIMEO)
     }
 
     pub(crate) fn set_reconnect_interval(&self, d: Duration) -> Result<(), ConfigError> {
@@ -492,7 +470,7 @@ impl crate::internal::SocketStorage {
     }
 
     pub(crate) fn last_endpoint(&self) -> Result<String, ConfigError> {
-        let mut buf = [0u8; 256];
+        let mut buf = [0u8; DEFAULT_OPTION_BUFFER_SIZE];
         let mut len = buf.len();
         check_config_rc(unsafe {
             ffi::zlink_get_option(
@@ -831,6 +809,23 @@ impl crate::internal::SocketStorage {
                 self.handle,
                 opt,
                 &mut value as *mut u32 as *mut c_void,
+                &mut len,
+            )
+        })?;
+        Ok(value)
+    }
+
+    pub(crate) fn get_dealer_i32_opt(
+        &self,
+        opt: ffi::zlink_dealer_option_t,
+    ) -> Result<i32, ConfigError> {
+        let mut value: i32 = 0;
+        let mut len = std::mem::size_of::<i32>();
+        check_config_rc(unsafe {
+            ffi::zlink_get_dealer_option(
+                self.handle,
+                opt,
+                &mut value as *mut i32 as *mut c_void,
                 &mut len,
             )
         })?;

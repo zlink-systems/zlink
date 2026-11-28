@@ -182,13 +182,15 @@ Send와 request의 `Submit(context.Context)`는 Core `DONTWAIT`로 한 번 제�
 `*ConfigError`로 전달한다.
 
 `SubSocket`과 `XSubSocket`은 `SetSubscription(filter string) error`,
-`UnsetSubscription(filter string) error`, `SubscriptionAt(index int) (string, bool, error)`를 제공한다.
-조회는 filter와 pattern 여부를 반환한다.
+`UnsetSubscription(filter string) error`, `SubscriptionAt(index int) (Subscription, bool, error)`를 제공한다.
+조회는 filter와 pattern 여부를 `Subscription{Filter string; Pattern bool}`로 반환하고, 해당 인덱스가 없으면 `bool`이 `false`다. 조회 규칙은 [공통 Subscription 조회](../README.ko.md#subscription-조회)를 따른다.
 `XPubSocket.ReceiveSubscriptionEvent(out *SubscriptionEvent, flags RecvFlags) (bool, error)`는 caller가
 제공한 결과를 채운다.
 
-`CommonOptions()`는 PAIR·DEALER·ROUTER·PUB·SUB·XPUB·XSUB의 `CommonSocketOptions`를, `PubOptions()`는
-PUB·XPUB의 `PubSocketOptions`를 반환한다. ROUTER의
+`CommonOptions() *CommonSocketOptions`는 PAIR·DEALER·ROUTER·PUB·SUB·XPUB·XSUB·STREAM에서
+사용할 수 있다. STREAM에서 Core가 지원하지 않는 공통 옵션은 Core의 결과 코드와 errno를
+`*ConfigError`로 전달한다.
+`PubOptions()`는 PUB·XPUB의 `PubSocketOptions`를 반환한다. ROUTER의
 `SetMandatory`·`SetHandover`·`SetProbe`·`SetConnectRoutingID`, DEALER의 `SetProbe`, STREAM의
 `SetNotify`·`SetReceiveMode`, SUB·XSUB의 `TopicsCount`는 소켓 메서드다.
 

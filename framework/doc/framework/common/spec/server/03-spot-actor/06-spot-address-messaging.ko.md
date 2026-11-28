@@ -446,6 +446,11 @@ target 일치 조건으로 사용하지 않는다. Local과 remote owner는 같�
 completion 의미를 가진다. Instance intent가 없는 direct call은 existing-only operation이며,
 이미 존재하는 Ready Spot만 대상으로 한다.
 
+Spot ID로 주소를 정한 message(direct call과 Instance intent의 cold activation)는 Spot ID와 route로 target을
+찾고 packet name으로 handler를 찾는다. 내부 application envelope header의 `channelName`은 이 dispatch에
+쓰지 않는다. 송신 MeshNode는 이 값을 빈 문자열로 둘 수 있고, 수신 MeshNode는 값이 비어 있거나 어떤 값이든
+그 이유로 message를 거절하지 않는다.
+
 - **Resolve 뒤 같은 owner에서 close와 recreate가 발생했다면 target queue가 수락하는 시점의
   current Ready Spot이 message를 처리한다.**
 - **찾은 owner가 더 이상 해당 SpotId를 소유하지 않으면 현재 operation은 stale route
@@ -515,6 +520,13 @@ Close 절차는 다음 순서로 진행한다.
    message가 있고 drain이나 relocation 중이 아님)을 만족하지 않으면 같은 fence로 authority를 해제한다. 이때 기다리던 Instance intent request는 이 host가 drain 중이면 `ShuttingDown`,
    relocation 중이면(seal 전후 모두) `Unavailable`로 끝나며 send는 diagnostics에 남는다. 이미 수락한 message를
    다시 배치하지 않는다([Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)).
+
+**같은 incarnation의 Close가 이미 등록되어 있으면 뒤 Close 요청은 새 Close 작업을 만들지 않고 그 Close의
+결과에 합류한다.** 합류는 요청이 들어올 때 그 incarnation의 Close 등록 하나로 정해진다. 요청은 catalog나
+lifecycle lane의 차례를 기다린 뒤에 판정하지 않으며, 진행 중인 Close의 단계를 기다리는 동안 다시 판정하지 않는다.
+등록은 그 Close의 결과가 정해질 때 풀린다. 합류한 호출자의 취소를 공유 결과가 정해지기 전에 관찰하면 그 호출은 취소로 끝나고, 진행 중인
+Close에는 영향을 주지 않는다. Lifecycle turn을 다시 시작하지 못한 내부 사유(Spot이 닫힘)는 합류한 호출의 결과가
+아니다 — 합류한 호출은 공유 결과나 자기 취소 중 하나로만 끝난다. 자기 취소는 공개 Close가 호출자 취소 수단(cancellation token·signal 등)을 받는 언어에만 있다. 받지 않는 언어(C++ `spot_context_t::close()`)의 합류 호출은 공유 결과로만 끝난다.
 
 **Ready 전에 요청한 context Close는 Ready 뒤에 시작한다.** Ready 전에는 handler와 timer callback이
 실행되지 않으므로([Spot timer §1](10-spot-timer.ko.md#1-timer-generation과-cancel)) 이런 요청은 `Configure`·`OnCreateAsync`·

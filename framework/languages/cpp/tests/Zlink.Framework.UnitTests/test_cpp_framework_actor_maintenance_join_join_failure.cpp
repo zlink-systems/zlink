@@ -182,6 +182,58 @@ TEST (ActorMaintenanceJoin, NotifyFailureDoesNotChangeSuccessfulJoinCompletion)
     }
 }
 
+TEST (ActorMaintenanceJoin, SpotDrainLogsUnfinishedJoinDelivery)
+{
+    auto node =
+      fw::test::runtime_failure_fixture<fw::detail::spot_node_builder_state_t> (mesh_name);
+    const auto actor = fw::detail::actor_ref_access_t::make (
+      fw::node_rid_t::from_string (first_rid), actor_type, actor_id, 1);
+    node->actor_instances.emplace (std::string (actor_type) + ":" + actor_id,
+                                   std::make_shared<int> (0));
+    fw::task_completion_source_t<void> callback;
+    node->actor_factories[actor_type].on_join_completed = [&] (auto &&...) {
+        return callback.task ();
+    };
+
+    std::promise<void> observed;
+    auto diagnostic = observed.get_future ();
+    std::once_flag first_observation;
+    const auto signal = [&] { std::call_once (first_observation, [&] { observed.set_value (); }); };
+    std::exception_ptr failure;
+    fw::logging_builder_t logging;
+    logging.use_console ().use_callback_sink ([&] (const fw::log_record_t &item) {
+        if (item.message == "zlink.runtime.spot.join_drain_unfinished")
+            signal ();
+    });
+    node->monitoring->diagnostics_logger = logging.create_logger ("test");
+    node->runtime_failures ()->bind_runtime_reporter ([&] (std::exception_ptr error) {
+        failure = std::move (error);
+        signal ();
+    });
+
+    fw::detail::spot_node_runtime_t runtime (node);
+    auto delivery = runtime.deliver_actor_join_completion (
+      actor, fw::actor_join_failed_t{1, 2, fw::framework_error_kind_t::unavailable}, std::nullopt);
+    std::jthread drain (
+      [&] { fw::detail::drain_spot_node_executors (*node, std::chrono::steady_clock::now ()); });
+    const auto ready = diagnostic.wait_for (wait_budget);
+    callback.complete (fw::result_t<void>::success ());
+    drain.join ();
+
+    EXPECT_EQ (ready, std::future_status::ready);
+    EXPECT_EQ (failure, nullptr);
+    EXPECT_TRUE (delivery.result ().value ());
+    const auto &records = logging.captured_records ();
+    ASSERT_EQ (records.size (), 1u);
+    EXPECT_EQ (records.front ().message, "zlink.runtime.spot.join_drain_unfinished");
+    ASSERT_EQ (records.front ().fields.size (), 2u);
+    EXPECT_EQ (records.front ().level, fw::log_level_t::error);
+    EXPECT_EQ (records.front ().fields[0].key, "pending_count");
+    EXPECT_EQ (records.front ().fields[0].value, "1");
+    EXPECT_EQ (records.front ().fields[1].key, "deliveries");
+    EXPECT_EQ (records.front ().fields[1].value, "operation_id=1:2 waiting=actor_callback");
+}
+
 #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
 TEST (ActorMaintenanceJoin, SpotDrainWaitsForNativeReadyAfterJoinCompletion)
 {

@@ -6,7 +6,6 @@ endif()
 
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(Python3 COMPONENTS Interpreter)
 
 get_filename_component(ZLINK_C_BINDINGS_DIR "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 get_filename_component(ZLINK_REPO_ROOT_DIR "${ZLINK_C_BINDINGS_DIR}/../.." ABSOLUTE)
@@ -24,8 +23,6 @@ set(PERF_EXTERNAL_INCLUDE_DIR "${ZLINK_REPO_ROOT_DIR}/core/external")
 if(NOT EXISTS "${PERF_EXTERNAL_INCLUDE_DIR}")
     set(PERF_EXTERNAL_INCLUDE_DIR "${ZLINK_REPO_ROOT_DIR}/external")
 endif()
-set(PERF_BENCH_SINGLE_COMMON_DIR
-    "${ZLINK_C_BINDINGS_DIR}/bench/with_zmq/single/common")
 set(PERF_BENCH_MULTI_COMMON_DIR
     "${ZLINK_C_BINDINGS_DIR}/bench/with_zmq/multi/common")
 
@@ -56,22 +53,6 @@ function(add_current_bench_single name source)
     if(NOT PERF_ZLINK_HAS_COMPLETION_RECORD_API)
         target_compile_definitions(${name} PRIVATE PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API=1)
     endif()
-    configure_current_bench_runtime(${name})
-endfunction()
-
-function(add_current_bench_single_recv name source)
-    add_executable(${name} ${source})
-    target_link_libraries(${name} PRIVATE zlink_c Threads::Threads)
-    if(NOT WIN32)
-        target_link_libraries(${name} PRIVATE dl)
-    endif()
-    target_include_directories(${name} PRIVATE
-        ${PERF_BINDINGS_C_INCLUDE_DIR}
-        ${PERF_BENCH_SINGLE_COMMON_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/single/common
-        ${PERF_EXTERNAL_INCLUDE_DIR})
-    target_compile_options(${name} PRIVATE ${PERF_CXX_FLAGS})
-    target_compile_features(${name} PRIVATE cxx_std_11)
     configure_current_bench_runtime(${name})
 endfunction()
 
@@ -154,6 +135,8 @@ endif()
                            multi/src/perf_multi_pubsub_client.cpp)
     add_current_bench_multi(perf_multi_metrics_test
                            multi/tests/test_perf_multi_metrics.cpp)
+    add_current_bench_multi(perf_multi_echo_pacing_test
+                           multi/tests/test_perf_multi_echo_pacing.cpp)
     add_current_bench_multi(perf_relay_completion_progress_test
                            tests/test_relay_completion_progress.cpp)
     add_current_bench_multi(perf_reqrep_reply_progress_test
@@ -162,6 +145,10 @@ endif()
         add_test(NAME perf_multi_metrics_test COMMAND perf_multi_metrics_test)
         set_tests_properties(perf_multi_metrics_test PROPERTIES
             LABELS "perf-metric"
+            TIMEOUT 30)
+        add_test(NAME perf_multi_echo_pacing_test COMMAND perf_multi_echo_pacing_test)
+        set_tests_properties(perf_multi_echo_pacing_test PROPERTIES
+            LABELS "perf-regression"
             TIMEOUT 30)
         add_test(NAME perf_relay_completion_progress_test
                  COMMAND perf_relay_completion_progress_test)

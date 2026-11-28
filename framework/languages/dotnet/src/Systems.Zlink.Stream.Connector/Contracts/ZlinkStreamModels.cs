@@ -140,3 +140,6 @@ public sealed record ZlinkStreamAdmissionWaiting(
     string? ActorId,
     TimeSpan RetryAfter
 );
+
+/// <summary>The current position of this connection in the server's login queue.</summary>
+public sealed record ZlinkStreamAdmissionPosition(int Position, int EstimatedWaitMs);

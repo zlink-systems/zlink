@@ -68,6 +68,7 @@
         <Compile Include="AssemblyInfo.cs"/>
         <Compile Include="Support/PerCallAllocation.cs"/>
         <Compile Include="Support/MessageFinalizerProbe.cs"/>
+        <Compile Include="Support/FailureTimeline.cs"/>
         <Compile Include="Runtime/MessageWrapperLifetimeTests.cs"/>
         <Compile Include="Support/PerCallAllocationTests.cs"/>
         <Compile Include="Runtime/PrestartCallTests.cs"/>
@@ -93,6 +94,7 @@
         <Compile Include="Runtime/PreReadyLogicalMulticastTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberSealCaptureTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberOwnershipTests.cs"/>
+        <Compile Include="Runtime/SpotWideMemberReplayFailureTests.cs"/>
         <Compile Include="Runtime/SpotWideTargetAdmissionTests.cs"/>
         <Compile Include="Runtime/SpotWideTargetSpotAdmissionTests.cs"/>
         <Compile Include="Runtime/SpotWideFindReadinessTests.cs"/>
@@ -100,6 +102,7 @@
         <Compile Include="Runtime/SpotActorDispatchErrorReasonTests.cs"/>
         <Compile Include="TestCompletionPollerDriver.cs"/>
         <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
+        <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostEventSink.cs" Link="Support/TestHostEventSink.cs"/>
         <Compile Include="Configuration/Registration/Channels.cs"/>
         <Compile Include="Configuration/FanoutPublisherConfigurationTests.cs"/>
         <Compile Include="Configuration/StartupDependencyMetadataTests.cs"/>
@@ -319,6 +322,15 @@
         <Compile Include="Runtime/StreamPermitLivenessTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.ReaderLiveness.cs"/>
+        <Compile Include="Runtime/AdmissionQueueTicketTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueWireTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueFixtureTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueSpotTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueMeshTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueConnectorMeshTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueStreamCodecTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueNodeTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueConfigurationTests.cs"/>
         <Compile Include="Runtime/StreamAuthenticationAdmissionTests.cs"/>
         <Compile Include="Runtime/StreamDisconnectProgressTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>
@@ -347,6 +359,9 @@
         <Compile Include="Runtime/AuditRuntimeFailureReporter.cs"/>
         <Compile Include="Runtime/ActorMembershipOwnershipTests.cs"/>
         <Compile Include="Runtime/RelocationBehaviorConformanceTests.cs"/>
+        <Compile Include="Runtime/RelocationBehaviorConformanceTests.ActorPreflight.cs"/>
+        <Compile Include="Runtime/RelocationBehaviorConformanceTests.SpotPreflight.cs"/>
+        <Compile Include="Runtime/RelocationBehaviorConformanceTests.JoinPublication.cs"/>
         <Compile Include="Runtime/RelocationSourceRestoreTests.cs"/>
         <Compile Include="Runtime/ActorHandoffTestRestoration.cs"/>
         <Compile Include="Runtime/RouteChangeProxy.cs"/>
@@ -362,6 +377,7 @@
         <Compile Include="Runtime/RelocationTreeParallelIoTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationRuntimeTests.cs"/>
         <Compile Include="Runtime/StandaloneActorRelocationPrecommitTests.cs"/>
+        <Compile Include="Runtime/StandaloneActorRelocationPrecommitTests.StopDeadline.cs"/>
         <Compile Include="Runtime/RelocationCompletionRecordTests.cs"/>
         <Compile Include="Runtime/RelocationCompletionStoreTests.cs"/>
         <Compile Include="Runtime/AuthorityAggregateRelocationTests.cs"/>

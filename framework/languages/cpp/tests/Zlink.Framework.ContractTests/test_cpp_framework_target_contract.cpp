@@ -67,11 +67,18 @@ int main ()
       root / "extensions/framework-locations-redis/include/zlink/locations/redis.hpp");
     const auto redis_cpp =
       read_text_file (root / "extensions/framework-locations-redis/src/redis.cpp");
-    const auto spot_runtime =
-      read_text_file (root / "framework/src/runtime/spots/spot_runtime.cpp");
-    const auto spot_runtime_header =
-      read_text_file (root / "framework/src/runtime/spots/spot_runtime.hpp");
-    const auto spot_runtime_surface = spot_runtime + spot_runtime_header;
+    const auto spot_runtime_dir = root / "framework/src/runtime/spots";
+    std::string spot_runtime;
+    for (const auto &entry : std::filesystem::directory_iterator (spot_runtime_dir)) {
+        const auto &path = entry.path ();
+        if (path.extension () == ".cpp" && path.stem ().string ().starts_with ("spot_runtime")) {
+            spot_runtime += read_text_file (path) + '\n';
+        }
+    }
+    const auto spot_runtime_header = read_text_file (spot_runtime_dir / "spot_runtime.hpp");
+    const auto spot_runtime_surface =
+      spot_runtime + spot_runtime_header
+      + read_text_file (spot_runtime_dir / "spot_runtime_internal.hpp");
     const auto actor_serial_executor =
       read_text_file (root / "framework/src/runtime/actors/actor_serial_executor.hpp");
     const auto spot_route_packets =
@@ -139,9 +146,11 @@ int main ()
     const auto authority_key_codec =
       read_text_file (root / "framework/src/runtime/locations/authority_key_codec.hpp");
     const auto in_memory_location_store =
-      read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.hpp");
+      read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.hpp")
+      + read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.cpp");
     const auto provider_location_repository =
-      read_text_file (root / "framework/src/runtime/locations/provider_location_repository.hpp");
+      read_text_file (root / "framework/src/runtime/locations/provider_location_repository.hpp")
+      + read_text_file (root / "framework/src/runtime/locations/provider_location_repository.cpp");
     const auto public_store_adapters =
       read_text_file (root / "framework/src/runtime/stateful/public_store_adapters.hpp");
     const auto actor_client =
@@ -165,7 +174,17 @@ int main ()
     const auto actor_transfer_coordinator =
       read_text_file (root / "framework/src/runtime/spots/actor_transfer_coordinator.cpp");
     const auto mesh_node_host_service =
-      read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
+      read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp")
+      + read_text_file (root
+                        / "framework/src/runtime/mesh/mesh_node_host_actor_creation_completion.cpp")
+      + read_text_file (root
+                        / "framework/src/runtime/mesh/mesh_node_host_actor_creation_target.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_actor_lifecycle.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_descriptors.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_dispatch.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_operations.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_placement.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_user_spot.cpp");
     const auto framework_message =
       read_text_file (include_root / "zlink/framework/contracts/messaging/message.hpp");
     const auto serializer_header =

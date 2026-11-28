@@ -396,7 +396,7 @@ function buildMultiOptionItems(opts) {
     ['rcvtimeo_ms', optionValue(opts.recvTimeoutMs, 'PERF_MULTI_RCVTIMEO_MS', 200)],
     ['connect_concurrency', connectDisplay],
     ['connect_ready_timeout_ms', String(resolveMultiConnectReadyTimeoutMs(opts.connectReadyTimeoutMs))],
-    ['monitor_hwm_bytes', optionValue(opts.monitorHwm, 'PERF_MULTI_MONITOR_HWM', 4096000)],
+    ['monitor_hwm_bytes', optionValue(opts.monitorHwm, 'PERF_MULTI_MONITOR_HWM_BYTES', 4096000)],
     ['server_ready_timeout_ms', optionValue(opts.serverReadyTimeoutMs, 'PERF_MULTI_SERVER_READY_TIMEOUT_MS', parseEnvInt('PERF_SERVER_READY_TIMEOUT_MS', 10000))],
     ['server_shutdown_timeout_ms', optionValue(opts.serverShutdownTimeoutMs, 'PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS', parseEnvInt('PERF_SERVER_SHUTDOWN_TIMEOUT_MS', 5000))],
     ['server_bind_port', optionValue(opts.serverBindPort, 'PERF_MULTI_SERVER_BIND_PORT', 0)],

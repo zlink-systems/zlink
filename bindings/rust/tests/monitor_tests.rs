@@ -46,9 +46,9 @@ fn wait_for_polled_monitor_event(
 
 fn assert_monitor_poller_lifecycle(endpoint: &str) {
     let ctx = Context::new().unwrap();
-    let mut router = ctx.router_socket().unwrap();
+    let mut router = ctx.create_router_socket().unwrap();
     router.bind(endpoint).unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     let monitor = SocketMonitor::open(&dealer).unwrap();
     let poller = Poller::new().unwrap();
     poller.add_monitor(&monitor, POLLIN, 73).unwrap();
@@ -66,9 +66,9 @@ fn assert_monitor_poller_lifecycle(endpoint: &str) {
     } else {
         format!("{endpoint}-after-remove")
     };
-    let router_after_remove = ctx.router_socket().unwrap();
+    let router_after_remove = ctx.create_router_socket().unwrap();
     router_after_remove.bind(&endpoint_after_remove).unwrap();
-    let dealer_after_remove = ctx.dealer_socket().unwrap();
+    let dealer_after_remove = ctx.create_dealer_socket().unwrap();
     let monitor_after_remove = SocketMonitor::open(&dealer_after_remove).unwrap();
     let poller_after_remove = Poller::new().unwrap();
     poller_after_remove
@@ -112,7 +112,7 @@ fn socket_monitor_poller_lifecycle_tcp() {
 #[test]
 fn socket_monitor_add_forwards_core_mask_results() {
     let ctx = Context::new().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     let monitor = SocketMonitor::open(&dealer).unwrap();
     let poller = Poller::new().unwrap();
 
@@ -143,7 +143,7 @@ fn socket_monitor_add_forwards_core_mask_results() {
 #[test]
 fn socket_monitor_modify_forwards_core_mask_results() {
     let ctx = Context::new().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     let monitor = SocketMonitor::open(&dealer).unwrap();
     let poller = Poller::new().unwrap();
     poller.add_monitor(&monitor, POLLIN, 1).unwrap();
@@ -202,7 +202,7 @@ fn monitor_status_detail_flow_state_bit_matches_c_abi() {
     // core/include/zlink_enum.h:
     //   ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE = 1u << 5
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     let mon = SocketMonitor::open(&sock).unwrap();
     let snap = mon.status().unwrap();
     // `has_flow_state_detail()` is `MonitorStatus`'s only public surface for
@@ -210,7 +210,8 @@ fn monitor_status_detail_flow_state_bit_matches_c_abi() {
     // agrees with the raw detail_flags mask bit-for-bit.
     assert_eq!(
         snap.has_flow_state_detail(),
-        snap.detail_flags & (1 << 5) != 0
+        snap.detail_flags
+            .contains(zlink::MonitorStatusDetailFlags::FLOW_STATE)
     );
 }
 
@@ -240,7 +241,7 @@ fn monitor_event_flag_constants_match_c_abi() {
 #[test]
 fn socket_monitor_recv_surface() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     sock.bind("inproc://mon-empty").unwrap();
 
     let _mon = SocketMonitor::open(&sock).unwrap();
@@ -250,7 +251,7 @@ fn socket_monitor_recv_surface() {
 #[test]
 fn socket_monitor_hwm_bytes_are_forwarded_exactly() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     let monitor_hwm_bytes = 12_345;
     let _mon = SocketMonitor::open_with_options(
         &sock,
@@ -277,12 +278,12 @@ fn socket_monitor_event_exposes_full_payload_fields() {
     // all of them are reachable, correctly typed, on a real event from a
     // live connection.
     let ctx = Context::new().unwrap();
-    let server = ctx.pair_socket().unwrap();
+    let server = ctx.create_pair_socket().unwrap();
     server.bind("inproc://mon-full-payload").unwrap();
 
     let mon = SocketMonitor::open(&server).unwrap();
 
-    let client = ctx.pair_socket().unwrap();
+    let client = ctx.create_pair_socket().unwrap();
     client.connect("inproc://mon-full-payload").unwrap();
 
     let mut saw_event = false;
@@ -291,7 +292,7 @@ fn socket_monitor_event_exposes_full_payload_fields() {
             saw_event = true;
             let _value: u64 = ev.value;
             let _connection_id: u64 = ev.connection_id;
-            let _transport_lane: u32 = ev.transport_lane;
+            let _transport_lane: zlink::TransportLane = ev.transport_lane;
             let _flags: MonitorEventFlags = ev.flags;
             // Confirms `flags` really is `MonitorEventFlags`, not a raw
             // integer -- this compiles only if the type and its API match.
@@ -308,12 +309,12 @@ fn socket_monitor_event_exposes_full_payload_fields() {
 #[test]
 fn socket_monitor_observes_connection() {
     let ctx = Context::new().unwrap();
-    let server = ctx.pair_socket().unwrap();
+    let server = ctx.create_pair_socket().unwrap();
     server.bind("inproc://mon-connect").unwrap();
 
     let mon = SocketMonitor::open(&server).unwrap();
 
-    let client = ctx.pair_socket().unwrap();
+    let client = ctx.create_pair_socket().unwrap();
     client.connect("inproc://mon-connect").unwrap();
 
     let mut found_event = false;
@@ -333,13 +334,13 @@ fn socket_monitor_blocking_recv_success() {
     // Blocking recv must return an event when a connection is made.
     // Open monitor, then trigger a connect in another thread.
     let ctx = Context::new().unwrap();
-    let server = ctx.pair_socket().unwrap();
+    let server = ctx.create_pair_socket().unwrap();
     server.bind("inproc://mon-blocking-recv").unwrap();
 
     let mon = SocketMonitor::open(&server).unwrap();
 
     // Trigger a connection from another thread so blocking recv has data
-    let ctx2_handle = ctx.pair_socket().unwrap();
+    let ctx2_handle = ctx.create_pair_socket().unwrap();
     let _connector = thread::spawn(move || {
         thread::sleep(Duration::from_millis(50));
         ctx2_handle.connect("inproc://mon-blocking-recv").unwrap();
@@ -348,7 +349,7 @@ fn socket_monitor_blocking_recv_success() {
     // Blocking recv – must return an event (not hang forever)
     let event = mon.recv().unwrap();
     assert!(
-        event.event != MonitorEventType(0),
+        event.event != MonitorEventType::Unknown(0),
         "blocking monitor recv must return a valid event"
     );
 }
@@ -356,7 +357,7 @@ fn socket_monitor_blocking_recv_success() {
 #[test]
 fn socket_monitor_status() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     sock.bind("inproc://mon-snapshot").unwrap();
 
     let mon = SocketMonitor::open(&sock).unwrap();

@@ -226,6 +226,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/mesh/service_mailbox.cpp
   framework/src/runtime/mesh/service_topology_registry.cpp
   framework/src/runtime/locations/location_store_format.cpp
+  framework/src/runtime/locations/provider_location_repository.cpp
   framework/src/runtime/locations/service_descriptor_registry.cpp
   framework/src/runtime/fanout/raw_fanout_owner.cpp
   framework/src/runtime/fanout/fanout_subscription.cpp
@@ -338,6 +339,13 @@ target_link_libraries(zlink_framework_m6c_runtime PUBLIC
   zlink_framework_m6b_runtime
   Threads::Threads)
 
+set(ZLINK_FRAMEWORK_CPP_SPOT_RUNTIME_SOURCES
+  framework/src/runtime/spots/spot_runtime.cpp
+  framework/src/runtime/spots/spot_runtime_activation.cpp
+  framework/src/runtime/spots/spot_runtime_actor_join.cpp
+  framework/src/runtime/spots/spot_runtime_ingress.cpp
+  framework/src/runtime/spots/spot_runtime_relocation.cpp)
+
 add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/codecs/json_profile_engine.cpp
   $<TARGET_OBJECTS:zlink_framework_m6a_objects>
@@ -378,18 +386,32 @@ add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/http/http_listener.cpp
   framework/src/runtime/http/http_request_pipeline.cpp
   framework/src/runtime/host/framework_runtime.cpp
+  framework/src/runtime/locations/in_memory_location_store.cpp
   framework/src/runtime/mesh/mesh_metadata_codec.cpp
   framework/src/runtime/mesh/mesh_node_host_service.cpp
+  framework/src/runtime/mesh/mesh_node_host_actor_creation_completion.cpp
+  framework/src/runtime/mesh/mesh_node_host_actor_creation_target.cpp
+  framework/src/runtime/mesh/mesh_node_host_actor_lifecycle.cpp
+  framework/src/runtime/mesh/mesh_node_host_descriptors.cpp
+  framework/src/runtime/mesh/mesh_node_host_dispatch.cpp
+  framework/src/runtime/mesh/mesh_node_host_operations.cpp
+  framework/src/runtime/mesh/mesh_node_host_placement.cpp
+  framework/src/runtime/mesh/mesh_node_host_user_spot.cpp
   framework/src/runtime/mesh/mesh_node_runtime.cpp
   framework/src/runtime/mesh/route_mesh_runtime_service.cpp
   framework/src/runtime/mesh/route_mesh_runtime_options_service.cpp
-  framework/src/runtime/spots/spot_runtime.cpp
+  ${ZLINK_FRAMEWORK_CPP_SPOT_RUNTIME_SOURCES}
   framework/src/runtime/mesh/mesh_record_dispatcher.cpp
   framework/src/runtime/spots/actor_transfer_coordinator.cpp
   framework/src/runtime/spots/spot_ids.cpp
   framework/src/runtime/spots/spot_route_internal_dispatcher.cpp
   framework/src/runtime/spots/spot_route_packets.cpp
   framework/src/runtime/streams/stream_compression.cpp
+  framework/src/runtime/streams/admission_ticket.cpp
+  framework/src/runtime/streams/admission_queue_messages.cpp
+  framework/src/runtime/streams/admission_queue_state.cpp
+  framework/src/runtime/streams/admission_queue_setup.cpp
+  framework/src/runtime/streams/admission_queue_node.cpp
   framework/src/runtime/streams/stream_runtime.cpp
   framework/src/runtime/streams/stream_host_core.cpp
   framework/src/runtime/streams/stream_host_service.cpp
@@ -423,7 +445,7 @@ if(ZLINK_FRAMEWORK_CPP_SHARED AND APPLE)
 endif()
 zlink_framework_cpp_configure_msvc_target(zlink_framework)
 if(MSVC)
-  set_property(SOURCE framework/src/runtime/spots/spot_runtime.cpp APPEND PROPERTY
+  set_property(SOURCE ${ZLINK_FRAMEWORK_CPP_SPOT_RUNTIME_SOURCES} APPEND PROPERTY
     COMPILE_OPTIONS
       "$<$<CONFIG:Release>:/O1>"
       "$<$<CONFIG:Release>:/Oi->")
@@ -460,7 +482,7 @@ zlink_framework_cpp_add_boost_headers(zlink_framework_m6b_objects)
 zlink_framework_cpp_add_boost_headers(zlink_framework_m6c_objects)
 zlink_framework_cpp_add_asio_system_libraries(zlink_framework)
 
-find_package(OpenSSL QUIET)
+find_package(OpenSSL REQUIRED)
 # These object libraries compile Framework headers before they are consumed by
 # zlink_framework, so they need the JSON include usage requirement directly.
 foreach(M6ObjectTarget IN ITEMS
@@ -470,12 +492,10 @@ foreach(M6ObjectTarget IN ITEMS
   target_link_libraries(${M6ObjectTarget} PRIVATE nlohmann_json::nlohmann_json)
 endforeach()
 target_link_libraries(zlink_framework PUBLIC nlohmann_json::nlohmann_json)
-if(OpenSSL_FOUND)
-  target_compile_definitions(zlink_framework PRIVATE
-    ZLINK_FRAMEWORK_HTTP_WITH_OPENSSL
-    ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL)
-  target_link_libraries(zlink_framework PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-endif()
+target_compile_definitions(zlink_framework PRIVATE
+  ZLINK_FRAMEWORK_HTTP_WITH_OPENSSL
+  ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL)
+target_link_libraries(zlink_framework PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
 
 add_library(zlink_http_client ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
@@ -511,15 +531,11 @@ target_link_libraries(zlink_http_client PRIVATE Threads::Threads)
 # own include wiring. The installed archive keeps its Boost to itself.
 zlink_framework_cpp_add_boost_headers(zlink_http_client)
 zlink_framework_cpp_add_asio_system_libraries(zlink_http_client)
-if(OpenSSL_FOUND)
-  target_compile_definitions(zlink_http_client PRIVATE
-    ZLINK_HTTP_CLIENT_WITH_OPENSSL)
-  target_link_libraries(zlink_http_client PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-  set(ZLINK_HTTP_CLIENT_EXPORT_OPENSSL_DEPENDENCY
-    "find_dependency(OpenSSL)")
-else()
-  set(ZLINK_HTTP_CLIENT_EXPORT_OPENSSL_DEPENDENCY "")
-endif()
+target_compile_definitions(zlink_http_client PRIVATE
+  ZLINK_HTTP_CLIENT_WITH_OPENSSL)
+target_link_libraries(zlink_http_client PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+set(ZLINK_HTTP_CLIENT_EXPORT_OPENSSL_DEPENDENCY
+  "find_dependency(OpenSSL)")
 # The HTTPS test certificate is only needed when the http-client-https contract test is
 # actually going to be built (see test_cpp_http_client below, which is registered only under
 # ZLINK_FRAMEWORK_CPP_BUILD_TESTS). Tying this block to the same condition means the rule reads
@@ -528,52 +544,42 @@ endif()
 # ZLINK_FRAMEWORK_CPP_BUILD_TESTS=OFF must not need the openssl CLI at all.
 if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   find_program(ZLINK_OPENSSL_EXECUTABLE openssl)
-  # The http-client-https ctest label is unconditionally required by
-  # verify_ctest_label_contract.cmake whenever tests are built, so once the OpenSSL library is
-  # available (HTTPS client support is being compiled in), the openssl CLI and a successfully
-  # generated test certificate are hard requirements, not best-effort conveniences. Failing here
-  # with the real cause (missing tool, or the tool failed) is more legible than warning and
-  # continuing: continuing left the label contract test to fail several steps later with "label
-  # http-client-https selects no tests", which reads like a label-taxonomy bug rather than a
-  # missing local tool.
-  if(OpenSSL_FOUND)
-    if(NOT ZLINK_OPENSSL_EXECUTABLE)
-      message(FATAL_ERROR
-        "OpenSSL library was found (HTTPS client support is being built), but the 'openssl' "
-        "command-line executable is not on PATH. It is required to generate the test "
-        "certificate used by the http-client-https contract tests. Install the OpenSSL CLI "
-        "(it ships with most OpenSSL distributions, including vcpkg's openssl port) and make "
-        "sure it is on PATH, then re-run configure.")
-    endif()
-    set(ZLINK_HTTP_CLIENT_TEST_CERT_DIR
-      "${CMAKE_CURRENT_BINARY_DIR}/http-client-test-certs")
-    set(ZLINK_HTTP_CLIENT_TEST_CERT
-      "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}/server.crt")
-    set(ZLINK_HTTP_CLIENT_TEST_KEY
-      "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}/server.key")
-    file(MAKE_DIRECTORY "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}")
-    execute_process(
-      COMMAND ${ZLINK_OPENSSL_EXECUTABLE}
-        req -x509 -newkey rsa:2048 -nodes -days 7
-        -subj /CN=localhost
-        -addext subjectAltName=DNS:localhost
-        -keyout "${ZLINK_HTTP_CLIENT_TEST_KEY}"
-        -out "${ZLINK_HTTP_CLIENT_TEST_CERT}"
-      RESULT_VARIABLE ZLINK_HTTP_CLIENT_CERT_RESULT
-      OUTPUT_VARIABLE ZLINK_HTTP_CLIENT_CERT_OUTPUT
-      ERROR_VARIABLE ZLINK_HTTP_CLIENT_CERT_ERROR)
-    if(NOT ZLINK_HTTP_CLIENT_CERT_RESULT EQUAL 0
-        OR NOT EXISTS "${ZLINK_HTTP_CLIENT_TEST_CERT}"
-        OR NOT EXISTS "${ZLINK_HTTP_CLIENT_TEST_KEY}")
-      message(FATAL_ERROR
-        "Failed to generate the HTTP client HTTPS test certificate with "
-        "'${ZLINK_OPENSSL_EXECUTABLE}' (exit code ${ZLINK_HTTP_CLIENT_CERT_RESULT}). "
-        "The http-client-https contract tests require this certificate.\n"
-        "openssl stdout:\n${ZLINK_HTTP_CLIENT_CERT_OUTPUT}\n"
-        "openssl stderr:\n${ZLINK_HTTP_CLIENT_CERT_ERROR}")
-    endif()
-    set(ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL ON)
+  if(NOT ZLINK_OPENSSL_EXECUTABLE)
+    message(FATAL_ERROR
+      "OpenSSL library was found (HTTPS client support is being built), but the 'openssl' "
+      "command-line executable is not on PATH. It is required to generate the test "
+      "certificate used by the http-client-https contract tests. Install the OpenSSL CLI "
+      "(it ships with most OpenSSL distributions, including vcpkg's openssl port) and make "
+      "sure it is on PATH, then re-run configure.")
   endif()
+  set(ZLINK_HTTP_CLIENT_TEST_CERT_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/http-client-test-certs")
+  set(ZLINK_HTTP_CLIENT_TEST_CERT
+    "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}/server.crt")
+  set(ZLINK_HTTP_CLIENT_TEST_KEY
+    "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}/server.key")
+  file(MAKE_DIRECTORY "${ZLINK_HTTP_CLIENT_TEST_CERT_DIR}")
+  execute_process(
+    COMMAND ${ZLINK_OPENSSL_EXECUTABLE}
+      req -x509 -newkey rsa:2048 -nodes -days 7
+      -subj /CN=localhost
+      -addext subjectAltName=DNS:localhost
+      -keyout "${ZLINK_HTTP_CLIENT_TEST_KEY}"
+      -out "${ZLINK_HTTP_CLIENT_TEST_CERT}"
+    RESULT_VARIABLE ZLINK_HTTP_CLIENT_CERT_RESULT
+    OUTPUT_VARIABLE ZLINK_HTTP_CLIENT_CERT_OUTPUT
+    ERROR_VARIABLE ZLINK_HTTP_CLIENT_CERT_ERROR)
+  if(NOT ZLINK_HTTP_CLIENT_CERT_RESULT EQUAL 0
+      OR NOT EXISTS "${ZLINK_HTTP_CLIENT_TEST_CERT}"
+      OR NOT EXISTS "${ZLINK_HTTP_CLIENT_TEST_KEY}")
+    message(FATAL_ERROR
+      "Failed to generate the HTTP client HTTPS test certificate with "
+      "'${ZLINK_OPENSSL_EXECUTABLE}' (exit code ${ZLINK_HTTP_CLIENT_CERT_RESULT}). "
+      "The http-client-https contract tests require this certificate.\n"
+      "openssl stdout:\n${ZLINK_HTTP_CLIENT_CERT_OUTPUT}\n"
+      "openssl stderr:\n${ZLINK_HTTP_CLIENT_CERT_ERROR}")
+  endif()
+  set(ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL ON)
 endif()
 
 
@@ -2849,6 +2855,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_shared_serial_turn PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_preparation_terminal_order
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_preparation_terminal_order.cpp
+    "framework-unit;framework-contract;framework-regression;execution" contract)
+  target_use_zlink_gtest_main(test_cpp_framework_preparation_terminal_order)
+  target_include_directories(test_cpp_framework_preparation_terminal_order PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_yield_terminal
     tests/Zlink.Framework.UnitTests/test_cpp_framework_yield_terminal.cpp
     "framework-unit;framework-contract;framework-regression;execution" contract)
@@ -3149,6 +3162,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_accepted_source_restore.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_join_settlement.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_authority_publication.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_previous_publication.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_host_relocation.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_lifecycle_turns.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_authority_turns.cpp
@@ -3169,7 +3183,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/support/actor_maintenance_join_stream_fixture.cpp
     tests/support/actor_maintenance_join_suffix_fixture.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spotwide_host_relocation.cpp
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_reincarnate_conformance.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_reincarnate_conformance.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_callback_publication.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_operation_id.cpp)
   target_compile_features(test_cpp_framework_spot_close_conformance PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_spot_close_conformance)
   target_use_zlink_gtest_main(test_cpp_framework_spot_close_conformance)
@@ -3413,6 +3429,38 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_typed_reply.cpp
     "framework-unit;framework-contract;stream;reply"
     unit)
+  add_zlink_framework_test(test_cpp_framework_admission_ticket
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_admission_ticket.cpp
+    "framework-unit;framework-contract;stream;admission" contract)
+  target_compile_definitions(test_cpp_framework_admission_ticket PRIVATE
+    ZLINK_ADMISSION_QUEUE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-queue-v1.json")
+  add_zlink_framework_test(test_cpp_framework_admission_queue_messages
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_admission_queue_messages.cpp
+    "framework-unit;framework-contract;stream;admission" contract)
+  target_compile_definitions(test_cpp_framework_admission_queue_messages PRIVATE
+    ZLINK_ADMISSION_MESSAGES_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/admission-queue-messages-v1.json")
+  add_zlink_framework_test(test_cpp_framework_admission_queue_startup
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_admission_queue_startup.cpp
+    "framework-unit;framework-contract;stream;admission" contract)
+  target_compile_definitions(test_cpp_framework_admission_queue_startup PRIVATE
+    ZLINK_ADMISSION_QUEUE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-queue-v1.json")
+  add_zlink_framework_test(test_cpp_framework_admission_queue_state
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_admission_queue_state.cpp
+    "framework-unit;framework-contract;stream;admission" contract)
+  target_compile_definitions(test_cpp_framework_admission_queue_state PRIVATE
+    ZLINK_ADMISSION_QUEUE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-queue-v1.json")
+  add_zlink_framework_test(test_cpp_framework_admission_queue_integration
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_admission_queue_integration.cpp
+    "framework-unit;framework-contract;stream;admission" contract)
+  add_zlink_framework_test(test_cpp_framework_admission_queue_node
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_admission_queue_node.cpp
+    "framework-unit;framework-contract;stream;admission" contract)
+  target_compile_definitions(test_cpp_framework_admission_queue_node PRIVATE
+    ZLINK_ADMISSION_QUEUE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-queue-v1.json")
+  foreach(admission_test IN ITEMS queue_startup queue_node queue_integration)
+    target_include_directories(test_cpp_framework_admission_${admission_test} PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  endforeach()
   add_zlink_framework_test(
     test_cpp_framework_login_admission
     tests/Zlink.Framework.UnitTests/test_cpp_framework_login_admission.cpp
@@ -3550,7 +3598,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_stream_framework)
   target_include_directories(test_cpp_framework_stream_framework PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-  if(OpenSSL_FOUND AND ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL)
+  if(ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL)
     target_compile_definitions(test_cpp_framework_stream_framework PRIVATE
       ZLINK_FRAMEWORK_STREAM_TEST_WITH_OPENSSL
       ZLINK_FRAMEWORK_STREAM_TEST_CERT="${ZLINK_HTTP_CLIENT_TEST_CERT}"
@@ -4253,6 +4301,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "connector-unit;connector-contract;stream;admission"
     TIER contract
     TIMEOUT 30)
+  add_zlink_connector_test(
+    test_cpp_stream_connector_admission_queue
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_admission_queue.cpp
+    "connector-unit;connector-contract;stream;admission"
+    contract)
+  target_compile_definitions(test_cpp_stream_connector_admission_queue PRIVATE
+    ZLINK_ADMISSION_QUEUE_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-queue-v1.json")
+  target_link_libraries(test_cpp_stream_connector_admission_queue PRIVATE zlink::cpp)
   add_zlink_connector_test(
     test_cpp_stream_connector_request_allocations
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_request_allocations.cpp

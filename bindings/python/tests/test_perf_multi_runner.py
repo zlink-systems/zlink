@@ -2,6 +2,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -22,6 +23,7 @@ from perf_metrics import (
     throughput_unit,
 )
 from perf_report import multi_auto_hwm_lines, single_auto_hwm_detail_lines
+from perf_runtime import _require_fresh_native_extension, require_binding_runtime
 from perf_multi_common import (
     PERF_MULTI_AUX_POLL_WAIT_MS,
     PYTHON_MULTI_DEFAULT_IO_THREADS,
@@ -56,7 +58,6 @@ from run_benchmarks import (
     _options_clients_display,
     _parse_patterns,
     _release_stream_start,
-    _require_binding_runtime,
     _result_pattern,
     _run_pattern_captured,
     _validate_python_build_options,
@@ -198,7 +199,7 @@ class PerfMultiRunnerTests(unittest.TestCase):
                 list(POLICY_TRANSPORTS),
                 [],
                 clients,
-                {"PERF_MULTI_MONITOR_HWM": "100000"},
+                {"PERF_MULTI_MONITOR_HWM_BYTES": "100000"},
             )
             self.assertEqual(options["default_clients"], "100")
             self.assertEqual(options["default_stream_clients"], "100")
@@ -217,8 +218,34 @@ class PerfMultiRunnerTests(unittest.TestCase):
         _validate_python_build_options(args)
         self.assertTrue(args.reuse_build)
 
-    def test_python_runner_requires_source_tree_inplace_binding(self):
-        _require_binding_runtime()
+    def test_python_runner_loads_source_tree_binding(self):
+        if "zlink._native._zlink_native" in sys.modules:
+            require_binding_runtime(ROOT / "src")
+        else:
+            with self.assertRaisesRegex(SystemExit, "zlink native extension"):
+                require_binding_runtime(ROOT / "src")
+
+    def test_python_runner_rejects_stale_native_extension(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            native_dir = Path(tmp)
+            built = native_dir / "_zlink_native.cpython-312-x86_64-linux-gnu.so"
+            source = native_dir / "_zlink_native.c"
+            built.write_bytes(b"")
+            source.write_text("")
+            os.utime(built, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(source, ns=(2_000_000_000, 2_000_000_000))
+            with self.assertRaisesRegex(RuntimeError, "older than its source"):
+                _require_fresh_native_extension(native_dir)
+            os.utime(built, ns=(3_000_000_000, 3_000_000_000))
+            _require_fresh_native_extension(native_dir)
+            source.unlink()
+            with self.assertRaisesRegex(RuntimeError, "source is missing"):
+                _require_fresh_native_extension(native_dir)
+
+    def test_python_runner_rejects_binding_outside_source_tree(self):
+        with mock.patch.object(zlink, "__file__", str(ROOT / "zlink" / "__init__.py")):
+            with self.assertRaisesRegex(SystemExit, "outside the source package"):
+                require_binding_runtime(ROOT / "src")
 
     def test_python_runner_reuse_never_builds_missing_stream_client(self):
         with mock.patch("run_benchmarks._is_executable", return_value=False):

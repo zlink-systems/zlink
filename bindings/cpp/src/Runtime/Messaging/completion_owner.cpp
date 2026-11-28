@@ -183,7 +183,6 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
 {
     zlink_completion_id_t completion_id = 0;
     bool admitted = false;
-    int submit_errno = 0;
     std::exception_ptr failure;
     {
         std::lock_guard<std::mutex> lock (_mutex);
@@ -195,17 +194,18 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
     }
     try {
         admitted = submit_raw_send_state (*_send_operation, _context, &completion_id, false);
-        submit_errno = zlink_errno ();
     }
     catch (...) {
         failure = std::current_exception ();
     }
     {
+        operation_state_t::message_parts_t released;
         std::lock_guard<std::mutex> lock (_mutex);
         _send_submitting = false;
+        if (_settled || failure)
+            std::swap (released, _send_operation->message);
         if (_settled) {
-            _send_operation->message.reset ();
-            if (!failure && !admitted && completion_id != 0) {
+            if (!failure && !admitted) {
                 // Core still owns this wait token. Keep its context reserved
                 // until the token is received and ignored.
                 _completion_id = completion_id;
@@ -217,14 +217,6 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
         }
     }
 
-    if (!failure && admitted != (completion_id == 0)) {
-        failure =
-          std::make_exception_ptr (submit_error_t (submit_result_t::internal_error, EPROTO));
-    } else if (!failure && !admitted && submit_errno != EAGAIN) {
-        failure =
-          std::make_exception_ptr (submit_error_t (submit_result_t::internal_error, EPROTO));
-    }
-
     if (failure) {
         fail_send (failure);
         return true;
@@ -232,11 +224,8 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
 
     if (!admitted) {
         std::lock_guard<std::mutex> lock (_mutex);
-        if (_settled) {
-            if (completion_id == 0)
-                return true;
+        if (_settled)
             _send_operation->message.reset ();
-        }
         _completion_id = completion_id;
         _published = true;
         _changed.notify_all ();
@@ -303,6 +292,7 @@ bool completion_entry_t::submit_request_attempt (bool initial_, bool *admitted_o
     if (failure) {
         if (initial_)
             restore_async_send_sources (*_request_operation);
+        _request_operation->message.reset ();
         fail_request (failure);
         if (initial_)
             std::rethrow_exception (failure);
@@ -564,7 +554,10 @@ bool completion_entry_t::settled () noexcept
 }
 
 completion_owner_t::completion_owner_t (std::shared_ptr<socket_handle_t> socket_) :
-    _socket (std::move (socket_)), _entries (&_entry_map_pool), _early_send_completions (&_entry_map_pool)
+    _socket (std::move (socket_)),
+    _entries (&_entry_map_pool),
+    _early_send_completions (&_entry_map_pool),
+    _rejected_wait_tokens (&_entry_map_pool)
 {
 }
 
@@ -620,13 +613,34 @@ void completion_owner_t::register_send_entry (const std::shared_ptr<completion_e
     entry_->detach_send_sources ();
     // An early WRITABLE stays with the drain that received it. Registration
     // only joins that drain; it never resubmits from the submitting thread.
-    _early_send_completions.erase (entry_->context ());
-    _send_registered.notify_all ();
+    const auto early = _early_send_completions.find (entry_->context ());
+    if (early != _early_send_completions.end ()) {
+        early->second->entry = entry_;
+        _early_send_completions.erase (early);
+        _send_registered.notify_all ();
+    }
 }
 
-void completion_owner_t::unregister_entry (void *submit_context_) noexcept
+void completion_owner_t::reject_wait_token (void *submit_context_, uint64_t token_)
 {
     std::lock_guard<std::mutex> lock (_mutex);
+    if (_shutdown)
+        return;
+    const auto early = _early_send_completions.find (submit_context_);
+    if (early != _early_send_completions.end () && early->second->token == token_) {
+        _early_send_completions.erase (early);
+        _send_registered.notify_all ();
+    } else {
+        _rejected_wait_tokens.insert (token_);
+    }
+}
+
+void completion_owner_t::unregister_entry (void *submit_context_,
+                                          zlink_completion_id_t captured_token_) noexcept
+{
+    std::lock_guard<std::mutex> lock (_mutex);
+    if (captured_token_ != 0)
+        _rejected_wait_tokens.erase (captured_token_);
     // Failed registration releases a drain waiting for this provisional SEND.
     _early_send_completions.erase (submit_context_);
     _send_registered.notify_all ();
@@ -722,6 +736,12 @@ size_t completion_owner_t::drain_impl (completion_entry_t *inline_target_)
         std::shared_ptr<completion_entry_t> entry;
         {
             std::unique_lock<std::mutex> lock (_mutex);
+            if (_rejected_wait_tokens.erase (completion.completion_id) != 0) {
+                lock.unlock ();
+                zlink_completion_close (&completion);
+                ++processed;
+                continue;
+            }
             if (_inline_entry && _inline_entry->context () == completion.user_context)
                 entry = _inline_entry;
             else {
@@ -731,32 +751,27 @@ size_t completion_owner_t::drain_impl (completion_entry_t *inline_target_)
             }
             if (!entry && !_shutdown && completion.user_context
                 && completion.kind == ZLINK_COMPLETION_WRITABLE) {
-                // SEND's immediate-admission path skips registry locks. Join
-                // an early token with registration here so the same owner
-                // captures it and reaches NO_DATA before any resubmission.
+                // SEND's immediate-admission path skips registry locks. The
+                // drain keeps ownership of the record until it reaches NO_DATA.
+                early_send_t early{completion.completion_id, {}};
                 const auto inserted =
-                  _early_send_completions.emplace (completion.user_context, completion);
+                  _early_send_completions.emplace (completion.user_context, &early);
                 if (inserted.second) {
                     _send_registered.wait (lock, [&] {
-                        return _shutdown
-                               || _early_send_completions.find (completion.user_context)
-                                    == _early_send_completions.end ();
+                        const auto waiting = _early_send_completions.find (completion.user_context);
+                        return waiting == _early_send_completions.end () || waiting->second != &early;
                     });
-                    _early_send_completions.erase (completion.user_context);
-                    if (_inline_entry && _inline_entry->context () == completion.user_context)
-                        entry = _inline_entry;
-                    else {
-                        const auto found = _entries.find (completion.user_context);
-                        if (found != _entries.end ())
-                            entry = found->second;
-                    }
+                    entry = std::move (early.entry);
                 }
             }
         }
         if (entry) {
+            // Capture can wait for a REQUEST to publish a rejection after the
+            // record has been received. Remove that token on terminal capture.
+            const auto token = completion.completion_id;
             const auto result = entry->capture (completion);
             if (result == completion_entry_t::capture_result_t::terminal) {
-                unregister_entry (entry->context ());
+                unregister_entry (entry->context (), token);
             } else if (result == completion_entry_t::capture_result_t::retry) {
                 retries.push_back (std::move (entry));
             }
@@ -822,11 +837,8 @@ void completion_owner_t::shutdown (int terminal_errno_) noexcept
     std::shared_ptr<completion_entry_t> inline_entry = std::move (_inline_entry);
     auto entries = std::move (_entries);
     _entries.clear ();
-    for (auto &[key, completion] : _early_send_completions) {
-        (void) key;
-        zlink_completion_close (&completion);
-    }
     _early_send_completions.clear ();
+    _rejected_wait_tokens.clear ();
     lock.unlock ();
     if (inline_entry)
         inline_entry->terminate (terminal_errno_);

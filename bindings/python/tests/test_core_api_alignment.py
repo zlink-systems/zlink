@@ -58,11 +58,13 @@ class CoreApiAlignmentTests(unittest.TestCase):
             "ReplyToken",
             "StreamPacket",
             "StreamRecvMode",
-            "CompletionKind",
             "SendSubmission",
             "RequestSubmission",
         ):
             self.assertTrue(hasattr(zlink, name), name)
+        for name in ("CompletionKind", "ContextOption"):
+            self.assertFalse(hasattr(zlink, name), name)
+            self.assertNotIn(name, zlink.__all__)
         self.assertFalse(hasattr(zlink.Message, "get_property"))
         self.assertTrue(hasattr(zlink.Message, "ref_count"))
         self.assertFalse(hasattr(zlink.PairSocket, "try_recv"))

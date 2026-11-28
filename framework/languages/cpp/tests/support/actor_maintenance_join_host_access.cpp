@@ -33,6 +33,26 @@ raw_stateful_dispatch_test_access_t::spot_records (raw_stateful_dispatch_t &raw)
 
 namespace zlink::framework::runtime::host
 {
+std::pair<std::shared_ptr<task_completion_source_t<void>>,
+          std::shared_ptr<task_completion_source_t<void>>>
+public_host_runtime_test_access_t::track_previous_target (public_host_runtime_t &host,
+                                                          const stateful::object_ref_t &object,
+                                                          bool pending_request)
+{
+    return host._relocation_session_terminal_lane.run_sync ([&] {
+        auto &attempt = host._relocation_target_attempts[{31, 7, 1}];
+        attempt.targets = {object};
+        std::shared_ptr<task_completion_source_t<void>> delivery;
+        if (pending_request) {
+            delivery = std::make_shared<task_completion_source_t<void>> ();
+            attempt.captured_requests.push_back ({object.kind, object.key, delivery});
+        }
+        attempt.authority_committed_at = std::chrono::steady_clock::now ();
+        attempt.terminal = std::make_shared<task_completion_source_t<void>> ();
+        return std::pair{attempt.terminal, delivery};
+    });
+}
+
 task_t<stateful::stateful_error_t>
 public_host_runtime_test_access_t::advance_authority (public_host_runtime_t &host,
                                                       stateful::object_ref_t committed)
