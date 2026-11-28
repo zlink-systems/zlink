@@ -36,6 +36,7 @@ struct fixture_t
     std::function<void ()> first_submit;
     std::function<void ()> retry_submit;
     bool retry_backpressured = false;
+    int backpressure_errno = EAGAIN;
     std::function<void ()> before_recv;
     std::function<void ()> after_recv;
 
@@ -91,10 +92,10 @@ inline zlink_submit_result_t submit (
     fixture.events.push_back ("submit:" + payload);
     if (!first && !request_ && fixture.retry_submit)
         fixture.retry_submit ();
-    if (first || (fixture.retry_backpressured && !request_)) {
+    if (first || fixture.retry_backpressured) {
         if (fixture.first_submit)
             fixture.first_submit ();
-        errno = EAGAIN;
+        errno = fixture.backpressure_errno;
         return ZLINK_SUBMIT_BACKPRESSURED;
     }
     if (request_) {

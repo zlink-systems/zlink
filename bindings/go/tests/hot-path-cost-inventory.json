@@ -8,7 +8,7 @@
       "id": "message-native-allocation",
       "classification": "required",
       "sources": [
-        "internal/native/message.go:60-92"
+        "internal/native/message.go:60-87"
       ],
       "reason": "Core owns the message buffer, so caller bytes are copied into native storage before the handle is returned.",
       "guardTest": "TestMessageCanonicalCopyHelpers"
@@ -17,7 +17,7 @@
       "id": "message-snapshot-copy",
       "classification": "required",
       "sources": [
-        "internal/native/message.go:144-156"
+        "internal/native/message.go:144-150"
       ],
       "reason": "Bytes is the explicit lifetime-independent snapshot API; the copy is required after the native message may close.",
       "guardTest": "TestMessageBytesSnapshotSurvivesClose"
@@ -26,8 +26,8 @@
       "id": "submit-copy-for-preservation",
       "classification": "required",
       "sources": [
-        "internal/native/socket_multipart.go:66-129",
-        "internal/native/socket_multipart.go:179-226"
+        "internal/native/socket_multipart.go:66-130",
+        "internal/native/socket_multipart.go:166-228"
       ],
       "reason": "Message submit preserves the public caller handle with a binding-owned native staging copy; Core consumes the staged native part on ordinary synchronous rejection.",
       "guardTest": "TestTargetedSendFailurePreservesMessagePayload"
@@ -74,9 +74,9 @@
       "id": "option-scratch-buffer",
       "classification": "required",
       "sources": [
-        "internal/native/connection_socket.go:134-143",
-        "internal/native/socket_core.go:184-194",
-        "internal/native/socket_misc_helpers.go:42-60"
+        "internal/native/socket_core.go:130-152",
+        "internal/native/socket_core.go:183-196",
+        "internal/native/socket_options.go:73-79"
       ],
       "reason": "Core writes option values into caller-provided scratch storage; returned strings and message values acquire Go ownership at the public boundary.",
       "guardTest": "TestCommonTypedOptions"
@@ -85,9 +85,12 @@
       "id": "completion-owner-queue",
       "classification": "required",
       "sources": [
-        "internal/native/completion_owner.go:331-913"
+        "internal/native/completion_owner.go:331-362",
+        "internal/native/completion_owner.go:395-452",
+        "internal/native/completion_owner.go:511-600",
+        "internal/native/poller.go:437-468"
       ],
-      "reason": "Each socket keeps a completion entry table and early-WRITABLE records; progress is drained by the PollCompletion poller owner, and no binding-runtime goroutine drains the queue.",
+      "reason": "The binding joins submit results to completion records using the socket entry table, including WRITABLE records pulled before their entries are published. A caller driving Poller.Wait with PollCompletion registered drains the queue; asynchronous waiters on the result object do not drain it.",
       "guardTest": "TestPollerCompletionOwnsRequestProgressAndReleaseRemovesOwner"
     },
     {

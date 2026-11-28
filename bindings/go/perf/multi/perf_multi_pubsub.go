@@ -13,8 +13,11 @@ import (
 	"zlink.systems/zlink/perf/internal/perfcommon"
 )
 
-// Matches the attempt limit of C's send_stop_token_bounded.
-const pubSubPhaseMarkerAttempts = 5
+// Match the limits of C's send_stop_token_bounded.
+const (
+	perfStopSendTimeoutMS   = 2000
+	perfStopSendMaxAttempts = 5
+)
 
 func runMultiPubSubServer(cfg multiConfig) {
 	ctx, err := perfcommon.NewMultiServerContext()
@@ -47,12 +50,17 @@ func runMultiPubSubServer(cfg multiConfig) {
 		return sent && err == nil
 	}
 	done := func(phase uint8) {
-		err := publishMultiPubSubPhaseMarker(cfg.msgSize, phase, func(marker *zlink.Message) (bool, error) {
+		options := publisher.CommonOptions()
+		sendTimeout, err := options.SendTimeout()
+		perfcommon.Must(err)
+		publishMarker := func(marker *zlink.Message) (bool, error) {
 			return perfcommon.SubmitMeasurement(publisher.Publish("bench"), marker, zlink.SendFlagsNone)
-		})
+		}
+		err = publishMultiPubSubPhaseMarker(cfg.msgSize, phase, options.SetSendTimeout, publishMarker)
 		if err != nil {
 			perfcommon.Must(fmt.Errorf("multi pubsub publish phase marker: %w", err))
 		}
+		perfcommon.Must(options.SetSendTimeout(sendTimeout))
 		flushControlLine("PHASE_DONE,%d,%d", cfg.msgSize, phase)
 	}
 	end := time.Now().Add(cfg.duration)
@@ -125,8 +133,16 @@ func runMultiPubSubServer(cfg multiConfig) {
 	}
 }
 
-func publishMultiPubSubPhaseMarker(msgSize int, phase uint8, publish func(*zlink.Message) (bool, error)) error {
-	for attempt := 0; attempt < pubSubPhaseMarkerAttempts; attempt++ {
+func publishMultiPubSubPhaseMarker(
+	msgSize int,
+	phase uint8,
+	setSendTimeout func(time.Duration) error,
+	publish func(*zlink.Message) (bool, error),
+) error {
+	if err := setSendTimeout(perfStopSendTimeoutMS * time.Millisecond); err != nil {
+		return err
+	}
+	for attempt := 0; attempt < perfStopSendMaxAttempts; attempt++ {
 		marker := perfcommon.NewMessageWithSize(perfcommon.MetricHeaderSize)
 		perfcommon.StampPhaseMarker(marker.Data(), msgSize, phase)
 		sent, err := perfcommon.SubmitMessage(marker, publish)

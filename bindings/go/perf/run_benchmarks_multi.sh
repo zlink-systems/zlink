@@ -129,7 +129,8 @@ print_total_time() {
 }
 PATTERN="ALL"
 CONTROL_PLANE_PATTERNS=()
-DURATION="5"
+DURATION="${PERF_MULTI_DURATION_SECONDS:-5}"
+unset LATENCY_DURATION
 PART_COUNT="${PERF_PART_COUNT:-2}"
 MSG_SIZES=""
 TRANSPORTS="${PERF_TRANSPORTS:-tcp,tls,ws,wss}"
@@ -157,7 +158,7 @@ AUTO_HWM_PROFILE=""
 CONNECT_READY_TIMEOUT_MS=""
 CONNECT_CONCURRENCY=""
 SERVER_READY_TIMEOUT_MS=""
-MONITOR_HWM_BYTES=""
+MONITOR_HWM_BYTES="${PERF_MULTI_MONITOR_HWM_BYTES:-${PERF_MONITOR_HWM_BYTES:-4096000}}"
 SERVER_SHUTDOWN_TIMEOUT_MS=""
 SERVER_BIND_PORT=""
 RUN_COOLDOWN_MS="${PERF_MULTI_RUN_COOLDOWN_MS:-${PERF_RUN_COOLDOWN_MS:-3000}}"
@@ -327,6 +328,7 @@ Usage: bindings/go/perf/run_benchmarks_multi.sh [options]
 Options:
   --pattern NAME
   --duration N
+  --latency-duration N    Latency seconds (positive integer; default: --duration).
   --part-count N          Application frame count per measured message (1 or 2; default: 2).
   --msg-sizes LIST
   --transports LIST       Comma-separated transports (default: tcp,tls,ws,wss).
@@ -360,7 +362,8 @@ Options:
   --server-ready-timeout-ms N
   --connect-ready-timeout-ms N
                           Connection-ready timeout in milliseconds (default: 10000).
-  --monitor-hwm-bytes N
+  --monitor-hwm-bytes BYTES
+                          Override PERF_MULTI_MONITOR_HWM_BYTES (default: 4096000).
   --server-shutdown-timeout-ms N
   --server-bind-port N
   --auto-hwm-profile NAME
@@ -386,6 +389,14 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage; exit 0 ;;
     --pattern) PATTERN="$2"; shift 2 ;;
     --duration) DURATION="$2"; shift 2 ;;
+    --latency-duration)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --latency-duration requires a value." >&2
+        exit 1
+      fi
+      LATENCY_DURATION="$2"
+      shift 2 ;;
+    --latency-duration=*) LATENCY_DURATION="${1#*=}"; shift ;;
     --part-count) PART_COUNT="$2"; shift 2 ;;
     --msg-sizes) MSG_SIZES="$2"; shift 2 ;;
     --transports) TRANSPORTS="$2"; shift 2 ;;
@@ -414,6 +425,10 @@ while [[ $# -gt 0 ]]; do
       SERVER_READY_TIMEOUT_MS="$2"
       shift 2 ;;
     --monitor-hwm-bytes)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --monitor-hwm-bytes requires a value." >&2
+        exit 1
+      fi
       MONITOR_HWM_BYTES="$2"
       shift 2 ;;
     --server-shutdown-timeout-ms)
@@ -478,6 +493,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+LATENCY_DURATION="${LATENCY_DURATION-${PERF_MULTI_LATENCY_DURATION_SECONDS:-${DURATION}}}"
+if ! is_uint "${LATENCY_DURATION}" || [[ ! "${LATENCY_DURATION}" =~ [1-9] ]]; then
+  echo "Error: --latency-duration must be a positive integer." >&2
+  exit 1
+fi
+if ! is_uint "${MONITOR_HWM_BYTES}"; then
+  echo "Error: --monitor-hwm-bytes must be a non-negative integer." >&2
+  exit 1
+fi
+
 if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
   echo "Error: --part-count must be 1 or 2." >&2
   exit 1
@@ -492,11 +517,7 @@ if [[ "${SMOKE}" -eq 1 && -n "${OUTPUT_FILE}" ]]; then
   echo "Error: --smoke cannot be combined with --output." >&2
   exit 1
 fi
-if [[ -n "${MONITOR_HWM_BYTES}" ]] && ! is_uint "${MONITOR_HWM_BYTES}"; then
-  echo "Error: --monitor-hwm-bytes must be a non-negative integer." >&2
-  exit 1
-fi
-
+export PERF_MULTI_LATENCY_DURATION_SECONDS="${LATENCY_DURATION}"
 if [[ -n "${HWM}" ]]; then
   export PERF_MULTI_HWM="${HWM}"
 fi
@@ -539,9 +560,7 @@ fi
 if [[ -n "${SERVER_READY_TIMEOUT_MS}" ]]; then
   export PERF_MULTI_SERVER_READY_TIMEOUT_MS="${SERVER_READY_TIMEOUT_MS}"
 fi
-if [[ -n "${MONITOR_HWM_BYTES}" ]]; then
-  export PERF_MULTI_MONITOR_HWM_BYTES="${MONITOR_HWM_BYTES}"
-fi
+export PERF_MULTI_MONITOR_HWM_BYTES="${MONITOR_HWM_BYTES}"
 if [[ -n "${SERVER_SHUTDOWN_TIMEOUT_MS}" ]]; then
   export PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS="${SERVER_SHUTDOWN_TIMEOUT_MS}"
 fi
@@ -965,6 +984,7 @@ emit_effective_options_multi() {
   echo "- msg_sizes: ${EFFECTIVE_MSG_SIZES_CSV}"
   echo "- routed_echo_per_socket_payload: $(effective_routed_echo_per_socket_payload)"
   echo "- duration_seconds: ${DURATION}"
+  echo "- latency_duration_seconds: ${LATENCY_DURATION}"
   echo "- clients: ${CLIENTS_DISPLAY}"
   echo "- default_clients: ${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
   echo "- default_stream_clients: ${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
@@ -982,7 +1002,7 @@ emit_effective_options_multi() {
   echo "- rcvtimeo_ms: ${RCVTIMEO_MS:-${PERF_MULTI_RCVTIMEO_MS:-200}}"
   echo "- connect_concurrency: ${CONNECT_CONCURRENCY:-128 (default)}"
   echo "- connect_ready_timeout_ms: ${CONNECT_READY_TIMEOUT_MS:-${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-10000}}}"
-  echo "- monitor_hwm_bytes: ${MONITOR_HWM_BYTES:-${PERF_MULTI_MONITOR_HWM_BYTES:-${PERF_MONITOR_HWM_BYTES:-4096000}}}"
+  echo "- monitor_hwm_bytes: ${MONITOR_HWM_BYTES}"
   echo "- server_ready_timeout_ms: ${SERVER_READY_TIMEOUT_MS:-${PERF_MULTI_SERVER_READY_TIMEOUT_MS:-${PERF_SERVER_READY_TIMEOUT_MS:-10000}}}"
   echo "- server_shutdown_timeout_ms: ${SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}}"
   echo "- server_bind_port: ${SERVER_BIND_PORT:-${PERF_MULTI_SERVER_BIND_PORT:-0}}"
@@ -1199,9 +1219,7 @@ resolve_client_timeout_seconds() {
     echo "${PERF_MULTI_TIMEOUT_SECONDS:-${PERF_TIMEOUT_SECONDS}}"
     return
   fi
-  local latency_duration="${PERF_MULTI_LATENCY_DURATION_SECONDS:-${duration}}"
-  [[ "${latency_duration}" =~ ^[1-9][0-9]*$ ]] || latency_duration="${duration}"
-  local paced=$((2 * latency_duration))
+  local paced=$((2 * 10#${LATENCY_DURATION}))
   if [[ "${pattern}" == "STREAM" ]]; then
     local stream_timeout=$((duration * 3 + paced + 20))
     (( stream_timeout < 45 )) && stream_timeout=45

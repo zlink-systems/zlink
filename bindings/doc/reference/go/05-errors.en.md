@@ -6,10 +6,9 @@
 
 This category is this reference's counterpart to core's result-code-family table — it documents
 the shared `ZlinkError` interface and the eight typed error structs every submit/request/recv/
-handler/close/bind/connect/config-failing API returns. The exact signatures are owned by
-[`internal/native/error.go`](../../../../bindings/go/internal/native/error.go) and
-[`result_codes.go`](../../../../bindings/go/internal/native/result_codes.go), re-exported as
-aliases through [`contracts/errors.go`](../../../../bindings/go/contracts/errors.go).
+handler/close/bind/connect/config-failing API returns. The types are declared in
+[`contracts/errors.go`](../../../../bindings/go/contracts/errors.go) and re-exported through
+[`root_projection.go`](../../../../bindings/go/root_projection.go).
 
 ---
 
@@ -26,7 +25,7 @@ is available, `"<kind> error (<code>)"` otherwise), `Code() int`, `InternalErrno
 
 | Error struct | Result type | Returned by | Values |
 |---|---|---|---|
-| `SubmitError` | `SubmitResult` (Messaging category) | send/publish/request-submit APIs | `SubmitOK`(0), `SubmitBackpressured`(1, ordinary control flow), `SubmitNotConnected`(2), `SubmitNotFound`(3), `SubmitTerminated`(4), `SubmitInvalidHandle`(5), `SubmitInvalidArgument`(6), `SubmitNotSupported`(7), `SubmitInvalidState`(8), `SubmitThreadViolation`(9), `SubmitOutOfMemory`(10), `SubmitSeqExhausted`(11), `SubmitInternalError`(12), `SubmitNotAdmitted`(13, ordinary control flow) — the full 13-value set |
+| `SubmitError` | `SubmitResult` (Messaging category) | send/publish/request-submit APIs | `SubmitOK`(0), `SubmitBackpressured`(1, ordinary control flow), `SubmitNotConnected`(2), `SubmitNotFound`(3), `SubmitTerminated`(4), `SubmitInvalidHandle`(5), `SubmitInvalidArgument`(6), `SubmitNotSupported`(7), `SubmitInvalidState`(8), `SubmitThreadViolation`(9), `SubmitOutOfMemory`(10), `SubmitSeqExhausted`(11), `SubmitInternalError`(12), `SubmitNotAdmitted`(13, ordinary control flow) |
 | `RequestError` | `RequestResult` | `RequestSubmitOp.Submit(ctx)` after the socket completion queue yields the request terminal | `RequestOK`(0), `RequestTimedOut`(101), `RequestNotFound`(102), `RequestTerminated`(103), `RequestProtocolError`(104), `RequestInternalError`(105), `RequestRejected`(106), `RequestConflict`(107), `RequestBusy`(108), `RequestNotConnected`(109), `RequestInvalidArgument`(110), `RequestInvalidState`(111), `RequestNotSupported`(112), `RequestBackpressured`(113) — **this binding does define `Backpressured`**, unlike rust's `RequestResult`, which has no equivalent |
 | `RecvError` | `RecvResult` | recv-family APIs | `RecvOK`(0), `RecvNoData`(201), `RecvBusy`(202), `RecvTerminated`(203), `RecvInvalidHandle`(204), `RecvNotSupported`(205), `RecvInternalError`(206), `RecvBufferTooSmall`(207), `RecvInvalidState`(208) — the full 8-value set, matching node's, not the 6-value set dotnet/cpp/java/rust/python share |
 | `HandlerError` | `HandlerResult` | retained result family; current monitor, timer, STREAM packet, send-completion, and request-reply delivery is pull/completion based | `HandlerOK`(0), `HandlerInvalidArgument`(301), `HandlerBusy`(302), `HandlerNotSupported`(303), `HandlerDeadlock`(304), `HandlerInvalidHandle`(305), `HandlerInternalError`(306) |
@@ -62,17 +61,15 @@ The shared error interface every one of the eight typed error structs implements
 wants to handle any zlink-originated error uniformly without knowing which specific struct it is.
 
 ```go
-var zerr contracts.ZlinkError
+var zerr zlink.ZlinkError
 if errors.As(err, &zerr) {
     log.Printf("zlink error %d (errno %d): %v", zerr.Code(), zerr.InternalErrno(), zerr)
 }
 ```
 
-**Options.** `ZlinkError` is a Go `interface` (not a struct or enum). **`Unwrap() error` is not
-part of the `ZlinkError` interface itself** — every concrete struct implements it, but a caller
-holding only a `ZlinkError`-typed value cannot call `Unwrap()` directly through that interface;
-`errors.Is`/`errors.As` still find it via reflection on the concrete value underneath, per the
-standard library's own convention.
+**Options.** `ZlinkError` is a Go interface. Each concrete error implements
+`Unwrap() error`. The standard library's `errors.Is` and `errors.As` use that
+method on the concrete error held by a `ZlinkError` value.
 
 | Member | Meaning |
 | --- | --- |
@@ -82,9 +79,9 @@ standard library's own convention.
 
 **Completion result.** N/A — a pure interface type, never constructed directly.
 
-**When to use.** Use `errors.As(err, &zerr)` (where `zerr` is declared as `contracts.ZlinkError`)
+**When to use.** Use `errors.As(err, &zerr)` (where `zerr` is declared as `zlink.ZlinkError`)
 when a call site wants `.Code()`/`.InternalErrno()` without caring which of the eight concrete
-error structs produced it. Use the specific struct type (e.g. `*contracts.RecvError`) instead when
+error structs produced it. Use the specific struct type (e.g. `*zlink.RecvError`) instead when
 the result code's meaning is family-specific.
 
 ---

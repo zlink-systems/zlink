@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.host;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -26,7 +27,6 @@ import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
-import java.net.BindException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
@@ -35,12 +35,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ThreadLocalRandom;
 
 final class ZLinkFrameworkRuntimeStreamBindFailureTest {
-    // The workspace reserves these ports from automatic ephemeral allocation.
-    private static final int FIRST_LISTENER_PORT = 20000;
-    private static final int LISTENER_PORT_COUNT = 10000;
     private static final int LISTENER_BACKLOG = 1;
 
     /**
@@ -51,20 +47,16 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
     @Test
     void failedStreamBindReleasesEverythingTheStartAlreadyOpened() throws Exception {
         RecordingProvider provider = new RecordingProvider(new ZLinkJavaBackendAdapterFactory());
-        try (ServerSocket occupied = reserveListenerPort();
-                ServerSocket meshPort = reserveListenerPort();
-                ServerSocket streamPort = reserveListenerPort()) {
+        try (ServerSocket occupied = occupyListenerPort()) {
             DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-            options.addRouteMesh("rollback").listen(endpoint(meshPort));
+            options.addRouteMesh("rollback").listen("tcp://127.0.0.1:0");
             options.addStreamNode("first")
-                    .bind(endpoint(streamPort))
+                    .bind("tcp://127.0.0.1:0")
                     .registerSession(FirstSession.class);
             options.addStreamNode("second")
                     .bind(endpoint(occupied))
                     .registerSession(SecondSession.class);
 
-            meshPort.close();
-            streamPort.close();
             assertThrows(
                     RuntimeException.class,
                     () -> ZLinkFrameworkRuntimeTestAccess.start(options, provider));
@@ -86,13 +78,11 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
     @Test
     void failedMeshBindReleasesEverythingTheStartAlreadyOpened() throws Exception {
         RecordingProvider provider = new RecordingProvider(new ZLinkJavaBackendAdapterFactory());
-        try (ServerSocket occupied = reserveListenerPort();
-                ServerSocket meshPort = reserveListenerPort()) {
+        try (ServerSocket occupied = occupyListenerPort()) {
             DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-            options.addRouteMesh("first").listen(endpoint(meshPort));
+            options.addRouteMesh("first").listen("tcp://127.0.0.1:0");
             options.addRouteMesh("second").listen(endpoint(occupied));
 
-            meshPort.close();
             assertThrows(
                     RuntimeException.class,
                     () -> ZLinkFrameworkRuntimeTestAccess.start(options, provider));
@@ -116,20 +106,17 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
     void startFailingWithAnErrorIsRolledBack() throws Exception {
         RecordingProvider provider = new RecordingProvider(new ZLinkJavaBackendAdapterFactory());
         provider.streamAdapterFailure = new AssertionError("stream adapter failed");
-        try (ServerSocket meshPort = reserveListenerPort()) {
-            DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-            options.addRouteMesh("rollback").listen(endpoint(meshPort));
-            options.addStreamNode("stream")
-                    .bind("tcp://127.0.0.1:0")
-                    .registerSession(FirstSession.class);
-            meshPort.close();
-            AssertionError failure =
-                    assertThrows(
-                            AssertionError.class,
-                            () -> ZLinkFrameworkRuntimeTestAccess.start(options, provider));
-            assertSame(provider.streamAdapterFailure, failure);
-            assertEquals(0, failure.getSuppressed().length);
-        }
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        options.addRouteMesh("rollback").listen("tcp://127.0.0.1:0");
+        options.addStreamNode("stream")
+                .bind("tcp://127.0.0.1:0")
+                .registerSession(FirstSession.class);
+        AssertionError failure =
+                assertThrows(
+                        AssertionError.class,
+                        () -> ZLinkFrameworkRuntimeTestAccess.start(options, provider));
+        assertSame(provider.streamAdapterFailure, failure);
+        assertEquals(0, failure.getSuppressed().length);
         assertListenersReleased(provider, 0);
         assertEquals(1, provider.contexts.size());
         IllegalStateException closed =
@@ -171,6 +158,7 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
     }
 
     private static void assertPortReleased(int port) throws Exception {
+        assertTrue(port > 0, "rollback must release an actual bound port");
         try (ServerSocket rebound = new ServerSocket()) {
             rebound.bind(
                     new InetSocketAddress(InetAddress.getLoopbackAddress(), port),
@@ -182,17 +170,8 @@ final class ZLinkFrameworkRuntimeStreamBindFailureTest {
         return "tcp://127.0.0.1:" + reservation.getLocalPort();
     }
 
-    private static ServerSocket reserveListenerPort() throws IOException {
-        int start = ThreadLocalRandom.current().nextInt(LISTENER_PORT_COUNT);
-        for (int offset = 0; offset < LISTENER_PORT_COUNT; offset++) {
-            int port = FIRST_LISTENER_PORT + (start + offset) % LISTENER_PORT_COUNT;
-            try {
-                return new ServerSocket(port, LISTENER_BACKLOG, InetAddress.getLoopbackAddress());
-            } catch (BindException occupied) {
-                // Only fixture allocation skips occupied ports; startup is attempted once.
-            }
-        }
-        throw new BindException("No reserved listener port is available");
+    private static ServerSocket occupyListenerPort() throws IOException {
+        return new ServerSocket(0, LISTENER_BACKLOG, InetAddress.getLoopbackAddress());
     }
 
     /** Delegates to the real backend and records the contexts the runtime creates. */

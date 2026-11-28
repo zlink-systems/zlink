@@ -218,7 +218,9 @@ final class ZLinkSpotDirectOutbound {
                                                         reply.failureCode()));
                                         return;
                                     }
-                                    result.complete(messages.decodeReply(reply.parts(), replyType));
+                                    result.complete(
+                                            messages.decodeReply(
+                                                    reply.parts(), replyType, packetName));
                                 } catch (RuntimeException ex) {
                                     result.completeExceptionally(ex);
                                 } finally {

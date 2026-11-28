@@ -584,6 +584,11 @@ public interface systems.zlink.framework.configuration.ZLinkStreamNodeBuilder {
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder authenticationPacketName(java.lang.String);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder maxConcurrentAuthentications(int);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder authenticationRetryDelay(java.time.Duration);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder admissionQueueEnabled(boolean);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder admissionQueueKey(java.lang.String);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder admissionQueuePreviousKey(java.lang.String);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder admissionQueueMeshName(java.lang.String);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder admissionGlobalLimit(int);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder addSessionPacketHandler(java.lang.Class<?>);
 }
 public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {

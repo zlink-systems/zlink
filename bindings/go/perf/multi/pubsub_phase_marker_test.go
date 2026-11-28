@@ -4,6 +4,7 @@ import (
 	"errors"
 	"syscall"
 	"testing"
+	"time"
 
 	zlink "zlink.systems/zlink"
 	"zlink.systems/zlink/perf/internal/perfcommon"
@@ -36,8 +37,16 @@ func TestPubSubPhaseMarkerPublish(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			attempts := 0
-			err := publishMultiPubSubPhaseMarker(64, perfcommon.PhaseActive, func(marker *zlink.Message) (bool, error) {
+			sendTimeout := 200 * time.Millisecond
+			setSendTimeout := func(timeout time.Duration) error {
+				sendTimeout = timeout
+				return nil
+			}
+			err := publishMultiPubSubPhaseMarker(64, perfcommon.PhaseActive, setSendTimeout, func(marker *zlink.Message) (bool, error) {
 				attempts++
+				if sendTimeout != 2*time.Second {
+					t.Errorf("attempt %d send timeout = %s, want 2s", attempts, sendTimeout)
+				}
 				header, ok := perfcommon.DecodeMetricHeader(marker.Data())
 				if !ok || header.Phase != perfcommon.PhaseActive || header.MsgSize != 64 || header.Sequence != 0 || header.SentTsNs != 0 {
 					t.Fatalf("invalid phase marker on attempt %d: %+v", attempts, header)
