@@ -583,6 +583,7 @@ if(ZLINK_CPP_BUILD_TESTS)
       "LINKER:--wrap=zlink_completion_recv")
     foreach(test_name IN ITEMS
         test_cpp_contract_writable_token_delivery
+        test_cpp_contract_invalid_wait_token_errno
         test_cpp_contract_completion_drain_order)
       add_cpp_contract_test(${test_name} "tests/contract/${test_name}.cpp")
       target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src)

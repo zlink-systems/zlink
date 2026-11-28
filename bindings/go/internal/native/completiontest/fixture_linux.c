@@ -14,7 +14,7 @@ static _Atomic int override_missing_poller_modify;
 static _Atomic int override_poll_failure;
 static _Atomic int override_close_busy;
 static _Atomic int early_send_wait;
-enum fixture_backpressure { no_backpressure, tokenless_backpressure, writable_backpressure };
+enum fixture_backpressure { no_backpressure, tokenless_backpressure, writable_backpressure, invalid_writable_backpressure };
 static _Atomic enum fixture_backpressure submit_backpressure;
 static zlink_completion_t records[16];
 static size_t read_index, write_index, trace_size;
@@ -67,6 +67,10 @@ void fixture_release_early_send(void) { atomic_store(&early_send_wait, 3); }
 void fixture_backpressure_once(int with_token)
 {
     atomic_store(&submit_backpressure, with_token ? writable_backpressure : tokenless_backpressure);
+}
+void fixture_invalid_wait_token_once(void)
+{
+    atomic_store(&submit_backpressure, invalid_writable_backpressure);
 }
 const char *fixture_trace(void) { return trace; }
 
@@ -205,8 +209,12 @@ static int reject_with_backpressure(zlink_msg_t *parts, size_t part_count, void 
         *id = 41;
         fixture_writable(*id, (uintptr_t) context, "submit-target");
     }
+    if (mode == invalid_writable_backpressure) {
+        assert(id != NULL);
+        *id = 41;
+    }
     record_call('B');
-    errno = EAGAIN;
+    errno = mode == invalid_writable_backpressure ? EINVAL : EAGAIN;
     return 1;
 }
 

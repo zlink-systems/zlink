@@ -805,7 +805,8 @@ func (e *completionEntry) attemptRequest() bool {
 		return false
 	}
 
-	if waiting, _ := classifyWritableWait(completionID, err); waiting {
+	waiting, err := classifyWritableWait(completionID, err)
+	if waiting {
 		e.publishSendWait(completionID)
 		if activateErr := e.setWritableWaiting(true); activateErr != nil {
 			e.request.payload.close()

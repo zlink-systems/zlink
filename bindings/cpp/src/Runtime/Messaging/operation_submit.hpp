@@ -26,6 +26,23 @@ inline std::vector<message_t> take_send_parts (operation_state_t &state_)
     return parts;
 }
 
+template <typename RestoreSources>
+bool submit_wait_or_throw (submit_result_t result_, int errno_,
+                           zlink_completion_id_t id_, send_flags_t flags_,
+                           const RestoreSources &restore_sources_)
+{
+    if (result_ == submit_result_t::backpressured && id_ != 0) {
+        if (errno_ != EAGAIN) {
+            result_ = submit_result_t::internal_error;
+            errno_ = EPROTO;
+        } else if (flags_ == send_flags_t::dontwait) {
+            return false;
+        }
+    }
+    restore_sources_ ();
+    throw submit_error_t (result_, errno_);
+}
+
 inline bool submit_raw_send_state (operation_state_t &state_,
                                    void *user_context_ = nullptr,
                                    zlink_completion_id_t *completion_id_out_ = nullptr,
@@ -86,18 +103,13 @@ inline bool submit_raw_send_state (operation_state_t &state_,
 
     if (restore_sources_on_failure_)
         restore_async_send_sources (state_);
-    if (state_.flags == send_flags_t::dontwait && result == submit_result_t::backpressured) {
-        // DONTWAIT publish reports backpressure through its boolean terminal.
-        if (!completion_id_out_)
-            return false;
-        if (*completion_id_out_ != 0) {
-            if (submit_errno != EAGAIN)
-                throw submit_error_t (submit_result_t::internal_error, EPROTO);
-            return false;
-        }
-    }
+    // DONTWAIT publish reports backpressure through its boolean terminal.
+    if (!completion_id_out_ && state_.flags == send_flags_t::dontwait
+        && result == submit_result_t::backpressured)
+        return false;
 
-    throw submit_error_t (result, submit_errno);
+    return submit_wait_or_throw (result, submit_errno,
+      completion_id_out_ ? *completion_id_out_ : 0, state_.flags, [] {});
 }
 
 inline bool submit_raw_request_state (
@@ -164,13 +176,8 @@ inline bool submit_raw_request_state (
         return true;
     }
 
-    if (state_.flags == send_flags_t::dontwait
-        && result == submit_result_t::backpressured
-        && submit_errno == EAGAIN && *completion_id_out_ != 0)
-        return false;
-
-    restore_sources ();
-    throw submit_error_t (result, submit_errno);
+    return submit_wait_or_throw (result, submit_errno, *completion_id_out_,
+                                 state_.flags, restore_sources);
 }
 
 } // namespace detail

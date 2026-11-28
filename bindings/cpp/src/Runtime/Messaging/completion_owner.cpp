@@ -199,10 +199,12 @@ bool completion_entry_t::resubmit_send_attempt () noexcept
         failure = std::current_exception ();
     }
     {
+        operation_state_t::message_parts_t released;
         std::lock_guard<std::mutex> lock (_mutex);
         _send_submitting = false;
+        if (_settled || failure)
+            std::swap (released, _send_operation->message);
         if (_settled) {
-            _send_operation->message.reset ();
             if (!failure && !admitted) {
                 // Core still owns this wait token. Keep its context reserved
                 // until the token is received and ignored.
@@ -290,6 +292,7 @@ bool completion_entry_t::submit_request_attempt (bool initial_, bool *admitted_o
     if (failure) {
         if (initial_)
             restore_async_send_sources (*_request_operation);
+        _request_operation->message.reset ();
         fail_request (failure);
         if (initial_)
             std::rethrow_exception (failure);
