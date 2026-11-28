@@ -92,6 +92,7 @@ goroutine boundary.
 - `go test ./...`
 - `./tests/run_tests.sh`
 - `./samples/run_samples.sh`
+- Benchmarks are a separate module, `zlink.systems/zlink/perf` (`go -C perf test ./...`), so the public module does not depend on the benchmark WebSocket client.
 
 ## Scope
 
