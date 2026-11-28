@@ -210,15 +210,17 @@ public sealed partial class RelocationRuntimeTests
             stage.AdmissionDrainTask = Task.FromCanceled(new CancellationToken(canceled: true));
             if (publication == StagedAuthorityPublication.Complete)
             {
-                // The live cutover owns its verified root while source completion is absent.
-                stage.RememberFinalRoot("published-root", 37);
+                var completion = TrackVerifiedCompletionRoot(stage, "published-root");
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                     target
                         .PublishInboundAsync(fence, stage.SourceNodeRid, CancellationToken.None)
                         .AsTask()
                 );
                 Assert.Equal(1, Volatile.Read(ref stage.AuthorityPublished));
-                Assert.Equal(("published-root", 37U), stage.GetFinalRoot());
+                Assert.Equal(
+                    "published-root",
+                    completion.LastObserved?.Relocation?.Completion?.Reference
+                );
                 Assert.Equal(
                     committed.AuthorityOwnerGeneration,
                     stage.TargetAuthorityOwnerGeneration
