@@ -204,12 +204,21 @@ public final class ZLinkMessageFlowTracer {
     }
 
     public TracePoint beginDispatchError() {
+        return beginDispatchError(false);
+    }
+
+    /** Hands a stop-deadline terminal record to the process telemetry worker. */
+    public TracePoint beginStopDeadlineTerminal() {
+        return beginDispatchError(true);
+    }
+
+    private TracePoint beginDispatchError(boolean stopDeadlineTerminal) {
         ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
         if (!accepts(mode, ZLinkMessageFlowResult.FAILED)
                 || !ZLinkTelemetryOwner.hasProvider(LOGGER)) {
             return null;
         }
-        return event -> traceAtMode(event, mode);
+        return event -> traceAtMode(event, mode, stopDeadlineTerminal);
     }
 
     /**
@@ -243,6 +252,13 @@ public final class ZLinkMessageFlowTracer {
     }
 
     private void traceAtMode(ZLinkMessageFlowEvent event, ZLinkMessageFlowLogMode mode) {
+        traceAtMode(event, mode, false);
+    }
+
+    private void traceAtMode(
+            ZLinkMessageFlowEvent event,
+            ZLinkMessageFlowLogMode mode,
+            boolean stopDeadlineTerminal) {
         ZLinkMessageFlowEvent tracedFlow =
                 captureEnabled(mode) ? attachAmbientFlow(event) : event.withFlow(null, null);
         if (sampled(tracedFlow)
@@ -257,6 +273,7 @@ public final class ZLinkMessageFlowTracer {
                         : null;
         ZLinkTelemetryOwner.submit(
                 telemetryHost,
+                stopDeadlineTerminal,
                 tracedFlow,
                 size,
                 logLevel(tracedFlow),

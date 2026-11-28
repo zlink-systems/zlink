@@ -390,7 +390,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                             if (unwrap(failure)
                                     instanceof ZLinkAuthorityUnsettledAtStopException unsettled) {
                                 return notifyCompletion(
-                                        failedCompletion(operationId, unsettled.kind(), unsettled));
+                                        new ZLinkActorJoinCompletion.Failed(
+                                                operationId, unsettled.kind()));
                             }
                             return CompletableFuture.failedFuture(failure);
                         });
