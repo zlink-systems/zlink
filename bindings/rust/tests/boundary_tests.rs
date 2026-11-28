@@ -63,7 +63,7 @@ fn duration_overflow_fails() {
     // Duration larger than i32::MAX milliseconds
     let huge = Duration::from_millis(i32::MAX as u64 + 1);
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     let result = sock.common_options().set_reconnect_interval(huge);
     assert!(result.is_err(), "duration overflow must be rejected");
 }
@@ -72,7 +72,7 @@ fn duration_overflow_fails() {
 fn duration_max_accepted() {
     let max_ok = Duration::from_millis(i32::MAX as u64);
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     let result = sock.common_options().set_reconnect_interval(max_ok);
     assert!(result.is_ok(), "i32::MAX ms duration must be accepted");
 }
@@ -107,7 +107,7 @@ fn context_is_send_sync_and_shared_socket_creation_is_safe() {
 #[test]
 fn null_byte_in_address_rejected() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     let result = sock.bind("inproc://bad\0addr");
     assert!(result.is_err(), "address with null byte must be rejected");
 }
@@ -115,7 +115,7 @@ fn null_byte_in_address_rejected() {
 #[test]
 fn null_byte_in_topic_rejected() {
     let ctx = Context::new().unwrap();
-    let pub_sock = ctx.pub_socket().unwrap();
+    let pub_sock = ctx.create_pub_socket().unwrap();
     pub_sock.bind("inproc://bnd-topic-null").unwrap();
 
     let result = std::panic::catch_unwind(|| pub_sock.publish("bad\0topic"));
@@ -125,7 +125,7 @@ fn null_byte_in_topic_rejected() {
 #[test]
 fn null_byte_in_subscription_filter_rejected() {
     let ctx = Context::new().unwrap();
-    let sub = ctx.sub_socket().unwrap();
+    let sub = ctx.create_sub_socket().unwrap();
     sub.bind("inproc://bnd-filter-null-target").unwrap();
 
     let result = sub.set_subscription("bad\0filter");
