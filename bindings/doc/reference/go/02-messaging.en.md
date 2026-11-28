@@ -23,10 +23,10 @@ by the root package's [`root_projection.go`](../../../../bindings/go/root_projec
 Owns one native zlink frame — the unit every send, request, reply, and receive API moves.
 
 ```go
-empty, err := contracts.NewMessage(nil)
-sized, err := contracts.NewMessageWithSize(4096)
-fromBytes, err := contracts.NewMessage(payload)
-fromString, err := contracts.NewMessageString("payload")
+empty, err := zlink.NewMessage(nil)
+sized, err := zlink.NewMessageWithSize(4096)
+fromBytes, err := zlink.NewMessage(payload)
+fromString, err := zlink.NewMessageString("payload")
 ```
 
 **Options.**
@@ -47,16 +47,17 @@ fromString, err := contracts.NewMessageString("payload")
 | `Clone()` / `Copy()` | equivalent — both return `(*Message, error)`, an independent payload copy |
 | `Close() error` | releases the message |
 
-**Completion result.** Every member is synchronous. `Close()` is idempotent (a `nil` receiver or
-already-closed message returns `nil`); the caller must call it explicitly — there is no finalizer.
-Sending a message via a `MoveMessage`-family builder call transfers its native frame to the socket
-and marks it closed on the Go side (see the operation-builder shape below); sending via a plain
-`Message`-family call leaves the caller's `Message` still owned and still requiring `Close()`.
+**Completion result.** Every member is synchronous. `Close()` returns `nil` for a
+`nil` receiver or an already-closed message. The caller closes the message after use.
 
-**When to use.** Use `NewMessageWithSize`/`NewMessage` to build an outbound payload; use `Clone()`
-when an independent copy is needed rather than transferring ownership through `MoveMessage`. Prefer
-`Data()` over `Bytes()` on the hot path when the slice is consumed before the next `recv` call —
-`Bytes()` always allocates a copy.
+Passing a message through `Message(...)` consumes it once Core admits the operation. Send and
+request also consume it when Core returns a valid WRITABLE wait token. An initial failure before
+either outcome preserves the message. `MoveMessage(...)` transfers ownership at submit time.
+
+**When to use.** Use `NewMessageWithSize` or `NewMessage` to build an outbound payload.
+Use `Clone()` when an independent message is needed. Use `Data()` to access the payload
+while the message is open and `Bytes()` to copy it for use after closing.
+
 
 ---
 
@@ -67,8 +68,8 @@ request/reply exchange), and message parts. Reuse one instance across `recv` cal
 per-receive allocation — the socket's receive method resets and repopulates it.
 
 ```go
-var received contracts.Received
-ok, err := router.Recv(&received, contracts.RecvFlagsNone)
+var received zlink.Received
+ok, err := router.Recv(&received, zlink.RecvFlagsNone)
 if _, replyable := received.ReplyToken(); ok && replyable {
     received.Reply().Message(reply).Submit(ctx)
 }
@@ -83,7 +84,7 @@ address to a socket's receive method (Sockets category), which populates it.
 | `ReplyToken() (ReplyToken, bool)` | the opaque reply capability and whether it is present |
 | `IsSinglePart() bool` | whether `Parts()` has exactly one element |
 | `Parts() []*Message` | every message part this envelope holds |
-| `FirstPart() (*Message, error)` | the first part, without ownership transfer — the part remains owned by `Received` |
+| `FirstPart() (*Message, error)` | Returns the first part, which remains owned by `Received`. When empty, returns `*RecvError` with `RecvInvalidState` and `EINVAL`. |
 | `Reply() ReplyOp` | starts the shared reply builder; only valid when `ReplyToken()` is present |
 | `Send() SendOp` | starts the shared send builder, addressed back to this envelope's captured source route |
 | `Close() error` | closes every retained part; safe to call on a `nil` receiver |
@@ -104,8 +105,8 @@ A received publish: its topic, source routing id, and message parts. Reuse one i
 subscribe-receive calls the same way as `Received`.
 
 ```go
-var published contracts.TopicMessage
-ok, err := sub.Subscribe(&published, contracts.RecvFlagsNone)
+var published zlink.TopicMessage
+ok, err := sub.Subscribe(&published, zlink.RecvFlagsNone)
 topic := published.Topic()
 ```
 
@@ -128,8 +129,8 @@ topic := published.Topic()
 Reports one subscriber's subscribe or unsubscribe, as observed by an XPUB socket.
 
 ```go
-var evt contracts.SubscriptionEvent
-ok, err := xpub.ReceiveSubscriptionEvent(&evt, contracts.RecvFlagsNone)
+var evt zlink.SubscriptionEvent
+ok, err := xpub.ReceiveSubscriptionEvent(&evt, zlink.RecvFlagsNone)
 ```
 
 **Options.** No public constructor — declare a zero-value `SubscriptionEvent{}`. All members are
@@ -151,47 +152,61 @@ observe subscriber churn.
 
 ## Send / request / reply operation-builder shape
 
-The fluent builder interfaces every socket type's `Send`/`Publish`/`Request`/`Reply` entry point
-(Sockets category) returns to accumulate parts, flags, and a terminal submit. Every stage is a
-distinct Go interface (`SendOp` → `SendSubmitOp`, `RequestOp` → `RequestSubmitOp`,
-`ReplyOp` → `ReplySubmitOp`) — calling a stage-appropriate method
-returns the next interface in the chain, so a caller cannot call `Submit` before at least one part
-has been added.
+The first part added to `SendOp`, `RequestOp`, `ReplyOp`, or `PublishOp` exposes
+`Submit(ctx)`. Send, request, and publish accept parts via `Message(*Message)` or `Bytes([]byte)`. Send and publish
+also accept `MoveMessage(*Message)`. Request accepts `Timeout(time.Duration)`, and publish accepts
+`Flags(SendFlags)`. Reply accepts `Message(*Message)`.
 
 ```go
-err := dealer.Send().Message(part1).Message(part2).Submit(ctx)
-
-parts, err := dealer.Request().
-    Message(payload).
-    Timeout(5 * time.Second).
-    Submit(ctx)
-
-err := received.Reply().Message(reply).Submit(ctx)
+send, err := dealer.Send().Message(part1).Message(part2).Submit(ctx)
+if err != nil {
+    return err
+}
+if err := send.Admitted(ctx); err != nil {
+    return err
+}
 ```
 
-**Options.** Every terminal `Submit` takes a `context.Context` as its first
-argument — a cancelled or deadline-exceeded context short-circuits the call with that context's
-`Err()` before the native submit runs, which no other language's operation builder does.
+```go
+request, err := dealer.Request().Message(payload).Timeout(5 * time.Second).Submit(ctx)
+if err != nil {
+    return err
+}
+parts, err := request.Reply(ctx)
+if err != nil {
+    return err
+}
+for _, part := range parts {
+    defer part.Close()
+}
+```
 
-| Stage | Member | Meaning |
+```go
+if err := received.Reply().Message(reply).Submit(ctx); err != nil {
+    return err
+}
+```
+
+**Options.** Adding the first part returns the corresponding submit interface.
+If its `context.Context` is already canceled or past its deadline, `Submit(ctx)`
+returns `ctx.Err()` before native submission.
+
+| Terminal | Return | Meaning |
 | --- | --- | --- |
-| `SendOp` | `.Message(*Message)` / `.MoveMessage(*Message)` / `.Bytes([]byte)` → `SendSubmitOp` | start the chain; `MoveMessage` transfers the message's ownership to the socket on a successful submit |
-| `SendSubmitOp` | same three add methods + `.Submit(ctx context.Context) error` | add parts, completion-backed terminal |
-| `RequestOp` | `.Message` / `.Bytes` → `RequestSubmitOp` | start the request chain |
-| `RequestSubmitOp` | `.Timeout(time.Duration)` | adds a reply-wait timeout |
-| `RequestSubmitOp` terminal | `.Submit(ctx context.Context) ([]*Message, error)` | returns the completion-backed reply parts directly |
-| `context.Context` | passed to send/request/reply `Submit` | bounds the Go waiter; it is not a Core cancel after successful native submit |
-| `ReplyOp` | `.Message(*Message)` → `ReplySubmitOp` | starts the reply chain |
-| `ReplySubmitOp` | `.Message(...)` / `.Submit(ctx context.Context) error` | flag-free synchronous reply terminal |
+| Send `Submit(ctx)` | `(SendSubmission, error)` | `Admitted(ctx)` waits for admission. |
+| Request `Submit(ctx)` | `(RequestSubmission, error)` | `Admitted(ctx)` waits for admission. `Reply(ctx)` waits for the reply and transfers ownership of the returned parts to the caller. |
+| Reply `Submit(ctx)` | `error` | Returns the admission result. |
+| Publish `Submit(ctx)` | `(bool, error)` | With `SendFlagsDontWait`, `false, nil` reports backpressure. |
 
-**Completion result.** `SendSubmitOp.Submit` and `ReplySubmitOp.Submit` return `error`.
-`RequestSubmitOp.Submit` returns `([]*Message, error)` after the socket completion queue yields a
-terminal result; the caller closes every reply message. Every builder is single-use — a second
-`Submit` returns an error rather than resubmitting.
+**Completion result.** For send and request, `Result()` reports the initial submit outcome.
+The caller closes each part returned by `Reply(ctx)`. Once a builder attempts native
+submission, a second submit returns an error. Canceling the context can end the Go
+wait after submission. The completion owner continues to drain Core completions.
 
-**When to use.** Call `Submit(ctx)` and handle its direct result in the owning goroutine. Use
-`Received.Reply()`/`Send()` rather than reconstructing the destination route by hand — the routing
-id and reply token for `Reply` are encapsulated by the builder.
+**When to use.** Handle the immediate result of `Submit(ctx)` first. When a public poller
+is registered for `PollCompletion`, drive it in a separate goroutine while waiting for
+admission or a reply. Use `Received.Send()` for the envelope's captured source route or
+`Received.Reply()` to answer a request with a reply token.
 
 ---
 
