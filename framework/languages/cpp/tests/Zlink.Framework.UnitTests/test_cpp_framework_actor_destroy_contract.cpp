@@ -351,7 +351,9 @@ TEST_F (ActorDestroyContract, RemoteDestroyReleasesClosingAfterOwnerLeaseEnds)
 
     const auto removed = pending.result_for (wait_budget);
     ASSERT_TRUE (removed && *removed && removed->value ());
-    const auto authority = services->get_required<fw::location_repository_t> ()
+    // The owner's lease ended above, so its repository closes admission once its renew observes
+    // the deleted lease. Read the Store through the caller, whose lease is still live.
+    const auto authority = caller_services.get_required<fw::location_repository_t> ()
                              .read_authority (fw::runtime::actor_authority_key (actor_id))
                              .result_for (wait_budget);
     ASSERT_TRUE (authority && *authority);
