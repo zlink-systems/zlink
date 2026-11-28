@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.channels;
 
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.execution.ZLinkExecutionSubmission;
@@ -242,16 +243,20 @@ final class ZLinkApplicationExecutionScheduler {
                                         return null;
                                     });
                         } catch (RuntimeException | Error failure) {
-                            CALLBACK_LOG.log(
+                            ZLinkTelemetryOwner.log(
+                                    ownership == null ? null : ownership.telemetryHost(),
+                                    CALLBACK_LOG,
                                     java.util.logging.Level.SEVERE,
-                                    "Framework callback completion failed",
+                                    () -> "Framework callback completion failed",
                                     failure);
                         }
                     },
                     rejected ->
-                            CALLBACK_LOG.log(
+                            ZLinkTelemetryOwner.log(
+                                    ownership == null ? null : ownership.telemetryHost(),
+                                    CALLBACK_LOG,
                                     java.util.logging.Level.SEVERE,
-                                    "Framework callback completion failed",
+                                    () -> "Framework callback completion failed",
                                     rejected));
         }
 

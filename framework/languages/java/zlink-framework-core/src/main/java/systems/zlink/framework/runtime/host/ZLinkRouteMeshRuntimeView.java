@@ -15,6 +15,7 @@ import systems.zlink.framework.monitoring.ZLinkPlacementSnapshot;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.monitoring.ZLinkTopologyReason;
 import systems.zlink.framework.monitoring.ZLinkTopologyState;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
@@ -428,14 +429,18 @@ final class ZLinkRouteMeshRuntimeView
                     .whenComplete(
                             (active, ownerFailure) -> {
                                 if (Boolean.TRUE.equals(active)) statuses.fail(meshName, failure);
-                                LOGGER.log(
+                                ZLinkTelemetryOwner.log(
+                                        runtime.telemetryHost(),
+                                        LOGGER,
                                         Level.WARNING,
-                                        "Mesh status source registration failed",
+                                        () -> "Mesh status source registration failed",
                                         failure);
                                 if (ownerFailure != null)
-                                    LOGGER.log(
+                                    ZLinkTelemetryOwner.log(
+                                            runtime.telemetryHost(),
+                                            LOGGER,
                                             Level.WARNING,
-                                            "Mesh status source failure delivery failed",
+                                            () -> "Mesh status source failure delivery failed",
                                             ownerFailure);
                             });
         }
@@ -459,9 +464,11 @@ final class ZLinkRouteMeshRuntimeView
                             (current, failure) -> {
                                 closeSubscription(current);
                                 if (failure != null)
-                                    LOGGER.log(
+                                    ZLinkTelemetryOwner.log(
+                                            runtime.telemetryHost(),
+                                            LOGGER,
                                             Level.WARNING,
-                                            "Mesh status source close failed",
+                                            () -> "Mesh status source close failed",
                                             failure);
                             });
         }
@@ -471,7 +478,12 @@ final class ZLinkRouteMeshRuntimeView
             try {
                 current.close();
             } catch (Exception failure) {
-                LOGGER.log(Level.WARNING, "Mesh status subscription cleanup failed", failure);
+                ZLinkTelemetryOwner.log(
+                        runtime.telemetryHost(),
+                        LOGGER,
+                        Level.WARNING,
+                        () -> "Mesh status subscription cleanup failed",
+                        failure);
             }
         }
     }

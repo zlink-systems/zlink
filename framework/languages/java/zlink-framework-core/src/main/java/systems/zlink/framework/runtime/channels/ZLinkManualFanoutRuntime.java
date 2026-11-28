@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.channels;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendConnectableSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
@@ -44,6 +45,7 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
     private static final long DISCOVERY_TICK_MILLIS = 10;
     private static final Logger LOGGER = Logger.getLogger(ZLinkManualFanoutRuntime.class.getName());
 
+    private final ZLinkTelemetryOwner.Host telemetryHost;
     private final ZLinkChannelBackendAdapter backend;
     private final ZLinkMonitoringBackendAdapter monitoring;
     private final ZLinkBackendContext context;
@@ -71,6 +73,29 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
             BiConsumer<String, ZLinkBackendTopicMessage> dispatch,
             Map<String, List<String>> applicationTopics,
             Runnable topologySignal) {
+        this(
+                backend,
+                monitoring,
+                context,
+                scheduler,
+                infrastructureExecutor,
+                dispatch,
+                applicationTopics,
+                topologySignal,
+                null);
+    }
+
+    ZLinkManualFanoutRuntime(
+            ZLinkChannelBackendAdapter backend,
+            ZLinkMonitoringBackendAdapter monitoring,
+            ZLinkBackendContext context,
+            ScheduledExecutorService scheduler,
+            Executor infrastructureExecutor,
+            BiConsumer<String, ZLinkBackendTopicMessage> dispatch,
+            Map<String, List<String>> applicationTopics,
+            Runnable topologySignal,
+            ZLinkTelemetryOwner.Host telemetryHost) {
+        this.telemetryHost = telemetryHost;
         this.backend = Objects.requireNonNull(backend, "backend");
         this.monitoring = monitoring;
         this.context = Objects.requireNonNull(context, "context");
@@ -308,9 +333,11 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
                 }
             }
         } catch (RuntimeException failure) {
-            LOGGER.log(
+            ZLinkTelemetryOwner.log(
+                    telemetryHost,
+                    LOGGER,
                     Level.WARNING,
-                    "manual fanout subscriber connect failed for " + endpoint,
+                    () -> "manual fanout subscriber connect failed for " + endpoint,
                     failure);
             if (connection != null) {
                 connection.openingSettlement.complete(null);
@@ -325,19 +352,29 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         }
     }
 
-    private static void closeUnregistered(
+    private void closeUnregistered(
             ZLinkBackendSubscriberSocket subscriber, ZLinkBackendSocketMonitor monitor) {
         if (monitor != null) {
             try {
                 monitor.close();
             } catch (RuntimeException failure) {
-                LOGGER.log(Level.WARNING, "unregistered fanout monitor cleanup failed", failure);
+                ZLinkTelemetryOwner.log(
+                        telemetryHost,
+                        LOGGER,
+                        Level.WARNING,
+                        () -> "unregistered fanout monitor cleanup failed",
+                        failure);
             }
         }
         try {
             subscriber.close();
         } catch (RuntimeException failure) {
-            LOGGER.log(Level.WARNING, "unregistered fanout subscriber cleanup failed", failure);
+            ZLinkTelemetryOwner.log(
+                    telemetryHost,
+                    LOGGER,
+                    Level.WARNING,
+                    () -> "unregistered fanout subscriber cleanup failed",
+                    failure);
         }
     }
 
@@ -376,9 +413,11 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
             receiveAvailable(token);
             expireConnections(token);
         } catch (RuntimeException failure) {
-            LOGGER.log(
+            ZLinkTelemetryOwner.log(
+                    telemetryHost,
+                    LOGGER,
                     Level.WARNING,
-                    "manual fanout tick failed; the next bounded tick retries",
+                    () -> "manual fanout tick failed; the next bounded tick retries",
                     failure);
         } finally {
             clearAdmittedTick(token);

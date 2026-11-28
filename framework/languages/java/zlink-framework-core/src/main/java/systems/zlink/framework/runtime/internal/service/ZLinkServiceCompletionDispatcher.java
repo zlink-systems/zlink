@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.internal.service;
 
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 
 import java.util.concurrent.CompletableFuture;
@@ -50,9 +51,14 @@ public final class ZLinkServiceCompletionDispatcher {
     }
 
     void register(WorkItem item) {
+        register(item, null);
+    }
+
+    void register(WorkItem item, ZLinkTelemetryOwner.Host telemetryHost) {
         if (item.registered) {
             throw new IllegalStateException("completion work item is already registered");
         }
+        item.telemetryHost = telemetryHost;
         item.registered = true;
     }
 
@@ -90,6 +96,7 @@ public final class ZLinkServiceCompletionDispatcher {
 
     private static void releaseRegistration(WorkItem item) {
         requireRegistered(item);
+        item.telemetryHost = null;
         item.registered = false;
         item.released();
     }
@@ -102,6 +109,12 @@ public final class ZLinkServiceCompletionDispatcher {
 
     abstract static class WorkItem implements Runnable {
         private WorkItem dispatchNext;
+        private ZLinkTelemetryOwner.Host telemetryHost;
+
+        final ZLinkTelemetryOwner.Host telemetryHost() {
+            return telemetryHost;
+        }
+
         private volatile boolean registered;
 
         final boolean registeredForTest() {
@@ -120,7 +133,12 @@ public final class ZLinkServiceCompletionDispatcher {
                 try {
                     dispatch();
                 } catch (RuntimeException | Error failure) {
-                    LOGGER.log(Level.SEVERE, "service completion dispatch failed", failure);
+                    ZLinkTelemetryOwner.log(
+                            telemetryHost,
+                            LOGGER,
+                            Level.SEVERE,
+                            () -> "service completion dispatch failed",
+                            failure);
                 } finally {
                     releaseRegistration(this);
                 }

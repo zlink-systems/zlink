@@ -19,9 +19,80 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 final class ZLinkApplicationExecutionSchedulerTest {
     private static final CompletableFuture<Void> DONE = CompletableFuture.completedFuture(null);
+
+    @Test
+    void slowCallbackFailureLoggerDoesNotBlockTheApplicationExecutor() throws Exception {
+        var executor = new ManualExecutor();
+        var owner = new ZLinkApplicationExecutionScheduler(executor, 1).register();
+        var turn = new CompletableFuture<ZLinkSuspendInvocationContext.ApplicationTurn>();
+        owner.enqueue(
+                () -> {
+                    turn.complete(
+                            (ZLinkSuspendInvocationContext.ApplicationTurn)
+                                    ZLinkSuspendInvocationContext.currentSerialExecutionTurn());
+                    return DONE;
+                },
+                null);
+        executor.drain();
+
+        var failure = new IllegalStateException("callback test failure");
+        var logger = Logger.getLogger(ZLinkSerialExecutionQueue.class.getName());
+        var delivered = new CompletableFuture<LogRecord>();
+        var handlerThread = new AtomicReference<Thread>();
+        var handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        if (record.getThrown() != failure) return;
+                        handlerThread.set(Thread.currentThread());
+                        try {
+                            Thread.sleep(500);
+                            delivered.complete(record);
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            delivered.completeExceptionally(interrupted);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        Level previousLevel = logger.getLevel();
+        logger.setLevel(Level.SEVERE);
+        logger.addHandler(handler);
+        try {
+            turn.join()
+                    .execute(
+                            () -> {
+                                throw failure;
+                            });
+            long started = System.nanoTime();
+            executor.drain();
+            long elapsed = System.nanoTime() - started;
+            var record = delivered.get(5, TimeUnit.SECONDS);
+            System.out.printf("Callback executor elapsed %.3f ms%n", elapsed / 1_000_000.0);
+            assertTrue(
+                    elapsed < TimeUnit.MILLISECONDS.toNanos(250),
+                    () -> "Callback executor blocked for " + elapsed / 1_000_000.0 + " ms");
+            assertEquals("zlink-process-telemetry", handlerThread.get().getName());
+            assertSame(failure, record.getThrown());
+            assertEquals(Level.SEVERE, record.getLevel());
+            assertEquals("Framework callback completion failed", record.getMessage());
+        } finally {
+            logger.removeHandler(handler);
+            logger.setLevel(previousLevel);
+        }
+    }
 
     @Test
     void fifoClaimsStayUniqueAndReadyUntilLastHead() throws Exception {

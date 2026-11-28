@@ -7,6 +7,7 @@ import org.slf4j.helpers.SubstituteLogger;
 
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 
 import java.time.Instant;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -56,7 +57,7 @@ public final class ZLinkTelemetryOwner {
     }
 
     public static Host hostOf(ZLinkMessageFlowTracer flow) {
-        return flow.telemetryHost();
+        return flow == null ? null : flow.telemetryHost();
     }
 
     public static Host openHost() {
@@ -89,7 +90,7 @@ public final class ZLinkTelemetryOwner {
         }
     }
 
-    private sealed interface Diagnostic permits FlowRecord, JulRecord {
+    private sealed interface Diagnostic permits FlowRecord, JulRecord, TaskFailure, ConsoleRecord {
         void publish();
     }
 
@@ -115,6 +116,7 @@ public final class ZLinkTelemetryOwner {
             java.util.logging.Level level,
             String message,
             Throwable failure,
+            Object[] parameters,
             Instant observed,
             long threadId)
             implements Diagnostic {
@@ -126,7 +128,24 @@ public final class ZLinkTelemetryOwner {
             record.setInstant(observed);
             record.setLongThreadID(threadId);
             record.setThrown(failure);
+            record.setParameters(parameters);
             logger.log(record);
+        }
+    }
+
+    private record TaskFailure(
+            ZLinkRuntimeEventDispatcher dispatcher, String taskName, Throwable failure)
+            implements Diagnostic {
+        @Override
+        public void publish() {
+            dispatcher.publishRuntimeTaskFailure(taskName, failure);
+        }
+    }
+
+    private record ConsoleRecord(String message) implements Diagnostic {
+        @Override
+        public void publish() {
+            System.err.println(message);
         }
     }
 
@@ -149,6 +168,25 @@ public final class ZLinkTelemetryOwner {
             java.util.logging.Level level,
             Supplier<String> message,
             Throwable failure) {
+        log(host, logger, level, message, failure, null);
+    }
+
+    public static void logParameters(
+            Host host,
+            java.util.logging.Logger logger,
+            java.util.logging.Level level,
+            String message,
+            Object... parameters) {
+        log(host, logger, level, () -> message, null, parameters);
+    }
+
+    private static void log(
+            Host host,
+            java.util.logging.Logger logger,
+            java.util.logging.Level level,
+            Supplier<String> message,
+            Throwable failure,
+            Object[] parameters) {
         if (logger.isLoggable(level) && !retired(host)) {
             PROCESS.admit(
                     host,
@@ -158,9 +196,21 @@ public final class ZLinkTelemetryOwner {
                             level,
                             message.get(),
                             failure,
+                            parameters,
                             Instant.now(),
                             Thread.currentThread().threadId()));
         }
+    }
+
+    public static void runtimeTaskFailure(
+            Host host, ZLinkRuntimeEventDispatcher dispatcher, String taskName, Throwable failure) {
+        if (!retired(host)) {
+            PROCESS.admit(host, new TaskFailure(dispatcher, taskName, failure));
+        }
+    }
+
+    public static void stderr(Host host, String message) {
+        if (!retired(host)) PROCESS.admit(host, new ConsoleRecord(message));
     }
 
     private static boolean retired(Host host) {

@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.internal.metrics;
 
 import systems.zlink.framework.monitoring.ZLinkHostCapacityStatus;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -548,9 +549,16 @@ public final class ZLinkRuntimeMetrics {
         void close();
     }
 
+    private static final java.util.logging.Logger LOGGER =
+            java.util.logging.Logger.getLogger(ZLinkRuntimeMetrics.class.getName());
+
     private static void reportObservationFailure(RuntimeException failure) {
-        java.util.logging.Logger.getLogger(ZLinkRuntimeMetrics.class.getName())
-                .log(java.util.logging.Level.WARNING, "Runtime metric observation failed", failure);
+        ZLinkTelemetryOwner.log(
+                null,
+                LOGGER,
+                java.util.logging.Level.WARNING,
+                () -> "Runtime metric observation failed",
+                failure);
     }
 
     private ZLinkRuntimeMetrics() {}

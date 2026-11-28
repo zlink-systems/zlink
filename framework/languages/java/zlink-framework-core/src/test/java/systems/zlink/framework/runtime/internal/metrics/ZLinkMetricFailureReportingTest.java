@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
+
 import java.util.*;
 import java.util.logging.*;
 
@@ -40,6 +42,7 @@ final class ZLinkMetricFailureReportingTest {
                         })) {
             assertDoesNotThrow(
                     () -> ZLinkRuntimeMetrics.increment("zlink.relocation.started", Map.of()));
+            ZLinkTelemetryTestFence.awaitIdle();
             assertTrue(records.stream().anyMatch(record -> record.getThrown() == failure));
         } finally {
             logger.removeHandler(handler);

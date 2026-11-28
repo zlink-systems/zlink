@@ -17,6 +17,7 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
@@ -182,6 +183,7 @@ class ZLinkActorRequestDeadlineDiagnosticsTest {
                                 assertInstanceOf(ZLinkFrameworkException.class, failure.getCause())
                                         .kind());
                     }
+                    ZLinkTelemetryTestFence.awaitIdle();
                 } finally {
                     RELEASE.complete(null);
                 }

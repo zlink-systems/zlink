@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.dispatch;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.monitoring.ZLinkApplicationJobQueuePressureState;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkApplicationJobQueuePressureMetrics;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
@@ -49,6 +50,7 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     private static final Path CPU_QUOTA = Path.of("/sys/fs/cgroup/cpu/cpu.cfs_quota_us");
     private static final Path CPU_PERIOD = Path.of("/sys/fs/cgroup/cpu/cpu.cfs_period_us");
 
+    private volatile ZLinkTelemetryOwner.Host telemetryHost;
     private final Object lock = new Object();
     private final ZLinkApplicationJobQueueProfile configuredProfile;
     private final OptionalLong configuredManualMax;
@@ -146,6 +148,14 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                 floorPercent(this.effectiveLimit, this.configuredResumeThresholdPercent);
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
         this.receiveFlow = new ZLinkApplicationJobReceiveFlowController(this);
+    }
+
+    public void attachTelemetryHost(ZLinkTelemetryOwner.Host host) {
+        telemetryHost = host;
+    }
+
+    public ZLinkTelemetryOwner.Host telemetryHost() {
+        return telemetryHost;
     }
 
     public enum Origin {
@@ -852,19 +862,14 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     }
 
     private void logLocalBacklog(long count) {
-        try {
-            LOGGER.log(
-                    java.util.logging.Level.WARNING,
-                    "zlink.runtime.host.local_job_backlog_exceeded source_kind=host"
-                            + " source_name=zlink.runtime.host local_waiters={0} effective_maximum={1}",
-                    new Object[] {count, effectiveLimit});
-        } catch (RuntimeException failure) {
-            new java.util.logging.ErrorManager()
-                    .error(
-                            "Host local backlog logger failed",
-                            failure,
-                            java.util.logging.ErrorManager.WRITE_FAILURE);
-        }
+        ZLinkTelemetryOwner.logParameters(
+                telemetryHost,
+                LOGGER,
+                java.util.logging.Level.WARNING,
+                "zlink.runtime.host.local_job_backlog_exceeded source_kind=host"
+                        + " source_name=zlink.runtime.host local_waiters={0} effective_maximum={1}",
+                count,
+                effectiveLimit);
     }
 
     private void recordWaitDurationUnderLock(Waiter waiter) {

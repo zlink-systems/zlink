@@ -7,6 +7,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.binding.ZLinkJavaDurableRequest;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
@@ -101,7 +102,8 @@ final class ZLinkChannelCallRuntime {
                         owner,
                         closedFailure(),
                         () -> requestFailure(new TimeoutException("service operation timed out")),
-                        nanoTime);
+                        nanoTime,
+                        ZLinkTelemetryOwner.hostOf(flow));
         this.nanoTime = nanoTime;
         this.replyDecoder = replyDecoder;
         this.spotSend = spotSend;

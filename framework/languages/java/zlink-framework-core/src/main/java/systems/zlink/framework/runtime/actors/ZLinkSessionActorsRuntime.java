@@ -10,6 +10,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestCalls;
@@ -853,8 +854,12 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure != null) {
-                                LOGGER.log(
-                                        Level.WARNING, "Actor unbound submission failed", failure);
+                                ZLinkTelemetryOwner.log(
+                                        ZLinkTelemetryOwner.hostOf(flow),
+                                        LOGGER,
+                                        Level.WARNING,
+                                        () -> "Actor unbound submission failed",
+                                        failure);
                             }
                         });
     }
@@ -995,7 +1000,12 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         (ignored, failure) -> {
                             // Callers may discard the stage, so report failures here.
                             if (failure != null) {
-                                LOGGER.log(Level.WARNING, "Actor binding cleanup failed", failure);
+                                ZLinkTelemetryOwner.log(
+                                        ZLinkTelemetryOwner.hostOf(flow),
+                                        LOGGER,
+                                        Level.WARNING,
+                                        () -> "Actor binding cleanup failed",
+                                        failure);
                             }
                         });
     }
@@ -1196,11 +1206,16 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                         + actorId));
             }
             if (recorded.consumed()) {
-                LOGGER.warning(
-                        "late_session_relocation_seal actor="
-                                + actorId
-                                + " relocation="
-                                + command.relocation());
+                ZLinkTelemetryOwner.log(
+                        ZLinkTelemetryOwner.hostOf(flow),
+                        LOGGER,
+                        java.util.logging.Level.WARNING,
+                        () ->
+                                "late_session_relocation_seal actor="
+                                        + actorId
+                                        + " relocation="
+                                        + command.relocation(),
+                        null);
                 return CompletableFuture.completedFuture(null);
             }
             return recorded.completion();
@@ -1578,8 +1593,12 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         }
         if (relocationStopped) {
             if (relocationFailed) {
-                LOGGER.warning(
-                        "late_session_route_update session=" + command.session().sessionRid());
+                ZLinkTelemetryOwner.log(
+                        ZLinkTelemetryOwner.hostOf(flow),
+                        LOGGER,
+                        java.util.logging.Level.WARNING,
+                        () -> "late_session_route_update session=" + command.session().sessionRid(),
+                        null);
                 return CompletableFuture.completedFuture(null);
             }
             return CompletableFuture.failedFuture(

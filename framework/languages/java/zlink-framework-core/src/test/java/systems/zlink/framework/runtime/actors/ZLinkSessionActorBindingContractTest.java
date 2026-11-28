@@ -29,6 +29,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindOperation;
@@ -708,6 +709,7 @@ final class ZLinkSessionActorBindingContractTest {
             actor.notifyDisconnected().toCompletableFuture().join();
 
             assertTrue(runtime.bound().isEmpty());
+            ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(1, failures.size());
         } finally {
             logger.removeHandler(listener);

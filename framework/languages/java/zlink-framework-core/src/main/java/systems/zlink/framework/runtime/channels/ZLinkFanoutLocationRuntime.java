@@ -4,6 +4,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
@@ -389,9 +390,11 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
                     return null;
                 });
         if (failure != null) {
-            LOGGER.log(
+            ZLinkTelemetryOwner.log(
+                    sockets.telemetryHost(),
+                    LOGGER,
                     Level.WARNING,
-                    "fanout location tick failed; the next bounded tick retries",
+                    () -> "fanout location tick failed; the next bounded tick retries",
                     failure);
             settlement.completeAsync(
                     () -> {
@@ -622,14 +625,17 @@ final class ZLinkFanoutLocationRuntime implements AutoCloseable {
         return failure;
     }
 
-    private static void logConnectFailure(
+    private void logConnectFailure(
             ZLinkFanoutPublisherDescriptor descriptor, RuntimeException failure) {
-        LOGGER.log(
+        ZLinkTelemetryOwner.log(
+                sockets.telemetryHost(),
+                LOGGER,
                 Level.WARNING,
-                "fanout subscriber connect failed for publisher "
-                        + descriptor.publisherRid().toHex()
-                        + " at "
-                        + descriptor.endpoint(),
+                () ->
+                        "fanout subscriber connect failed for publisher "
+                                + descriptor.publisherRid().toHex()
+                                + " at "
+                                + descriptor.endpoint(),
                 failure);
     }
 

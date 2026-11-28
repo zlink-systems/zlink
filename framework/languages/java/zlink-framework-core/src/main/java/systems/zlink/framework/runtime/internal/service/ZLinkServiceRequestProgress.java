@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.service;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 
@@ -218,6 +219,7 @@ public class ZLinkServiceRequestProgress {
         }
 
         void report(
+                ZLinkTelemetryOwner.Host telemetryHost,
                 long terminal,
                 long scheduledDeadlineNanos,
                 long ownerVisitNanos,
@@ -235,7 +237,8 @@ public class ZLinkServiceRequestProgress {
             else if (peer != 0) stage = local ? "local_dispatch" : "binding_submit";
             else stage = "peer_admission";
 
-            System.err.println(
+            ZLinkTelemetryOwner.stderr(
+                    telemetryHost,
                     """
                     [zlink.runtime.relocation] node_request_deadline {
                       meshName: %s,

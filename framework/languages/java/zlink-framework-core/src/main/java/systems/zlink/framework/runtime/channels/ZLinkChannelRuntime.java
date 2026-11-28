@@ -25,6 +25,7 @@ import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanner;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
@@ -953,7 +954,8 @@ public final class ZLinkChannelRuntime
                         infrastructureExecutor,
                         messageDispatcher::dispatchPublish,
                         fanoutApplicationTopics,
-                        sockets::signalTopologyChanged);
+                        sockets::signalTopologyChanged,
+                        sockets.telemetryHost());
         manualFanoutRuntime = runtime;
         for (ChannelRegistration channel : manualChannels) {
             channel.subscriberConnections().attach(runtime.connections(channel.name()));
@@ -970,9 +972,11 @@ public final class ZLinkChannelRuntime
             try (Message payload = Message.from(record.get(1))) {
                 publisher.publish(topic, List.of(payload), SendFlags.DONT_WAIT);
             } catch (RuntimeException failure) {
-                LOGGER.log(
+                ZLinkTelemetryOwner.log(
+                        handlerFactory.messageFlowHost(),
+                        LOGGER,
                         Level.WARNING,
-                        "classic fanout liveness beacon publish failed for " + channelName,
+                        () -> "classic fanout liveness beacon publish failed for " + channelName,
                         failure);
             }
         }

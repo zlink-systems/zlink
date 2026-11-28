@@ -32,6 +32,7 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdmissionKey;
@@ -260,8 +261,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     private final ZLinkStreamCodec defaultStreamCodec;
     final ActorRegistry actorRegistry = new ActorRegistry();
     private volatile Runnable countChanged = () -> {};
-    private static final java.util.logging.Logger COUNT_LOGGER =
-            java.util.logging.Logger.getLogger(ZLinkActorRuntime.class.getName());
     final ZLinkActorDispatchSerials dispatches;
     private volatile Function<String, CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot>>
             actorDispatchTargetResolver = actorRegistry::standaloneDispatchTarget;
@@ -874,8 +873,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         try {
             countChanged.run();
         } catch (RuntimeException failure) {
-            COUNT_LOGGER.log(
-                    java.util.logging.Level.WARNING, "Actor count observer failed", failure);
+            ZLinkTelemetryOwner.log(
+                    handlerFactory.messageFlowHost(),
+                    LOGGER,
+                    java.util.logging.Level.WARNING,
+                    () -> "Actor count observer failed",
+                    failure);
         }
     }
 
@@ -1989,19 +1992,29 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                             })
                     .exceptionally(
                             failure -> {
-                                LOGGER.warning(
-                                        "Message Follow target route was not retained for actor "
-                                                + targetActorRef.actorId()
-                                                + ": "
-                                                + unwrapCompletionFailure(failure));
+                                ZLinkTelemetryOwner.log(
+                                        handlerFactory.messageFlowHost(),
+                                        LOGGER,
+                                        java.util.logging.Level.WARNING,
+                                        () ->
+                                                "Message Follow target route was not retained for actor "
+                                                        + targetActorRef.actorId()
+                                                        + ": "
+                                                        + unwrapCompletionFailure(failure),
+                                        null);
                                 return Optional.<ZLinkStoreLocationResolvers.ActorRoute>empty();
                             });
         } catch (RuntimeException failure) {
-            LOGGER.warning(
-                    "Message Follow target route lookup failed for actor "
-                            + targetActorRef.actorId()
-                            + ": "
-                            + failure);
+            ZLinkTelemetryOwner.log(
+                    handlerFactory.messageFlowHost(),
+                    LOGGER,
+                    java.util.logging.Level.WARNING,
+                    () ->
+                            "Message Follow target route lookup failed for actor "
+                                    + targetActorRef.actorId()
+                                    + ": "
+                                    + failure,
+                    null);
             return CompletableFuture.completedFuture(Optional.empty());
         }
     }
@@ -3208,7 +3221,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                         && (failure instanceof CancellationException
                                                 || failure instanceof TimeoutException)) return;
                                 new ZLinkRuntimeEventDispatcher()
-                                        .publishRuntimeTaskFailure("actor.onSessionBound", failure);
+                                        .submitRuntimeTaskFailure(
+                                                handlerFactory.messageFlowHost(),
+                                                "actor.onSessionBound",
+                                                failure);
                             }
                         });
         CompletionStage<Void> callback =
@@ -3553,7 +3569,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return true;
     }
 
-    private static boolean rejectRetainedMessageFollowIngress(
+    private boolean rejectRetainedMessageFollowIngress(
             List<Message> parts,
             Consumer<Throwable> failure,
             ZLinkFrameworkErrorKind kind,
@@ -3564,11 +3580,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 try {
                     failure.accept(new ZLinkFrameworkException(kind, message));
                 } catch (RuntimeException callbackFailure) {
-                    java.util.logging.Logger.getLogger(ZLinkActorRuntime.class.getName())
-                            .log(
-                                    java.util.logging.Level.WARNING,
-                                    "Retained Message Follow failure callback failed",
-                                    callbackFailure);
+                    ZLinkTelemetryOwner.log(
+                            handlerFactory.messageFlowHost(),
+                            LOGGER,
+                            java.util.logging.Level.WARNING,
+                            () -> "Retained Message Follow failure callback failed",
+                            callbackFailure);
                 }
             }
         } finally {
@@ -3689,10 +3706,15 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         != (followSource.targetAddress() == null
                                 ? followSource.rawTargetRoute().targetNodeGeneration()
                                 : followSource.targetAddress().targetNodeGeneration())) {
-            LOGGER.warning(
-                    "Message Follow target route fence changed before notice "
-                            + "for actor "
-                            + staleHeader.target().actor().actorId());
+            ZLinkTelemetryOwner.log(
+                    handlerFactory.messageFlowHost(),
+                    LOGGER,
+                    java.util.logging.Level.WARNING,
+                    () ->
+                            "Message Follow target route fence changed before notice "
+                                    + "for actor "
+                                    + staleHeader.target().actor().actorId(),
+                    null);
             followSource.abortMessageFollowNotice(noticeClaim);
             return;
         }
@@ -3719,26 +3741,36 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     (ignored, failure) -> {
                         completeMessageFollowNotice(followSource, noticeClaim, failure);
                         if (failure != null) {
-                            LOGGER.warning(
-                                    "Message Follow notice failed for actor "
-                                            + staleHeader.target().actor().actorId()
-                                            + " from "
-                                            + sourceNodeRid
-                                            + " sourceGeneration="
-                                            + sourceNodeGeneration
-                                            + ": "
-                                            + unwrapCompletionFailure(failure));
+                            ZLinkTelemetryOwner.log(
+                                    handlerFactory.messageFlowHost(),
+                                    LOGGER,
+                                    java.util.logging.Level.WARNING,
+                                    () ->
+                                            "Message Follow notice failed for actor "
+                                                    + staleHeader.target().actor().actorId()
+                                                    + " from "
+                                                    + sourceNodeRid
+                                                    + " sourceGeneration="
+                                                    + sourceNodeGeneration
+                                                    + ": "
+                                                    + unwrapCompletionFailure(failure),
+                                    null);
                         }
                     });
         } catch (RuntimeException failure) {
             followSource.abortMessageFollowNotice(noticeClaim);
-            LOGGER.warning(
-                    "Message Follow notice submission failed for actor "
-                            + staleHeader.target().actor().actorId()
-                            + " from "
-                            + sourceNodeRid
-                            + ": "
-                            + failure);
+            ZLinkTelemetryOwner.log(
+                    handlerFactory.messageFlowHost(),
+                    LOGGER,
+                    java.util.logging.Level.WARNING,
+                    () ->
+                            "Message Follow notice submission failed for actor "
+                                    + staleHeader.target().actor().actorId()
+                                    + " from "
+                                    + sourceNodeRid
+                                    + ": "
+                                    + failure,
+                    null);
         }
     }
 
@@ -4450,7 +4482,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 context.actorId(),
                                 cause);
                     }
-                    LOGGER.log(Level.WARNING, "Actor Join completion callback failed", cause);
+                    ZLinkTelemetryOwner.log(
+                            handlerFactory.messageFlowHost(),
+                            LOGGER,
+                            Level.WARNING,
+                            () -> "Actor Join completion callback failed",
+                            cause);
                     return null;
                 });
     }
@@ -4879,9 +4916,11 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                             terminal.whenComplete(
                                     (ignored, failure) -> {
                                         if (failure != null)
-                                            LOGGER.log(
+                                            ZLinkTelemetryOwner.log(
+                                                    handlerFactory.messageFlowHost(),
+                                                    LOGGER,
                                                     java.util.logging.Level.WARNING,
-                                                    "committed Actor source teardown failed",
+                                                    () -> "committed Actor source teardown failed",
                                                     unwrap(failure));
                                     });
                             return CompletableFuture.completedFuture(null);

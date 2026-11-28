@@ -4,6 +4,7 @@ import systems.zlink.contracts.errors.ConfigResult;
 import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.sockets.ReceiveFlowState;
 import systems.zlink.framework.monitoring.ZLinkApplicationJobQueuePressureState;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
@@ -125,9 +126,11 @@ public final class ZLinkApplicationJobReceiveFlowController implements AutoClose
                     } catch (RuntimeException failure) {
                         if (!closing || !isClosingInvalidState(failure)) {
                             queue.recordReceiveFlowConfigurationFailure();
-                            LOGGER.log(
+                            ZLinkTelemetryOwner.log(
+                                    queue.telemetryHost(),
+                                    LOGGER,
                                     Level.WARNING,
-                                    "Failed to apply application job receive-flow state",
+                                    () -> "Failed to apply application job receive-flow state",
                                     failure);
                             if (rethrowFailure) {
                                 throw failure;

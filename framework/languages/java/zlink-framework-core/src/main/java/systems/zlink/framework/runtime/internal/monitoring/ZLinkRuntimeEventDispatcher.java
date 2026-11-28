@@ -4,12 +4,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 
 import java.util.Objects;
 
 public final class ZLinkRuntimeEventDispatcher {
     private static final String RUNTIME_ERROR_EVENT = "zlink.runtime_error";
     private static final Logger LOGGER = LoggerFactory.getLogger("systems.zlink.framework.runtime");
+
+    public void submitRuntimeTaskFailure(
+            ZLinkTelemetryOwner.Host host, String taskName, Throwable failure) {
+        ZLinkTelemetryOwner.runtimeTaskFailure(
+                host, this, taskName, Objects.requireNonNull(failure, "failure"));
+    }
 
     public void publishRuntimeTaskFailure(String taskName, Throwable failure) {
         Throwable actual = Objects.requireNonNull(failure, "failure");

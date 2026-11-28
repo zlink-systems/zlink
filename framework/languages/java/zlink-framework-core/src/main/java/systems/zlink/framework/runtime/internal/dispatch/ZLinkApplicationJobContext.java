@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.internal.dispatch;
 
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
+
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.Objects;
@@ -122,6 +124,10 @@ public final class ZLinkApplicationJobContext {
 
         private QueuedOwnership(ZLinkApplicationJobQueue.Permit permit) {
             this(permit.owner(), permit);
+        }
+
+        public ZLinkTelemetryOwner.Host telemetryHost() {
+            return owner.telemetryHost();
         }
 
         private QueuedOwnership(ZLinkApplicationJobQueue owner, Object reservation) {

@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.service;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
@@ -38,6 +39,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private volatile long maintenanceTick = -1;
     private final LongSupplier nanoTime;
     private final Supplier<? extends Throwable> timeoutFailure;
+    private final ZLinkTelemetryOwner.Host telemetryHost;
     private final ZLinkServiceCompletionDispatcher completions =
             ZLinkServiceCompletionDispatcher.INSTANCE;
     private final ZLinkStateLane owner;
@@ -170,12 +172,23 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             Throwable closeFailure,
             Supplier<? extends Throwable> timeoutFailure,
             LongSupplier nanoTime) {
+        this(owner, closeFailure, timeoutFailure, nanoTime, null);
+    }
+
+    public ZLinkServiceOperationRegistry(
+            ZLinkStateLane owner,
+            Throwable closeFailure,
+            Supplier<? extends Throwable> timeoutFailure,
+            LongSupplier nanoTime,
+            ZLinkTelemetryOwner.Host telemetryHost) {
         this(
                 owner,
                 Thread.ofVirtual().name("zlink-jvm-operation-maintenance").factory(),
                 closeFailure,
                 timeoutFailure,
-                nanoTime);
+                nanoTime,
+                new ConcurrentHashMap<>(),
+                telemetryHost);
     }
 
     ZLinkServiceOperationRegistry(
@@ -200,6 +213,18 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             Supplier<? extends Throwable> timeoutFailure,
             LongSupplier nanoTime,
             ConcurrentHashMap<UUID, Entry<?>> pending) {
+        this(owner, maintenanceFactory, closeFailure, timeoutFailure, nanoTime, pending, null);
+    }
+
+    private ZLinkServiceOperationRegistry(
+            ZLinkStateLane owner,
+            ThreadFactory maintenanceFactory,
+            Throwable closeFailure,
+            Supplier<? extends Throwable> timeoutFailure,
+            LongSupplier nanoTime,
+            ConcurrentHashMap<UUID, Entry<?>> pending,
+            ZLinkTelemetryOwner.Host telemetryHost) {
+        this.telemetryHost = telemetryHost;
         this.pending = Objects.requireNonNull(pending, "pending");
         this.owner = Objects.requireNonNull(owner, "owner");
         this.maintenanceFactory = Objects.requireNonNull(maintenanceFactory, "maintenanceFactory");
@@ -422,7 +447,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     private void postRegistrationFailure(Operation<?> completion, Throwable failure) {
         Entry<Object> entry = completion.newEntry(null);
-        completions.register(entry);
+        completions.register(entry, telemetryHost);
         entry.completeWithFailure(failure);
         completions.post(entry);
     }
@@ -814,7 +839,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         }
         // Each registration keeps its identity while a stale deadline still references it.
         entry.deadlineNanos = deadlineNanos;
-        completions.register(entry);
+        completions.register(entry, telemetryHost);
         pending.put(id, entry);
         if (kind == Kind.REQUEST) {
             indexDeadline(entry, targetTick);
@@ -1204,7 +1229,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             try {
                 if (expired != 0) {
                     progress.report(
-                            expired, scheduledDeadlineNanos, ownerVisitNanos, System.nanoTime());
+                            telemetryHost(),
+                            expired,
+                            scheduledDeadlineNanos,
+                            ownerVisitNanos,
+                            System.nanoTime());
                 }
             } finally {
                 super.dispatch();

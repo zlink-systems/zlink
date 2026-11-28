@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -49,6 +50,7 @@ final class ZLinkLocalJobBacklogTest {
             for (int i = 0; i < 3; i++)
                 pending.add(
                         queue.acquire(ZLinkApplicationJobQueue.Origin.LOCAL).toCompletableFuture());
+            ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(1, attempts.get());
             assertEquals(3, queue.snapshot().capacityWaiters());
             held.close();
@@ -90,6 +92,7 @@ final class ZLinkLocalJobBacklogTest {
                 pending.add(
                         queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
                                 .toCompletableFuture());
+            ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(0, records.size());
             for (int episode = 1; episode <= 2; episode++) {
                 var local = new ArrayList<CompletableFuture<ZLinkApplicationJobQueue.Permit>>();
@@ -98,10 +101,12 @@ final class ZLinkLocalJobBacklogTest {
                             queue.acquire(ZLinkApplicationJobQueue.Origin.LOCAL)
                                     .toCompletableFuture());
                 pending.addAll(local);
+                ZLinkTelemetryTestFence.awaitIdle();
                 assertEquals(episode - 1, records.size());
                 var excess =
                         queue.acquire(ZLinkApplicationJobQueue.Origin.LOCAL).toCompletableFuture();
                 pending.add(excess);
+                ZLinkTelemetryTestFence.awaitIdle();
                 assertEquals(episode, records.size());
                 var record = records.get(records.size() - 1);
                 assertEquals(Level.WARNING, record.getLevel());
@@ -110,6 +115,7 @@ final class ZLinkLocalJobBacklogTest {
                 var repeated =
                         queue.acquire(ZLinkApplicationJobQueue.Origin.LOCAL).toCompletableFuture();
                 pending.add(repeated);
+                ZLinkTelemetryTestFence.awaitIdle();
                 assertEquals(episode, records.size());
                 queue.resetMetrics();
                 repeated.cancel(false);

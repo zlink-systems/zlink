@@ -4,6 +4,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
@@ -715,22 +716,30 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
         sockets.removeClientServerConnection(connectionId, current.dealer());
     }
 
-    private static void closeUnregistered(
+    private void closeUnregistered(
             ZLinkBackendDealerSocket dealer, ZLinkBackendSocketMonitor monitor) {
         if (monitor != null) {
             try {
                 monitor.close();
             } catch (RuntimeException failure) {
-                LOGGER.log(
-                        Level.WARNING, "unregistered ClientServer monitor cleanup failed", failure);
+                ZLinkTelemetryOwner.log(
+                        sockets.telemetryHost(),
+                        LOGGER,
+                        Level.WARNING,
+                        () -> "unregistered ClientServer monitor cleanup failed",
+                        failure);
             }
         }
         if (dealer != null) {
             try {
                 dealer.close();
             } catch (RuntimeException failure) {
-                LOGGER.log(
-                        Level.WARNING, "unregistered ClientServer dealer cleanup failed", failure);
+                ZLinkTelemetryOwner.log(
+                        sockets.telemetryHost(),
+                        LOGGER,
+                        Level.WARNING,
+                        () -> "unregistered ClientServer dealer cleanup failed",
+                        failure);
             }
         }
     }

@@ -9,6 +9,7 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.spots.ZLinkUserSpotRetireRuntime;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -142,6 +143,7 @@ final class ZLinkRelocationPreflightFailureTest {
             assertEquals(ZLinkFrameworkRelocationOutcome.BLOCKED, result.outcome());
             assertEquals(expected, result.reason());
             assertEquals(ZLinkFrameworkRuntimeState.SERVING, runtime.status().state());
+            ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(
                     1,
                     failures.stream()

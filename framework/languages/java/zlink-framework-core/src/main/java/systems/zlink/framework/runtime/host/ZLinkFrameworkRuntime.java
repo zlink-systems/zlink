@@ -31,6 +31,7 @@ import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.channels.ZLinkMeshApplicationDispatcher;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
@@ -90,6 +91,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageFlowControl {
@@ -196,6 +198,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             new AtomicReference<>();
     private final AtomicBoolean drainStarted = new AtomicBoolean(false);
     private final CompletableFuture<Throwable> forcedDrain = new CompletableFuture<>();
+    private static final Logger LOGGER = Logger.getLogger(ZLinkFrameworkRuntime.class.getName());
     private final ZLinkCloseGate closeGate = new ZLinkCloseGate();
     private final CompletableFuture<InternalDrainResult> drained = new CompletableFuture<>();
     // Shared, runtime-mutable message-flow mode cell, installed into the diagnostics
@@ -238,8 +241,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             status -> status.state() == ZLinkFrameworkRuntimeState.RELOCATED);
     private final ZLinkRouteMeshRuntimeView routeMeshRuntime = new ZLinkRouteMeshRuntimeView(this);
 
-    private final systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner.Host
-            telemetryHost;
+    private final ZLinkTelemetryOwner.Host telemetryHost;
 
     private ZLinkFrameworkRuntime(
             DefaultZLinkFrameworkOptions options, ZLinkRuntimeEventDispatcher eventDispatcher) {
@@ -272,9 +274,9 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         this.channelCalls =
                 new systems.zlink.framework.runtime.channels.ZLinkChannelCalls(
                         registration, callSerializer, () -> admitCall().channels());
-        this.telemetryHost =
-                systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner.openHost();
+        this.telemetryHost = ZLinkTelemetryOwner.openHost();
         this.applicationJobQueue = this.registration.applicationJobQueue();
+        this.applicationJobQueue.attachTelemetryHost(telemetryHost);
         this.meshDrains =
                 construction.meshDrains() == null
                         ? new systems.zlink.framework.runtime.internal.drain
@@ -286,6 +288,10 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         var diagnostics = this.registration.dispatchOptions().diagnostics();
         this.messageFlowMode = new AtomicReference<>(diagnostics.messageFlow());
         diagnostics.installLiveMode(this.messageFlowMode);
+    }
+
+    ZLinkTelemetryOwner.Host telemetryHost() {
+        return telemetryHost;
     }
 
     ZLinkChannelRuntime channels() {
@@ -319,9 +325,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                             .class,
                     construction.channelSpotAddressResolver());
         }
-        runtimeHandlers.add(
-                systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner.Host.class,
-                telemetryHost);
+        runtimeHandlers.add(ZLinkTelemetryOwner.Host.class, telemetryHost);
         runtimeHandlers.add(ZLinkFrameworkRegistration.class, this.registration);
         runtimeHandlers.add(ZLinkFrameworkRuntime.class, this);
         var relocationAdapters =
@@ -351,6 +355,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             runtimeHandlers.add(
                     systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore.class,
                     this.registration.relocationStore());
+        }
+        if (locationSubsystem.locationRuntime() != null
+                || !registration.meshNodes().isEmpty()
+                || !registration.spotNodes().isEmpty()
+                || !registration.channels().isEmpty()) {
+            ZLinkTelemetryOwner.prepare();
         }
         this.locationStores = locationSubsystem.locationStores();
         if (locationSubsystem.enabled()) {
@@ -893,11 +903,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                     systems.zlink.framework.runtime.internal.locations
                                             .ZLinkObjectServerDescriptorPublisher
                                             .UnconfirmedPublicationException) {
-                                Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
-                                        .log(
-                                                java.util.logging.Level.WARNING,
-                                                "Startup descriptor publication unconfirmed",
-                                                cause);
+                                ZLinkTelemetryOwner.log(
+                                        telemetryHost,
+                                        LOGGER,
+                                        Level.WARNING,
+                                        () -> "Startup descriptor publication unconfirmed",
+                                        cause);
                                 return CompletableFuture.completedFuture(null);
                             }
                             failStartup(cause);
@@ -908,8 +919,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private void failStartup(Throwable failure) {
         Throwable cause = unwrapCompletionFailure(failure);
         publishRuntimeState(ZLinkFrameworkRuntimeState.ERROR);
-        Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
-                .warning("Framework startup failed: " + cause.getMessage());
+        logStartup(Level.WARNING, () -> "Framework startup failed: " + cause.getMessage());
         startupReady.completeExceptionally(cause);
     }
 
@@ -920,7 +930,15 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         publishRuntimeState(ZLinkFrameworkRuntimeState.SERVING);
         routeMeshRuntime.startObserving();
         startupReady.complete(null);
-        Logger.getLogger(ZLinkFrameworkRuntime.class.getName()).info("ZLINK_FRAMEWORK_READY");
+        logStartup(Level.INFO, () -> "ZLINK_FRAMEWORK_READY");
+    }
+
+    private void logStartup(Level level, Supplier<String> message) {
+        if (locationRuntime == null && spots() == null) {
+            LOGGER.log(level, message);
+        } else {
+            ZLinkTelemetryOwner.log(telemetryHost, LOGGER, level, message, null);
+        }
     }
 
     private CompletionStage<Void> startOwnerBoundComponents(
@@ -1550,15 +1568,14 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 .<CompletionStage<Void>>handle(
                                         (ignored, rollbackFailure) -> {
                                             if (rollbackFailure != null) {
-                                                Logger.getLogger(
-                                                                ZLinkFrameworkRuntime.class
-                                                                        .getName())
-                                                        .log(
-                                                                java.util.logging.Level.WARNING,
+                                                ZLinkTelemetryOwner.log(
+                                                        telemetryHost,
+                                                        LOGGER,
+                                                        Level.WARNING,
+                                                        () ->
                                                                 "Host relocation descriptor"
                                                                         + " rollback failed",
-                                                                unwrapCompletionFailure(
-                                                                        rollbackFailure));
+                                                        unwrapCompletionFailure(rollbackFailure));
                                                 Duration remaining =
                                                         Duration.between(Instant.now(), deadline);
                                                 return beginTermination(
@@ -1702,8 +1719,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private ZLinkFrameworkRelocationReason relocationReason(
             Throwable failure, ZLinkFrameworkRelocationReason successReason) {
         if (failure != null) {
-            Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
-                    .log(java.util.logging.Level.WARNING, "Host relocation failed", failure);
+            ZLinkTelemetryOwner.log(
+                    telemetryHost, LOGGER, Level.WARNING, () -> "Host relocation failed", failure);
         }
         if (activeTermination.get() != null) {
             return ZLinkFrameworkRelocationReason.SHUTDOWN_REQUESTED;
@@ -2285,17 +2302,19 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         || state == ZLinkFrameworkRuntimeState.RELOCATED)) {
             objectDescriptors
                     .publish(state)
-                    .exceptionally(
-                            failure -> {
-                                Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
-                                        .warning(
-                                                "Object Server descriptor state publication failed:"
-                                                        + " "
-                                                        + failure.getMessage());
-                                return null;
-                            });
+                    .exceptionally(this::reportDescriptorPublicationFailure);
         }
         signalRuntimeStatus(terminationFailure);
+    }
+
+    private Void reportDescriptorPublicationFailure(Throwable failure) {
+        ZLinkTelemetryOwner.log(
+                telemetryHost,
+                LOGGER,
+                Level.WARNING,
+                () -> "Object Server descriptor state publication failed: " + failure.getMessage(),
+                null);
+        return null;
     }
 
     private void signalRuntimeStatus(Throwable terminationFailure) {
@@ -2418,7 +2437,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 if (failure != null)
                                     Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
                                             .log(
-                                                    java.util.logging.Level.SEVERE,
+                                                    Level.SEVERE,
                                                     "Framework executor cleanup failed",
                                                     failure);
                             });
@@ -2447,17 +2466,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         () ->
                                 objectDescriptors
                                         .publish(ZLinkFrameworkRuntimeState.DRAINING)
-                                        .exceptionally(
-                                                failure -> {
-                                                    Logger.getLogger(
-                                                                    ZLinkFrameworkRuntime.class
-                                                                            .getName())
-                                                            .warning(
-                                                                    "Object Server descriptor state"
-                                                                            + " publication failed: "
-                                                                            + failure.getMessage());
-                                                    return null;
-                                                }));
+                                        .exceptionally(this::reportDescriptorPublicationFailure));
             }
         }
         if (spots() != null) {
@@ -2727,10 +2736,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (messageFlowMode.get() == ZLinkMessageFlowLogMode.OFF) {
             return work;
         }
-        System.err.println("ZLINK_FRAMEWORK_DRAIN stage=" + stage + " transition=started");
+        ZLinkTelemetryOwner.stderr(
+                telemetryHost, "ZLINK_FRAMEWORK_DRAIN stage=" + stage + " transition=started");
         work.whenComplete(
                 (ignored, failure) ->
-                        System.err.println(
+                        ZLinkTelemetryOwner.stderr(
+                                telemetryHost,
                                 "ZLINK_FRAMEWORK_DRAIN stage="
                                         + stage
                                         + " transition="

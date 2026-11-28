@@ -233,7 +233,8 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
                             infrastructure,
                             (channel, message) -> message.parts().forEach(Message::close),
                             applicationTopics,
-                            () -> {});
+                            () -> {},
+                            null);
         }
 
         private ControlledSubscriber awaitSubscriber() throws Exception {

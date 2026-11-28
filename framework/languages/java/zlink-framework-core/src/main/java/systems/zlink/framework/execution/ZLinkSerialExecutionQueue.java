@@ -1,6 +1,7 @@
 package systems.zlink.framework.execution;
 
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
@@ -42,6 +43,9 @@ import java.util.function.Supplier;
  * control admission; this queue only orders accepted work.
  */
 public final class ZLinkSerialExecutionQueue {
+    private static final java.util.logging.Logger CALLBACK_LOG =
+            java.util.logging.Logger.getLogger(ZLinkSerialExecutionQueue.class.getName());
+
     static {
         ZLinkSpotCloseCallAccess.registerAccess(
                 new ZLinkSpotCloseCallAccess.SpotCloseCallAccess() {
@@ -3198,6 +3202,8 @@ public final class ZLinkSerialExecutionQueue {
         if (context instanceof ApplicationTurn applicationTurn) return applicationTurn::execute;
         SerialTurn turn = currentTurn();
         ZLinkSerialExecutionQueue queue = turn == null ? null : turn.queue;
+        var ownership = turn == null ? null : turn.entry.applicationJobOwnership;
+        var telemetryHost = ownership == null ? null : ownership.telemetryHost();
         var application =
                 systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                         .currentApplicationExecution();
@@ -3235,12 +3241,12 @@ public final class ZLinkSerialExecutionQueue {
             completion.whenComplete(
                     (ignored, failure) -> {
                         if (failure != null) {
-                            java.util.logging.Logger.getLogger(
-                                            ZLinkSerialExecutionQueue.class.getName())
-                                    .log(
-                                            java.util.logging.Level.SEVERE,
-                                            "Framework callback completion failed",
-                                            failure);
+                            ZLinkTelemetryOwner.log(
+                                    telemetryHost,
+                                    CALLBACK_LOG,
+                                    java.util.logging.Level.SEVERE,
+                                    () -> "Framework callback completion failed",
+                                    failure);
                         }
                     });
         };

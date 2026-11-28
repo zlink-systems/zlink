@@ -11,6 +11,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
@@ -132,6 +133,10 @@ final class ZLinkChannelSocketRegistry {
         this.requestNanoTime = requestNanoTime;
         this.closing = closing;
         this.stateLane = java.util.Objects.requireNonNull(stateLane, "stateLane");
+    }
+
+    ZLinkTelemetryOwner.Host telemetryHost() {
+        return applicationJobQueue == null ? null : applicationJobQueue.telemetryHost();
     }
 
     private final java.util.function.LongSupplier requestNanoTime;
@@ -1296,7 +1301,12 @@ final class ZLinkChannelSocketRegistry {
             try {
                 router.disconnectPeer(received.routingId().get());
             } catch (RuntimeException failure) {
-                LOGGER.log(Level.WARNING, "rejected ClientServer peer disconnect failed", failure);
+                ZLinkTelemetryOwner.log(
+                        telemetryHost(),
+                        LOGGER,
+                        Level.WARNING,
+                        () -> "rejected ClientServer peer disconnect failed",
+                        failure);
             }
         }
         received.close();
@@ -1395,8 +1405,12 @@ final class ZLinkChannelSocketRegistry {
                 try {
                     peer.router.disconnectPeer(peer.routingId);
                 } catch (RuntimeException failure) {
-                    LOGGER.log(
-                            Level.WARNING, "expired ClientServer peer disconnect failed", failure);
+                    ZLinkTelemetryOwner.log(
+                            telemetryHost(),
+                            LOGGER,
+                            Level.WARNING,
+                            () -> "expired ClientServer peer disconnect failed",
+                            failure);
                 }
                 continue;
             }
@@ -1460,7 +1474,12 @@ final class ZLinkChannelSocketRegistry {
             try {
                 connection.dealer.close();
             } catch (RuntimeException failure) {
-                LOGGER.log(Level.WARNING, "ClientServer dealer cleanup failed", failure);
+                ZLinkTelemetryOwner.log(
+                        telemetryHost(),
+                        LOGGER,
+                        Level.WARNING,
+                        () -> "ClientServer dealer cleanup failed",
+                        failure);
             }
         }
     }
@@ -1688,7 +1707,12 @@ final class ZLinkChannelSocketRegistry {
             try {
                 monitor.close();
             } catch (RuntimeException failure) {
-                LOGGER.log(Level.WARNING, "ClientServer monitor cleanup failed", failure);
+                ZLinkTelemetryOwner.log(
+                        telemetryHost(),
+                        LOGGER,
+                        Level.WARNING,
+                        () -> "ClientServer monitor cleanup failed",
+                        failure);
             }
         }
         connection.receiveStopped = true;
@@ -1697,7 +1721,12 @@ final class ZLinkChannelSocketRegistry {
             try {
                 connection.dealer.close();
             } catch (RuntimeException failure) {
-                LOGGER.log(Level.WARNING, "ClientServer dealer cleanup failed", failure);
+                ZLinkTelemetryOwner.log(
+                        telemetryHost(),
+                        LOGGER,
+                        Level.WARNING,
+                        () -> "ClientServer dealer cleanup failed",
+                        failure);
             }
         } else if (owner != Thread.currentThread()) {
             // The receive owner closes the DEALER when it ends. A close that runs on the owner
