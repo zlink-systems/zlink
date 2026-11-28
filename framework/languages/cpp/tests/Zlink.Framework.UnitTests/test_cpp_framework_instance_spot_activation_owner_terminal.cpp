@@ -109,8 +109,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CloseFromRequestReturnsReplyBeforeCl
       runtime
         ->dispatch_instance_activation (
           spot_id, request_t::packet_name, serializers.get<request_t> ().content_type (),
-          payload.to_bytes (), {}, true, "close-request-1", provider, serializers, [] {},
-          std::nullopt, std::nullopt, &accepted_turn_terminal)
+          payload.copy (), {}, true, "close-request-1", provider, serializers, [] {}, std::nullopt,
+          std::nullopt, &accepted_turn_terminal)
         .result ();
     ASSERT_TRUE (first) << (first.error () ? first.error ()->what () : "unknown error");
     ASSERT_TRUE (accepted_turn_terminal);
@@ -127,7 +127,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CloseFromRequestReturnsReplyBeforeCl
       runtime
         ->dispatch_instance_activation (
           spot_id, request_t::packet_name, serializers.get<request_t> ().content_type (),
-          payload.to_bytes (), {}, true, "close-request-2", provider, serializers, [] {})
+          payload.copy (), {}, true, "close-request-2", provider, serializers, [] {})
         .result ();
     ASSERT_FALSE (second);
     EXPECT_EQ (zlink::framework::framework_error_kind_t::unavailable, second.error_kind ());

@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
+#include <nlohmann/json_fwd.hpp>
+
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 #include <zlink/framework/contracts/streams/stream.hpp>
 
@@ -152,6 +154,11 @@ class stream_runtime_t
     void
     send_actor_bound (stream_t &stream, std::uint16_t actor_slot, std::string_view actor_id) const;
     void send_actor_unbound (stream_t &stream, std::uint16_t actor_slot) const;
+    task_t<void> write_admission_packet (stream_t stream,
+                                         const char *packet_name,
+                                         const nlohmann::json &payload,
+                                         const stream_header_t *request = nullptr) const;
+    std::stop_token session_closed (const stream_t &stream) const noexcept;
 
     static void propagate_flow (stream_header_t &header);
     static result_t<void> validate_header (const stream_header_t &header);
@@ -191,7 +198,9 @@ class stream_runtime_t
                                           async_dispatch_completion_t completion = {},
                                           async_dispatch_started_t started = {},
                                           async_dispatch_cancel_t cancelled = {},
-                                          std::shared_ptr<void> admission_lease = {}) const;
+                                          std::shared_ptr<void> admission_lease = {},
+                                          std::shared_ptr<void> global_permit = {},
+                                          async_dispatch_started_t ticket_used = {}) const;
     result_t<void> dispatch_disconnected_async (packet_stream_session_t &session,
                                                 stream_t &stream,
                                                 async_dispatch_completion_t completion = {}) const;

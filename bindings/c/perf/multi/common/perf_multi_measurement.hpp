@@ -1,11 +1,13 @@
 #ifndef PERF_MULTI_MEASUREMENT_HPP
 #define PERF_MULTI_MEASUREMENT_HPP
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <iomanip>
 #include <sstream>
+#include <vector>
 #include "perf_multi_metric_header.hpp"
 
 namespace perf_multi_measurement
@@ -57,47 +59,65 @@ inline bool is_paced_receive_phase (uint8_t phase)
 class catch_up_tracker_t
 {
   public:
-    explicit catch_up_tracker_t (double target_rate) :
-        _target_rate (target_rate),
-        _drain_start_ns (0),
-        _in_flight_at_catch_up (0),
-        _draining (false),
-        _caught_up (false)
+    static constexpr uint64_t receive_quantum = 1;
+
+    explicit catch_up_tracker_t (double target_rate) : _target_rate (target_rate)
     {
     }
 
-    bool observe (uint64_t now_ns, uint64_t received, uint64_t sent)
+    bool observe (uint64_t now_ns, const std::vector<uint64_t> &received, uint64_t scheduled)
     {
-        if (_caught_up || _target_rate <= 0.0)
+        if (_caught_up || _target_rate <= 0.0 || received.empty ())
             return _caught_up;
-        const uint64_t backlog = sent > received ? sent - received : 0;
-        const double backlog_bound = _target_rate * 0.001 > 1.0 ? _target_rate * 0.001 : 1.0;
-        if (backlog > backlog_bound) {
-            _draining = false;
-            _drain_start_ns = 0;
-            return false;
+
+        _min_received = *std::min_element (received.begin (), received.end ());
+        _in_flight = scheduled > _min_received ? scheduled - _min_received : 0;
+        if (!_window_received.empty () && _in_flight <= _window_start_in_flight) {
+            const uint64_t elapsed_ns = now_ns - _window_start_ns;
+            if (elapsed_ns < catch_up_window_ns)
+                return false;
+
+            // Subscriber order is fixed. The minimum cumulative count may
+            // belong to a different subscriber at each end of the window.
+            uint64_t min_received_delta = received[0] - _window_received[0];
+            for (size_t i = 1; i < received.size (); ++i)
+                min_received_delta =
+                  std::min (min_received_delta, received[i] - _window_received[i]);
+            // The target rate is compared as counts on the same schedule: the
+            // slowest subscriber received what was scheduled in the window. A
+            // subscriber observed just after one arrival and just before the
+            // next is one message short without falling behind, so one message
+            // of observation quantization is allowed.
+            if (min_received_delta + receive_quantum >= scheduled - _window_scheduled) {
+                _caught_up = true;
+                return true;
+            }
         }
-        if (!_draining) {
-            _draining = true;
-            _drain_start_ns = now_ns;
-            return false;
-        }
-        if (now_ns - _drain_start_ns >= catch_up_window_ns) {
-            _caught_up = true;
-            _in_flight_at_catch_up = backlog;
-        }
-        return _caught_up;
+
+        _window_start_ns = now_ns;
+        _window_start_in_flight = _in_flight;
+        _window_scheduled = scheduled;
+        _window_received = received;
+        return false;
     }
 
     bool caught_up () const { return _caught_up; }
-    uint64_t in_flight_at_catch_up () const { return _in_flight_at_catch_up; }
+    uint64_t min_received () const { return _min_received; }
+    uint64_t in_flight () const { return _in_flight; }
+    uint64_t in_flight_at_catch_up () const { return _caught_up ? _in_flight : 0; }
+    // Any observation above the starting in-flight begins a new window, so
+    // the start value is also the upper bound of the window.
+    uint64_t window_start_in_flight () const { return _window_start_in_flight; }
 
   private:
-    double _target_rate;
-    uint64_t _drain_start_ns;
-    uint64_t _in_flight_at_catch_up;
-    bool _draining;
-    bool _caught_up;
+    const double _target_rate;
+    std::vector<uint64_t> _window_received;
+    uint64_t _window_start_ns = 0;
+    uint64_t _window_start_in_flight = 0;
+    uint64_t _window_scheduled = 0;
+    uint64_t _min_received = 0;
+    uint64_t _in_flight = 0;
+    bool _caught_up = false;
 };
 
 // Throughput remains the saturated receive window. Latency uses the same
