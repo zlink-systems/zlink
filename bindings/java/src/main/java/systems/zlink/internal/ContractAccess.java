@@ -334,11 +334,8 @@ public final class ContractAccess {
 
         int refCount(Object msg);
 
-        void closeVector(Object parts, long count);
-
         Message[] materializeVector(Object parts, long count,
-                                    Message[] reusable,
-                                    boolean closeSourceVector);
+                                    Message[] reusable);
 
         Message[] materializeVectorShared(Object parts, long count);
 
@@ -935,15 +932,9 @@ public final class ContractAccess {
         return nativeMessageAccess().refCount(msg);
     }
 
-    public static void nativeMessageCloseVector(Object parts, long count) {
-        nativeMessageAccess().closeVector(parts, count);
-    }
-
     public static Message[] nativeMessageMaterializeVector(
-        Object parts, long count, Message[] reusable,
-        boolean closeSourceVector) {
-        return nativeMessageAccess().materializeVector(parts, count, reusable,
-            closeSourceVector);
+        Object parts, long count, Message[] reusable) {
+        return nativeMessageAccess().materializeVector(parts, count, reusable);
     }
 
     public static Message[] nativeMessageMaterializeVectorShared(
