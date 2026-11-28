@@ -144,12 +144,14 @@ internal sealed class ActorDestroyStore(
         }
         // The caller's release decision is this write, so observe the lease here, before
         // submission, as the Java and Node hosts do. An authority read can precede the
-        // Framework's own lease read and miss the expiry.
+        // Framework's own lease read and miss the expiry. Like Java, only a release that
+        // is conditioned on the owner lease counts.
         if (
             !events.Owner
             && deleting
             && original is not null
             && events.Scenario == "f"
+            && ConditionsOn(request, OutageCanonicalStoreReader.OwnerKey(original.OwnerId))
             && await ReadLeaseAsync(cancellationToken) != "valid"
             && Interlocked.Exchange(ref _observedInvalidLease, 1) == 0
         )
@@ -311,6 +313,17 @@ internal sealed class ActorDestroyStore(
         }
     }
 
+    private static IEnumerable<ZLinkStoreKey> ConditionKeys(ZLinkStoreWriteRequest request) =>
+        request
+            .Conditions.OfType<ZLinkStoreCondition.Version>()
+            .Select(condition => condition.Key)
+            .Concat(
+                request.Conditions.OfType<ZLinkStoreCondition.Missing>().Select(condition => condition.Key)
+            );
+
+    private static bool ConditionsOn(ZLinkStoreWriteRequest request, ZLinkStoreKey key) =>
+        ConditionKeys(request).Contains(key);
+
     private void RecordRelease(
         ZLinkStoreWriteRequest request,
         ZLinkStoreWriteResult.Applied committed,
@@ -326,10 +339,6 @@ internal sealed class ActorDestroyStore(
         var versions = request
             .Conditions.OfType<ZLinkStoreCondition.Version>()
             .ToDictionary(condition => condition.Key);
-        var missing = request
-            .Conditions.OfType<ZLinkStoreCondition.Missing>()
-            .Select(condition => condition.Key)
-            .ToHashSet();
         // An Entry Spot Actor's membership is carried by its authority row.
         // Redis checks the counter and rejects a negative result within the Add batch.
         var delta = request
@@ -339,11 +348,8 @@ internal sealed class ActorDestroyStore(
         events.Write(
             "releaseCommitted",
             ("version", versions.GetValueOrDefault(_actorKey)?.Expected.Value),
-            ("invalidLease", Flag(missing.Contains(ownerKey) || versions.ContainsKey(ownerKey))),
-            (
-                "descriptorCondition",
-                Flag(missing.Contains(descriptorKey) || versions.ContainsKey(descriptorKey))
-            ),
+            ("invalidLease", Flag(ConditionsOn(request, ownerKey))),
+            ("descriptorCondition", Flag(ConditionsOn(request, descriptorKey))),
             (
                 "capacityCondition",
                 Flag(delta < 0 && committed.PutVersions.ContainsKey(capacityKey))
@@ -353,8 +359,7 @@ internal sealed class ActorDestroyStore(
             (
                 "relocationPolicyCondition",
                 Flag(
-                    versions
-                        .Keys.Concat(missing)
+                    ConditionKeys(request)
                         .Any(key =>
                             key != descriptorKey
                             && key.Value.StartsWith("mesh-node\0", StringComparison.Ordinal)

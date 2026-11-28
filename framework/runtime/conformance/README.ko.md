@@ -67,7 +67,9 @@ fence는 송신 직전에 읽은 authority와 대조한다. 전송 관측에서 
 `crossLanguageCells`는 `caller:owner` 칸마다 교차언어 stage가 실행할 상태를 정하는 한 곳이다.
 `enabled`는 통과해야 하고, `expected-failure-before-4522`는 시나리오 대조가 실패해야 하며
 (이유는 `crossLanguageExpectedFailureReason`) 통과하면 XPASS로 실패한다. 준비 실패와 파일·구조
-오류는 상태와 관계없이 실패다. 칸을 더하거나 상태를 바꿀 때는 validator의 칸 집합도 함께 바꾼다.
+오류는 상태와 관계없이 실패다. `ZLINK_CPP_CROSS_ACTOR_DESTROY_SCENARIO`로 scenario 하나만 고르면
+XPASS 검사는 하지 않는다(전체 scenario가 통과해야 XPASS다). 칸을 더하거나 상태를 바꿀 때는
+validator의 칸 집합도 함께 바꾼다.
 [Authority record §3.4](../../doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법) ·
 [service-wire schema](../protocol/service-wire-v1.schema.json)
 

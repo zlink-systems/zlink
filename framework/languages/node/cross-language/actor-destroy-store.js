@@ -224,7 +224,7 @@ class ActorDestroyStore {
     } else if (mutation && this.originalOwner && ['d', 'f'].includes(this.scenario)) {
       fields = await this.releaseFields(request, signal);
       if (fields) {
-        if (this.scenario === 'f') this.once('callerObservedClosingForRelease');
+        if (this.scenario === 'f' && fields.invalidLease) this.once('callerObservedClosingForRelease');
         committed = 'releaseCommitted';
       }
     }

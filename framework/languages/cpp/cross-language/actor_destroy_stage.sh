@@ -75,7 +75,7 @@ stage_actor_destroy() {
   esac
   # Command replacement needs local POSIX rename semantics while a host reads
   # the preceding command. Logs can still be kept on the requested run volume.
-  ACTOR_DESTROY_CONTROL_DIR="$(mktemp -d /tmp/zlink-actor-destroy.XXXXXXXX)" || return
+  ACTOR_DESTROY_CONTROL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/zlink-actor-destroy.XXXXXXXX")" || return
   for cell in "${matrix[@]}"; do
     IFS=: read -r caller owner <<<"${cell}"
     cell_started=${SECONDS}
