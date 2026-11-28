@@ -138,8 +138,8 @@ if (xpub.receive_subscription_event (evt) == 0) { /* ... */ }
 **Completion result.** Both are plain data structs with no disposal or async behavior.
 
 **When to use.** On an XPUB socket's subscription-event receive path (Sockets category) to observe
-subscriber churn. `subscription_filter_t` as the return type of a socket's `subscription_at(index)`
-overload.
+changes in subscriptions. On SUB and XSUB, `subscription_at(index)` returns the filter and pattern
+flag in a `std::optional<subscription_filter_t>` when the entry exists.
 
 ---
 
