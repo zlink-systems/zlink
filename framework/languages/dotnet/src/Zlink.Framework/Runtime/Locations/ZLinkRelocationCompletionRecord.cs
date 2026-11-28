@@ -32,17 +32,19 @@ internal sealed record ZLinkRelocationCompletionRecord(
 )
 {
     private static readonly UTF8Encoding Utf8 = new(false, true);
-    private static readonly JsonSerializerOptions Json = new(ZLinkCanonicalJson.Options)
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
     internal int PendingDeliveries =>
         Entries.Count(entry => entry.Delivery == ZLinkRelocationCompletionDelivery.Pending);
 
-    internal byte[] Encode() => JsonSerializer.SerializeToUtf8Bytes(ToWire(), Json);
+    internal byte[] Encode() =>
+        JsonSerializer.SerializeToUtf8Bytes(ToWire(), ZLinkCanonicalJson.Options);
 
     internal Task EncodeAsync(Stream output, CancellationToken cancellationToken) =>
-        JsonSerializer.SerializeAsync(output, ToWire(), Json, cancellationToken);
+        JsonSerializer.SerializeAsync(
+            output,
+            ToWire(),
+            ZLinkCanonicalJson.Options,
+            cancellationToken
+        );
 
     internal static async ValueTask<ZLinkRelocationCompletionRecord> DecodeAsync(
         Stream input,
@@ -54,7 +56,11 @@ internal sealed record ZLinkRelocationCompletionRecord(
         {
             var record = FromWire(
                 await JsonSerializer
-                    .DeserializeAsync<WireRecord>(input, Json, cancellationToken)
+                    .DeserializeAsync<WireRecord>(
+                        input,
+                        ZLinkCanonicalJson.Options,
+                        cancellationToken
+                    )
                     .ConfigureAwait(false)
             );
             using var sha256 = SHA256.Create();
@@ -89,7 +95,7 @@ internal sealed record ZLinkRelocationCompletionRecord(
                             Reply = string.Empty,
                         }
                     ),
-                    Json
+                    ZLinkCanonicalJson.Options
                 )
                 .Length
         + (ulong)entry.Reply.Length
