@@ -5,16 +5,30 @@ internal sealed class TestHostMessageFlowListener : IDisposable
     private const string ActivitySourceName = "Zlink.Framework";
     private readonly string _filePath;
     private readonly TestHostEventSink _sink;
+    private readonly TestHostEventSink? _ownedSink;
     private readonly ActivityListener _listener;
+
+    // Unit tests and benches without a host sink get their own single writer.
+    public TestHostMessageFlowListener(string filePath, Action<Activity>? observeStopped = null)
+        : this(filePath, new TestHostEventSink(null), observeStopped, ownsSink: true) { }
 
     public TestHostMessageFlowListener(
         string filePath,
         TestHostEventSink sink,
         Action<Activity>? observeStopped = null
     )
+        : this(filePath, sink, observeStopped, ownsSink: false) { }
+
+    private TestHostMessageFlowListener(
+        string filePath,
+        TestHostEventSink sink,
+        Action<Activity>? observeStopped,
+        bool ownsSink
+    )
     {
         _filePath = filePath;
         _sink = sink;
+        _ownedSink = ownsSink ? sink : null;
         if (Path.GetDirectoryName(filePath) is { Length: > 0 } directory)
             Directory.CreateDirectory(directory);
         File.WriteAllText(filePath, string.Empty);
@@ -32,7 +46,11 @@ internal sealed class TestHostMessageFlowListener : IDisposable
         ActivitySource.AddActivityListener(_listener);
     }
 
-    public void Dispose() => _listener.Dispose();
+    public void Dispose()
+    {
+        _listener.Dispose();
+        _ownedSink?.Dispose();
+    }
 
     public string[] ReadLines() => _sink.ReadLines(_filePath);
 
