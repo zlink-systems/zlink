@@ -133,7 +133,7 @@ public sealed class test_router_multiple_dealers
 
         Task reply = received.Send().Messages(forwardedParts).Async().Admitted;
         Assert.All(forwardedParts, part =>
-            Assert.Throws<ObjectDisposedException>(() => _ = part.Size));
+            Assert.Equal(0, part.Size));
         await reply.WaitAsync(TimeSpan.FromSeconds(2));
 
         using Received echoed = CoreTestSupport.ReceiveMessageWithTimeout(dealer,

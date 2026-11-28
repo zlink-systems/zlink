@@ -25,7 +25,9 @@ from perf_multi_common import (
     table_header_lines,
     throughput_unit,
 )
+from perf_metrics import resolve_multi_latency_duration
 from perf_report import (
+    median_result_data_lines,
     multi_auto_hwm_lines,
     parse_auto_hwm_detail_line,
     sort_result_data_lines,
@@ -231,6 +233,11 @@ def parse_args(argv):
         "--duration",
         default=os.environ.get("PERF_MULTI_DURATION_SECONDS", "5"),
     )
+    parser.add_argument(
+        "--latency-duration",
+        metavar="N",
+        help="latency seconds (positive integer; default: --duration)",
+    )
     parser.add_argument("--msg-sizes", default="")
     parser.add_argument("--transports", default="")
     parser.add_argument("--runs", default="1")
@@ -260,7 +267,7 @@ def parse_args(argv):
     parser.add_argument("--pattern-transition-ms", default="")
     parser.add_argument("--server-ready-timeout-ms", default="")
     parser.add_argument("--connect-ready-timeout-ms", default="")
-    parser.add_argument("--monitor-hwm", default="")
+    parser.add_argument("--monitor-hwm-bytes", dest="monitor_hwm", default="")
     parser.add_argument("--server-shutdown-timeout-ms", default="")
     parser.add_argument("--server-bind-port", default="")
     parser.add_argument(
@@ -271,7 +278,14 @@ def parse_args(argv):
             "(default: balanced)"
         ),
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    try:
+        args.latency_duration = resolve_multi_latency_duration(
+            args.duration, cli_value=args.latency_duration
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
 
 
 def _parse_csv(value):
@@ -622,14 +636,18 @@ def _result_metrics_for_case(output, pattern, transport, msg_size):
 
 def _metric_row(pattern, msg_size, metrics, *, indent="      "):
     unit = throughput_unit(_result_pattern(pattern), suite="multi")
+    def latency_cell(metric):
+        value = metrics.get(metric, 0.0)
+        return value if isinstance(value, str) and value.startswith("invalid:") else f"{float(value):.3f} ms"
+
     throughput = f"{float(metrics.get('throughput', 0.0)) / 1000.0:8.3f} {unit}"
     return (
         f"{indent}| {str(msg_size) + 'B':<8} | "
         f"{throughput:>16} | "
         f"{float(metrics.get('bandwidth', 0.0)):>10.3f} MB/s | "
-        f"{float(metrics.get('latency', 0.0)):>9.3f} ms | "
-        f"{float(metrics.get('latency_p95', 0.0)):>9.3f} ms | "
-        f"{float(metrics.get('latency_p99', 0.0)):>9.3f} ms |"
+        f"{latency_cell('latency'):>12} | "
+        f"{latency_cell('latency_p95'):>12} | "
+        f"{latency_cell('latency_p99'):>12} |"
     )
 
 
@@ -651,9 +669,12 @@ def _median_metrics(outputs, pattern, transport, msg_size):
         return {}
     medians = {}
     for metric in ("throughput", "bandwidth", "latency", "latency_p95", "latency_p99"):
-        values = [float(metrics[metric]) for metrics in metrics_list if metric in metrics]
-        if values:
-            medians[metric] = statistics.median(values)
+        values = [metrics[metric] for metrics in metrics_list if metric in metrics]
+        invalid = next((value for value in values if str(value).startswith("invalid:")), None)
+        if invalid is not None:
+            medians[metric] = invalid
+        elif values:
+            medians[metric] = statistics.median(map(float, values))
     return medians
 
 
@@ -743,6 +764,57 @@ def _write_control_line(proc, line):
         raise SystemExit(f"control stdin is unavailable while sending: {line}")
     proc.stdin.write(f"{line}\n")
     proc.stdin.flush()
+
+
+def _forward_one_way_phases(server, client, pattern, size, *, timeout_s, stdout_chunks):
+    deadline = time.monotonic() + timeout_s
+
+    def wait(proc, prefix):
+        return _wait_for_control_line(
+            proc, (prefix,), timeout_s=max(0, deadline - time.monotonic()),
+            stdout_chunks=stdout_chunks,
+        )
+
+    receiver, sender = (client, server) if pattern == "PUBSUB" else (server, client)
+    if pattern == "PUBSUB":
+        _write_control_line(receiver, wait(sender, f"PHASE_DONE,{size},1"))
+    drained = wait(receiver, f"PHASE_DRAINED,{size},")
+    count = int(drained.rsplit(",", 1)[1])
+    if count <= 0:
+        raise SystemExit("no active messages received")
+    _write_control_line(sender, f"PHASE_PACED,{size},{count}")
+    if pattern == "PUBSUB":
+        sender_lines = _stdout_queue(sender)
+        receiver_lines = _stdout_queue(receiver)
+        catchup = f"PHASE_CATCHUP,{size}"
+        done = f"PHASE_DONE,{size},3"
+        while time.monotonic() < deadline:
+            while True:
+                try:
+                    line = receiver_lines.get_nowait()
+                except queue.Empty:
+                    break
+                if line is None:
+                    raise SystemExit("subscriber exited before paced phase completed")
+                text = line.strip()
+                stdout_chunks.append(text)
+                if text == catchup:
+                    _write_control_line(sender, text)
+            try:
+                line = sender_lines.get(timeout=min(0.01, max(0, deadline - time.monotonic())))
+            except queue.Empty:
+                continue
+            if line is None:
+                raise SystemExit("publisher exited before paced phase completed")
+            text = line.strip()
+            stdout_chunks.append(text)
+            if text == done:
+                _write_control_line(receiver, done)
+                break
+        else:
+            raise SystemExit("pubsub paced phase timed out")
+    _write_control_line(sender, wait(receiver, f"PHASE_COMPLETE,{size},"))
+    return max(0, deadline - time.monotonic())
 
 
 def _release_stream_start(server, client, msg_size, *, timeout_s, stdout_chunks):
@@ -893,6 +965,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
         if timeout_override > 0
         else resolve_multi_timeout_seconds(
             args.duration,
+            args.latency_duration,
             pattern,
             transport,
             msg_size,
@@ -1028,12 +1101,14 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
                 return "\n".join(chunk for chunk in stdout_chunks if chunk)
             if client_ready != f"CLIENT_READY,{msg_size}":
                 raise SystemExit(f"client did not become ready: {client_ready}")
-            server.stdin.write(f"START,{msg_size}\n")
-            server.stdin.flush()
-            client.stdin.write(f"START,{msg_size}\n")
-            client.stdin.flush()
+            _write_control_line(server, f"START,{msg_size}")
+            _write_control_line(client, f"START,{msg_size}")
+            remaining = _forward_one_way_phases(
+                server, client, pattern, msg_size, timeout_s=client_timeout_s,
+                stdout_chunks=stdout_chunks,
+            )
             try:
-                client.wait(timeout=client_timeout_s)
+                client.wait(timeout=remaining)
             except subprocess.TimeoutExpired as exc:
                 _drain_stdout_queue(client, stdout_chunks)
                 raise exc
@@ -1048,8 +1123,6 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
                     output="\n".join(stdout_chunks),
                     stderr=client_stderr,
                 )
-            if pattern == "PUBSUB" and server.poll() is None:
-                _write_control_line(server, "STOP")
             try:
                 server.wait(timeout=shutdown_grace_s)
             except subprocess.TimeoutExpired:
@@ -1233,6 +1306,7 @@ def _build_options(args, patterns, transports, requested_msg_sizes, clients, env
             patterns, transports, requested_msg_sizes
         ),
         "duration_seconds": args.duration,
+        "latency_duration_seconds": args.latency_duration,
         "clients": clients,
         "default_clients": os.environ.get("PERF_MULTI_DEFAULT_CLIENTS")
         or os.environ.get("PERF_DEFAULT_CLIENTS", "100"),
@@ -1257,7 +1331,7 @@ def _build_options(args, patterns, transports, requested_msg_sizes, clients, env
         or env.get("PERF_MULTI_CONNECT_READY_TIMEOUT_MS")
         or env.get("PERF_CONNECT_READY_TIMEOUT_MS")
         or "10000",
-        "monitor_hwm_bytes": env["PERF_MULTI_MONITOR_HWM"],
+        "monitor_hwm_bytes": env["PERF_MULTI_MONITOR_HWM_BYTES"],
         "server_ready_timeout_ms": args.server_ready_timeout_ms
         or env.get("PERF_MULTI_SERVER_READY_TIMEOUT_MS")
         or env.get("PERF_SERVER_READY_TIMEOUT_MS")
@@ -1316,6 +1390,7 @@ def main(argv=None):
     start_time = time.perf_counter()
     args = parse_args(argv or sys.argv[1:])
     _validate_python_build_options(args)
+    monitor_hwm = resolve_multi_monitor_hwm_bytes(cli_value=args.monitor_hwm)
     require_binding_runtime(DEFAULT_PYTHONPATH)
     if args.pin_cpu and not pin_current_process_cpu0():
         print("warning: cpu pinning requested but could not pin to cpu 0", file=sys.stderr)
@@ -1333,6 +1408,7 @@ def main(argv=None):
     env = dict(os.environ)
     env["PYTHONPATH"] = str(DEFAULT_PYTHONPATH.resolve())
     env["PERF_MULTI_DURATION_SECONDS"] = str(args.duration)
+    env["PERF_MULTI_LATENCY_DURATION_SECONDS"] = args.latency_duration
     if args.io_threads:
         env["PERF_MULTI_SERVER_IO_THREADS"] = args.io_threads
         env["PERF_MULTI_CLIENT_IO_THREADS"] = args.io_threads
@@ -1369,16 +1445,7 @@ def main(argv=None):
         env["PERF_MULTI_SERVER_READY_TIMEOUT_MS"] = args.server_ready_timeout_ms
     if args.connect_ready_timeout_ms:
         env["PERF_MULTI_CONNECT_READY_TIMEOUT_MS"] = args.connect_ready_timeout_ms
-    if args.monitor_hwm:
-        try:
-            monitor_hwm = int(args.monitor_hwm)
-        except ValueError as exc:
-            raise SystemExit("--monitor-hwm must be a nonnegative integer") from exc
-        if monitor_hwm < 0:
-            raise SystemExit("--monitor-hwm must be a nonnegative integer")
-    else:
-        monitor_hwm = resolve_multi_monitor_hwm_bytes()
-    env["PERF_MULTI_MONITOR_HWM"] = str(monitor_hwm)
+    env["PERF_MULTI_MONITOR_HWM_BYTES"] = str(monitor_hwm)
     if args.server_shutdown_timeout_ms:
         env["PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS"] = args.server_shutdown_timeout_ms
     if args.server_bind_port:
@@ -1630,7 +1697,20 @@ def main(argv=None):
         for line in chunk.splitlines()
         if line.startswith("RESULT,") and len(line.split(",")) == 7
     ]
-    emitted_result_lines = sort_result_data_lines(emitted_result_lines)
+    emitted_result_lines = (
+        list(median_result_data_lines(emitted_result_lines, "multi", runs))
+        if runs > 1
+        else sort_result_data_lines(emitted_result_lines)
+    )
+    diagnostic_lines = [
+        line
+        for chunk in emitted_chunks
+        for line in chunk.splitlines()
+        if line.startswith((
+            "BENCH_DIAG,", "PUBSUB_CATCHUP_PROGRESS,", "PUBSUB_CATCHUP_DIAG,",
+            "PUBSUB_LATENCY_DIAG,", "REFERENCE,",
+        ))
+    ]
     skipped_cases = 0
     unsupported_cases = 0
     skip_entries = []
@@ -1659,6 +1739,11 @@ def main(argv=None):
         for line in emitted_result_lines:
             _append_line(sections, line)
     _append_line(sections)
+    if diagnostic_lines:
+        _append_line(sections, "## Diagnostics")
+        for line in diagnostic_lines:
+            _append_line(sections, line)
+        _append_line(sections)
     _append_line(sections, "## Completion")
     _append_line(sections, f"- success: {success_cases}")
     _append_line(sections, f"- unsupported: {unsupported_cases}")

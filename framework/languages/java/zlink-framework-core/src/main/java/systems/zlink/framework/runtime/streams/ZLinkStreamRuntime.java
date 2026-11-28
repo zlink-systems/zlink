@@ -5,6 +5,7 @@ import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorManager;
+import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -106,6 +107,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private static final int EXECUTOR_TERMINATION_ATTEMPTS = 2;
     private static final int RETIRED_SESSION_ADMISSION_LIMIT = 4096;
     private static final long EXECUTOR_TERMINATION_WAIT_SECONDS = 5;
+    private static final long REPORT_PERIOD_SECONDS = 1;
     private static final Duration PHYSICAL_DISCONNECT_TIMEOUT = Duration.ofSeconds(5);
     private static final Logger LOGGER = Logger.getLogger(ZLinkStreamRuntime.class.getName());
     private static final ZLinkStreamHeader SESSION_CLOSING_HEADER =
@@ -148,6 +150,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final ScheduledExecutorService replyRetryExecutor;
     private final ExecutorService receiveExecutor;
     private final ZLinkStreamAuthenticationAdmission authenticationAdmission;
+    private volatile ZLinkRouteClient admissionRouteClient;
+    private volatile systems.zlink.framework.runtime.locations.ZLinkLocationRuntime
+            admissionLocationRuntime;
+    private volatile ZLinkAdmissionQueueNode admissionQueue;
     private ZLinkRuntimeMetrics.Registration authenticationAdmissionMetric;
     private volatile boolean draining;
     private volatile CompletableFuture<Void> sessionShutdown;
@@ -486,7 +492,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         this.registration = Objects.requireNonNull(registration, "registration");
         this.authenticationAdmission =
                 new ZLinkStreamAuthenticationAdmission(
-                        ZLinkStreamAuthenticationAdmission.settings(registration.streamNodes()));
+                        ZLinkStreamAuthenticationAdmission.settings(
+                                registration.streamNodes(), registration.meshNodes()));
         this.sessionRelocationSealTimeout =
                 registration.locations().options().sessionRelocationSealTimeout();
         this.sessionReplacementCallbackTimeout = registration.sessionReplacementCallbackTimeout();
@@ -589,7 +596,97 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
         authenticationAdmissionMetric = authenticationAdmission.registerMetric();
         receiveLoops.values().forEach(StreamReceiveLoop::start);
+        startAdmissionQueue();
         return this;
+    }
+
+    /**
+     * Supplies the Framework services the login admission queue needs (§3.5.3): the Spot route
+     * client and the Location runtime that owns this node's owner lease.
+     */
+    public void attachAdmissionQueue(
+            ZLinkRouteClient routeClient,
+            systems.zlink.framework.runtime.locations.ZLinkLocationRuntime locationRuntime) {
+        this.admissionRouteClient = routeClient;
+        this.admissionLocationRuntime = locationRuntime;
+    }
+
+    private void startAdmissionQueue() {
+        var queue = authenticationAdmission.queue();
+        if (queue == null) {
+            return;
+        }
+        ZLinkInternalMeshNode mesh = meshNodes.get(queue.meshName());
+        if (admissionRouteClient == null || admissionLocationRuntime == null || mesh == null) {
+            throw new ZLinkConfigurationException(
+                    "The STREAM admission queue requires the Framework host with a Location Store"
+                            + " and the queue RouteMesh.");
+        }
+        var status = mesh.status();
+        var node =
+                new ZLinkAdmissionQueueNode(
+                        new ZLinkAdmissionTickets(queue.key(), queue.previousKey()),
+                        queue.globalLimit(),
+                        new ZLinkAdmissionQueueNode.Identity(
+                                status.routingId().toBytes(), status.lifecycleGeneration()),
+                        () -> {
+                            var token = admissionLocationRuntime.currentOwnerToken();
+                            return new ZLinkAdmissionQueueNode.OwnerLease(
+                                    token.ownerId(), token.leaseGeneration());
+                        },
+                        authenticationAdmission::limit,
+                        authenticationAdmission::inFlight,
+                        this::sendAdmissionPush,
+                        ZLinkStreamAdmissionQueueSupport.link(
+                                admissionRouteClient, queue.spotId(), queue.meshName()),
+                        System::currentTimeMillis);
+        admissionQueue = node;
+        // The report cadence rides the runtime's existing timer owner (§3.5.3).
+        livenessExecutor.scheduleAtFixedRate(
+                () -> {
+                    try {
+                        node.reportOnce()
+                                .whenComplete(
+                                        (ignored, failure) -> {
+                                            if (failure != null) {
+                                                LOGGER.log(
+                                                        Level.FINE,
+                                                        "STREAM admission queue report failed",
+                                                        failure);
+                                            }
+                                        });
+                    } catch (RuntimeException failure) {
+                        LOGGER.log(Level.FINE, "STREAM admission queue report failed", failure);
+                    }
+                },
+                0,
+                REPORT_PERIOD_SECONDS,
+                TimeUnit.SECONDS);
+    }
+
+    private void sendAdmissionPush(ZLinkAdmissionQueueMessages.Delivery push) {
+        StreamReceiveLoop loop = receiveLoops.get(push.streamName());
+        if (loop == null) {
+            return;
+        }
+        Message body = null;
+        try {
+            RoutingId session =
+                    RoutingId.from(java.util.Base64.getUrlDecoder().decode(push.sessionRid()));
+            body = Message.from(ZLinkStreamAdmissionQueueSupport.pushBody(push));
+            Message sent = body;
+            loop.stream
+                    .sendAsync(
+                            session,
+                            ZLinkStreamAdmissionQueueSupport.pushHeader(push),
+                            List.of(body))
+                    .whenComplete((ignored, failure) -> sent.close());
+        } catch (RuntimeException failure) {
+            if (body != null) {
+                body.close();
+            }
+            LOGGER.log(Level.FINE, "STREAM admission queue push failed", failure);
+        }
     }
 
     private String resolveActorDispatchMeshName() {
@@ -1594,14 +1691,104 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
         traceStreamPhase(dispatchHeader, capturedFlow, routingId, ZLinkMessageFlowOutcome.RECEIVED);
 
+        final ZLinkFlowContext.State dispatchFlow = capturedFlow;
+        var queue = admissionQueue;
+        if (queue != null
+                && dispatchHeader.kind() == ZLinkStreamMessageKind.REQUEST
+                && ZLinkStreamAdmissionQueueSupport.ENQUEUE_PACKET.equals(
+                        dispatchHeader.packetName())) {
+            return admitEnqueue(queue, stream, streamNode, routingId, dispatchHeader, capturedFlow);
+        }
         ZLinkStreamAuthenticationAdmission.Lease lease = null;
+        boolean ticketed = false;
         if (authenticationAdmission.appliesTo(dispatchHeader)) {
+            if (queue != null) {
+                // One ticket check before the stage-one decision and the handler (§3.5.2).
+                if (!queue.ticketAccepted(
+                        streamNode.name(),
+                        routingId.toBytes(),
+                        dispatchHeader
+                                .metadata()
+                                .get(ZLinkStreamAdmissionQueueSupport.TICKET_METADATA))) {
+                    return rejectAuthentication(
+                            stream,
+                            routingId,
+                            dispatchHeader,
+                            capturedFlow,
+                            ZLinkStreamAdmissionQueueSupport.QUEUE_REQUIRED,
+                            "Admission queue ticket is required.");
+                }
+                ticketed = true;
+            }
             lease = authenticationAdmission.tryAdmit();
             if (lease == null) {
                 return rejectAuthenticationAdmission(
                         stream, routingId, dispatchHeader, capturedFlow);
             }
+            if (queue != null && queue.hasGlobalLimit()) {
+                var admitted = lease;
+                return queue.acquirePermit(streamNode.name(), routingId.toBytes())
+                        .thenCompose(
+                                outcome -> {
+                                    if (outcome
+                                            instanceof ZLinkAdmissionQueueNode.Granted granted) {
+                                        queue.ticketUsed(streamNode.name(), routingId.toBytes());
+                                        return dispatchAdmitted(
+                                                streamNode,
+                                                stream,
+                                                routingId,
+                                                dispatchHeader,
+                                                dispatchFlow,
+                                                payload,
+                                                receivedState,
+                                                admitted,
+                                                granted.permitId());
+                                    }
+                                    admitted.finish(ZLinkTerminalWinner.Cause.CANCELLATION);
+                                    boolean denied =
+                                            outcome instanceof ZLinkAdmissionQueueNode.Denied;
+                                    return rejectAuthentication(
+                                            stream,
+                                            routingId,
+                                            dispatchHeader,
+                                            dispatchFlow,
+                                            denied
+                                                    ? ZLinkStreamAdmissionQueueSupport
+                                                            .QUEUE_REQUIRED
+                                                    : Map.of(),
+                                            denied
+                                                    ? "Admission queue permit is required."
+                                                    : "Admission queue is unavailable.");
+                                });
+            }
         }
+        if (ticketed) {
+            queue.ticketUsed(streamNode.name(), routingId.toBytes());
+        }
+        return dispatchAdmitted(
+                streamNode,
+                stream,
+                routingId,
+                dispatchHeader,
+                capturedFlow,
+                payload,
+                receivedState,
+                lease,
+                0);
+    }
+
+    private CompletionStage<Void> dispatchAdmitted(
+            StreamNodeRegistration streamNode,
+            ZLinkBackendStreamSocket stream,
+            RoutingId routingId,
+            ZLinkStreamHeader dispatchHeader,
+            ZLinkFlowContext.State capturedFlow,
+            Message payload,
+            SessionState receivedState,
+            ZLinkStreamAuthenticationAdmission.Lease lease,
+            long permitId) {
+        var queue = admissionQueue;
+        Runnable releasePermit = queue == null ? () -> {} : () -> queue.releasePermit(permitId);
         ZLinkStreamSessionContextState authenticationContext = null;
         try {
             SessionState state =
@@ -1613,6 +1800,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 if (lease != null) {
                     lease.finish(ZLinkTerminalWinner.Cause.CANCELLATION);
                 }
+                releasePermit.run();
                 return CompletableFuture.completedFuture(null);
             }
             var context = state.context();
@@ -1634,13 +1822,17 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 return completion;
             }
             return completion.whenComplete(
-                    (ignored, error) ->
-                            context.finishAuthenticationRequest(
-                                    dispatchHeader,
-                                    error == null
-                                            ? ZLinkTerminalWinner.Cause.RESPONSE
-                                            : ZLinkTerminalWinner.Cause.FAILURE));
+                    (ignored, error) -> {
+                        context.finishAuthenticationRequest(
+                                dispatchHeader,
+                                error == null
+                                        ? ZLinkTerminalWinner.Cause.RESPONSE
+                                        : ZLinkTerminalWinner.Cause.FAILURE);
+                        // The permit is held until the handler ends (§3.5.3).
+                        releasePermit.run();
+                    });
         } catch (RuntimeException | Error failure) {
+            releasePermit.run();
             if (lease != null) {
                 if (authenticationContext == null) {
                     lease.finish(ZLinkTerminalWinner.Cause.FAILURE);
@@ -1658,13 +1850,27 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             RoutingId routingId,
             ZLinkStreamHeader header,
             ZLinkFlowContext.State incomingFlow) {
-        var error =
-                new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.UNAVAILABLE, "Authentication admission is full.");
+        return rejectAuthentication(
+                stream,
+                routingId,
+                header,
+                incomingFlow,
+                authenticationAdmission.retryMetadata(),
+                "Authentication admission is full.");
+    }
+
+    /** Answers an authentication request with {@code unavailable} and the given metadata. */
+    private CompletionStage<Void> rejectAuthentication(
+            ZLinkBackendStreamSocket stream,
+            RoutingId routingId,
+            ZLinkStreamHeader header,
+            ZLinkFlowContext.State incomingFlow,
+            Map<String, String> metadata,
+            String message) {
+        var error = new ZLinkFrameworkException(ZLinkFrameworkErrorKind.UNAVAILABLE, message);
         ZLinkStreamSessionContextState.traceDispatchError(
                 flow, routingId, header, error, ZLinkDispatchErrorReason.BACKPRESSURE);
-        ZLinkStreamHeader reply =
-                ZLinkStreamHeader.errorResponse(header, authenticationAdmission.retryMetadata());
+        ZLinkStreamHeader reply = ZLinkStreamHeader.errorResponse(header, metadata);
         Message errorBody = Message.from(ZLinkStreamErrorPayload.encode(error));
         try (ZLinkFlowContext.Scope ignored =
                 incomingFlow == null ? () -> {} : ZLinkFlowContext.enter(incomingFlow)) {
@@ -1677,6 +1883,53 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             errorBody.close();
             throw failure;
         }
+    }
+
+    /** Handles the reserved {@code $zlink.admission.enqueue} request (§3.4). */
+    private CompletionStage<Void> admitEnqueue(
+            ZLinkAdmissionQueueNode queue,
+            ZLinkBackendStreamSocket stream,
+            StreamNodeRegistration streamNode,
+            RoutingId routingId,
+            ZLinkStreamHeader header,
+            ZLinkFlowContext.State incomingFlow) {
+        CompletionStage<ZLinkAdmissionQueueMessages.EnqueueReply> call;
+        try {
+            call = queue.enqueue(streamNode.name(), routingId.toBytes());
+        } catch (RuntimeException failure) {
+            call = CompletableFuture.failedFuture(failure);
+        }
+        return call.handle(
+                        (reply, failure) -> {
+                            if (failure != null || reply == null) {
+                                return rejectAuthentication(
+                                        stream,
+                                        routingId,
+                                        header,
+                                        incomingFlow,
+                                        Map.of(),
+                                        "Admission queue is unavailable.");
+                            }
+                            Message body =
+                                    Message.from(
+                                            ZLinkStreamAdmissionQueueSupport.enqueueResponseBody(
+                                                    reply));
+                            try (ZLinkFlowContext.Scope ignored =
+                                    incomingFlow == null
+                                            ? () -> {}
+                                            : ZLinkFlowContext.enter(incomingFlow)) {
+                                return stream.replyAsync(
+                                                routingId,
+                                                ZLinkStreamAdmissionQueueSupport
+                                                        .enqueueResponseHeader(header),
+                                                List.of(body))
+                                        .whenComplete((result, error) -> body.close());
+                            } catch (RuntimeException | Error error) {
+                                body.close();
+                                throw error;
+                            }
+                        })
+                .thenCompose(stage -> stage);
     }
 
     private CompletionStage<Void> enqueueSessionPacket(
@@ -1844,6 +2097,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             getOrCreateSessionState(
                     streamNode, receiveLoops.get(streamNode.name()).stream, routingId, null);
             return;
+        }
+        var endedQueue = admissionQueue;
+        if (endedQueue != null) {
+            endedQueue.sessionEnded(streamNode.name(), routingId.toBytes());
         }
         SessionState state =
                 inStateLane(

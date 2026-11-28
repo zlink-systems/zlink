@@ -37,6 +37,7 @@ final class ZLinkFrameworkLocationSubsystem {
     private final ZLinkLocationAutoConnectHost locationAutoConnectHost;
     private final SpotTransportAddressResolver spotTransportAddressResolver;
     private final ZLinkStoreLocationResolvers storeLocationResolvers;
+    private final ZLinkLiveLocationRows liveLocationRows;
     private final CompletionStage<Void> startup;
 
     private ZLinkFrameworkLocationSubsystem(
@@ -47,6 +48,7 @@ final class ZLinkFrameworkLocationSubsystem {
             ZLinkLocationAutoConnectHost locationAutoConnectHost,
             SpotTransportAddressResolver spotTransportAddressResolver,
             ZLinkStoreLocationResolvers storeLocationResolvers,
+            ZLinkLiveLocationRows liveLocationRows,
             CompletionStage<Void> startup) {
         this.locationStores = locationStores;
         this.locationRuntime = locationRuntime;
@@ -55,6 +57,7 @@ final class ZLinkFrameworkLocationSubsystem {
         this.locationAutoConnectHost = locationAutoConnectHost;
         this.spotTransportAddressResolver = spotTransportAddressResolver;
         this.storeLocationResolvers = storeLocationResolvers;
+        this.liveLocationRows = liveLocationRows;
         this.startup = startup;
     }
 
@@ -149,6 +152,7 @@ final class ZLinkFrameworkLocationSubsystem {
                 locationAutoConnectHost,
                 locationSpotHandleResolver,
                 storeLocationResolvers,
+                liveLocationRows,
                 startup);
     }
 
@@ -184,13 +188,25 @@ final class ZLinkFrameworkLocationSubsystem {
         return storeLocationResolvers;
     }
 
+    ZLinkLiveLocationRows liveLocationRows() {
+        return liveLocationRows;
+    }
+
     CompletionStage<Void> startup() {
         return startup;
     }
 
     private static ZLinkFrameworkLocationSubsystem disabled() {
         return new ZLinkFrameworkLocationSubsystem(
-                null, null, null, null, null, null, null, CompletableFuture.completedFuture(null));
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                CompletableFuture.completedFuture(null));
     }
 
     private static List<String> spotMeshNames(ZLinkFrameworkRegistration registration) {

@@ -31,9 +31,9 @@
     X(_defer_retry) \
     X(_dispatch_retry) \
     X(_entries) \
-    X(_entries_by_id) \
     X(_error) \
-    X(_finish_request_submit) \
+    X(_finish_rejected_submit_locked) \
+    X(_abort_rejected_submit) \
     X(_handle) \
     X(_index) \
     X(_keepalive) \
@@ -51,7 +51,6 @@
     X(_settled) \
     X(_socket) \
     X(_state_changed) \
-    X(_submit_error) \
     X(_submit_parts) \
     X(_thread_id) \
     X(_topic) \
@@ -87,7 +86,6 @@
     X(payload) \
     X(release) \
     X(reply_token) \
-    X(retain_retry) \
     X(retire_native) \
     X(route_generation) \
     X(routing_id) \
@@ -258,10 +256,11 @@ static PyObject *py_submit_storage (PyObject *self, PyObject *args)
     unsigned long long handle, context;
     PyObject *target, *parts, *timeout;
     unsigned long long reply_token = 0;
+    const char *publish_topic = NULL;
     int flags;
     (void) self;
-    if (!PyArg_ParseTuple (args, "KOOiKO|K", &handle, &target, &parts, &flags,
-                          &context, &timeout, &reply_token))
+    if (!PyArg_ParseTuple (args, "KOOiKO|Ky", &handle, &target, &parts, &flags,
+                          &context, &timeout, &reply_token, &publish_topic))
         return NULL;
     const int is_reply = PyTuple_GET_SIZE (args) == 7;
     if (!PyList_Check (parts)) {
@@ -280,9 +279,16 @@ static PyObject *py_submit_storage (PyObject *self, PyObject *args)
             goto fail;
         rid_ptr = &rid;
     }
-    long timeout_ms = timeout == Py_None ? 0 : PyLong_AsLong (timeout);
-    if (timeout_ms == -1 && PyErr_Occurred ())
+    /* Core takes a uint32_t millisecond timeout. unsigned long is 32 bits on
+       Windows, so read 64 bits and range-check explicitly. */
+    unsigned long long timeout_ms =
+      timeout == Py_None ? 0 : PyLong_AsUnsignedLongLong (timeout);
+    if (PyErr_Occurred ())
         goto fail;
+    if (timeout_ms > UINT32_MAX) {
+        PyErr_SetString (PyExc_OverflowError, "timeout exceeds UINT32_MAX milliseconds");
+        goto fail;
+    }
     Py_ssize_t count = PyList_GET_SIZE (parts);
     Py_buffer inline_views[8] = {{0}};
     Py_buffer *views = count <= 8 ? inline_views : PyMem_Calloc (count, sizeof (Py_buffer));
@@ -325,7 +331,10 @@ static PyObject *py_submit_storage (PyObject *self, PyObject *args)
         void *ctx = context ? (void *) (uintptr_t) context : NULL;
         uint64_t *out = context ? &completion_id : NULL;
         Py_BEGIN_ALLOW_THREADS
-        if (is_reply)
+        if (publish_topic)
+            rc = zlink_publish ((void *) (uintptr_t) handle, publish_topic,
+                                native_parts, (size_t) count, flags);
+        else if (is_reply)
             rc = zlink_reply ((void *) (uintptr_t) handle, rid_ptr,
                               reply_token, native_parts, (size_t) count);
         else if (timeout != Py_None)
@@ -607,12 +616,6 @@ static PyMethodDef entry_init_def = {"__init__", (PyCFunction) entry_init, METH_
 static PyMethodDef entry_clone_def = {"clone_payload", entry_clone_payload, METH_NOARGS, NULL};
 static PyMethodDef send_succeed_def = {"succeed_send", send_entry_succeed, METH_NOARGS, NULL};
 
-static PyObject *entry_context (PyObject *entry, void *closure)
-{
-    (void) closure;
-    return PyLong_FromVoidPtr (entry);
-}
-
 static PyObject *entry_state (PyObject *entry, void *closure)
 {
     PyObject *condition = lock_entry (entry);
@@ -631,7 +634,6 @@ static PyObject *entry_state (PyObject *entry, void *closure)
 }
 
 static PyGetSetDef entry_properties[] = {
-  {"context", entry_context, NULL, NULL, NULL},
   {"settled", entry_state, NULL, NULL, &hp__settled},
   {"waiting_native", entry_state, NULL, NULL, &hp__native_wait},
   {"releasable", entry_state, NULL, NULL, NULL},
@@ -1085,15 +1087,9 @@ static PyObject *owner_drain (PyObject *owner, PyObject *args, PyObject *kwargs)
             Py_XDECREF (context);
             goto done;
         }
-        PyObject *entries = PyObject_GetAttr (owner, hp__entries_by_id);
-        entry = entries ? hot_call (entries, hp_get, "(O)", id) : NULL;
+        PyObject *entries = PyObject_GetAttr (owner, hp__entries);
+        entry = entries ? hot_call (entries, hp_get, "(O)", context) : NULL;
         Py_XDECREF (entries);
-        if (entry == Py_None) {
-            Py_CLEAR (entry);
-            entries = PyObject_GetAttr (owner, hp__entries);
-            entry = entries ? hot_call (entries, hp_get, "(O)", context) : NULL;
-            Py_XDECREF (entries);
-        }
         Py_DECREF (context);
         unlock_entry (guard);
         guard = NULL;
@@ -1236,9 +1232,9 @@ static int owner_stopped (PyObject *owner, PyObject *entry)
 static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
 {
     PyObject *guard = lock_attribute (owner, hp__lock);
-    PyObject *parts = NULL, *submitted = NULL, *result = NULL;
+    PyObject *parts = NULL, *submitted = NULL, *outcome = NULL, *result = NULL;
     PyObject *entries = NULL, *context = NULL;
-    int attempt_rc = -1, initial_attempt = 0, abandoned = 0, resubmit = 0;
+    int initial_attempt = 0, abandoned = 0, resubmit = 0;
     if (!guard)
         return NULL;
     int stopped = owner_stopped (owner, entry);
@@ -1328,59 +1324,56 @@ static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
     unsigned long long completion_id;
     if (!PyArg_ParseTuple (submitted, "iiK", &rc, &err, &completion_id))
         goto done;
-    attempt_rc = rc;
     guard = lock_attribute (owner, hp__lock);
     if (!guard)
         goto done;
-    PyObject *public_owner = PyObject_GetAttr (owner, hp__public_owner);
-    if (!public_owner)
-        goto done;
-    int ownerless_wait = initial_attempt
-      && public_owner == Py_None
-      && rc == ZLINK_SUBMIT_BACKPRESSURED
-      && err == EAGAIN
-      && completion_id;
-    Py_DECREF (public_owner);
-    if (completion_id) {
+    if (rc != ZLINK_SUBMIT_OK) {
+        PyObject *projection = hot_call (owner, hp__finish_rejected_submit_locked,
+                                         "OiiKi", entry, rc, err, completion_id,
+                                         initial_attempt);
+        if (projection) {
+            PyObject *projected_outcome, *retry;
+            if (PyArg_ParseTuple (projection, "OO", &projected_outcome, &retry)) {
+                resubmit = PyObject_IsTrue (retry);
+                if (resubmit >= 0)
+                    outcome = Py_NewRef (projected_outcome);
+            }
+            Py_DECREF (projection);
+        }
+        if (!outcome) {
+            PyObject *type, *error, *tb;
+            PyErr_Fetch (&type, &error, &tb);
+            PyObject *aborted = hot_call (owner, hp__abort_rejected_submit, "(O)", entry);
+            Py_XDECREF (aborted);
+            PyErr_Restore (type, error, tb);
+            goto done;
+        }
+    } else if (completion_id) {
         PyObject *published =
           hot_call (owner, hp__publish_writable_locked, "OK", entry, completion_id);
         if (!published)
             goto done;
-        resubmit = rc == ZLINK_SUBMIT_BACKPRESSURED && PyObject_IsTrue (published);
         Py_DECREF (published);
-    }
-    PyObject *error = NULL;
-    if (ownerless_wait) {
         PyObject *module = PyImport_ImportModule ("zlink.contracts.errors.errors");
-        error = module ? hot_call (module, hp_SubmitError, "ii", ZLINK_SUBMIT_INVALID_STATE, 0) : NULL;
-        Py_XDECREF (module);
-        attempt_rc = ZLINK_SUBMIT_INVALID_STATE;
-        if (!error)
-            goto done;
-    } else if (rc == ZLINK_SUBMIT_OK && !completion_id) {
-        PyObject *succeeded = hot_call (entry, hp_succeed_send, NULL);
-        if (!succeeded)
-            goto done;
-        Py_DECREF (succeeded);
-    } else if (rc == ZLINK_SUBMIT_OK
-               || (rc == ZLINK_SUBMIT_BACKPRESSURED && (err != EAGAIN || !completion_id))) {
-        PyObject *module = PyImport_ImportModule ("zlink.contracts.errors.errors");
-        error = module ? hot_call (module, hp_SubmitError, "ii", ZLINK_SUBMIT_INTERNAL_ERROR, EPROTO) : NULL;
+        PyObject *error = module ? hot_call (module, hp_SubmitError, "ii", ZLINK_SUBMIT_INTERNAL_ERROR, EPROTO) : NULL;
         Py_XDECREF (module);
         if (!error)
             goto done;
-    } else if (rc != ZLINK_SUBMIT_BACKPRESSURED) {
-        error = hot_call (owner, hp__submit_error, "ii", rc, err);
-        if (!error)
-            goto done;
-    }
-    if (error) {
         PyObject *failed = hot_call (entry, hp_fail, "(O)", error);
         Py_DECREF (error);
         if (!failed)
             goto done;
         Py_DECREF (failed);
+    } else {
+        PyObject *succeeded = hot_call (entry, hp_succeed_send, NULL);
+        if (!succeeded)
+            goto done;
+        Py_DECREF (succeeded);
     }
+    if (rc == ZLINK_SUBMIT_OK)
+        outcome = PyLong_FromLong (rc);
+    if (!outcome)
+        goto done;
     int releasable = entry_truth (entry, hp_releasable);
     if (releasable < 0)
         goto done;
@@ -1403,8 +1396,9 @@ static PyObject *owner_attempt_send (PyObject *owner, PyObject *entry)
             }
         }
     }
-    result = PyLong_FromLong (attempt_rc);
-    if (result && resubmit) {
+    result = outcome;
+    outcome = NULL;
+    if (resubmit) {
         unlock_entry (guard);
         guard = NULL;
         PyObject *deferred = hot_call (owner, hp__defer_retry, "(O)", entry);
@@ -1419,6 +1413,7 @@ done:
     Py_XDECREF (context);
     Py_XDECREF (parts);
     Py_XDECREF (submitted);
+    Py_XDECREF (outcome);
     return result;
 }
 
@@ -1495,155 +1490,6 @@ static PyObject *py_start_send (PyObject *self, PyObject *args)
     }
     PyObject *result = PyTuple_Pack (2, submitted, entry);
     Py_DECREF (submitted);
-    Py_DECREF (entry);
-    return result;
-}
-
-static int call_entry_method (PyObject *object, const char *name, PyObject *argument)
-{
-    PyObject *result = argument ? PyObject_CallMethod (object, name, "(O)", argument)
-                               : PyObject_CallMethod (object, name, NULL);
-    if (!result)
-        return -1;
-    Py_DECREF (result);
-    return 0;
-}
-
-static PyObject *py_start_request (PyObject *self, PyObject *args)
-{
-    PyObject *owner, *target, *payload, *loop, *timeout;
-    (void) self;
-    if (!PyArg_ParseTuple (args, "OOOOO", &owner, &target, &payload, &loop, &timeout))
-        return NULL;
-    PyObject *parts = materialize_payload (payload);
-    if (!parts)
-        return NULL;
-    PyObject *module = PyImport_ImportModule ("zlink._runtime.messaging.routed_async");
-    PyObject *entry = module ? hot_call (module, hp__RequestEntry, "OO", loop, timeout) : NULL;
-    Py_XDECREF (module);
-    if (!entry) {
-        close_storage_list (parts, 0);
-        Py_DECREF (parts);
-        return NULL;
-    }
-    PyObject *guard = lock_attribute (owner, hp__lock);
-    PyObject *submitted = NULL, *result = NULL;
-    int resubmit = 0;
-    if (!guard) {
-        close_storage_list (parts, 0);
-        goto done;
-    }
-    int shutdown = entry_truth (owner, hp__shutdown);
-    if (shutdown != 0) {
-        close_storage_list (parts, 0);
-        if (shutdown > 0) {
-#ifdef ESHUTDOWN
-            int err = ESHUTDOWN;
-#else
-            int err = ECANCELED;
-#endif
-            raise_submit_error (ZLINK_SUBMIT_INVALID_STATE, err);
-        }
-        goto done;
-    }
-    PyObject *entries = PyObject_GetAttr (owner, hp__entries);
-    PyObject *context = PyObject_GetAttr (entry, hp_context);
-    int registered = entries && context ? PyObject_SetItem (entries, context, entry) : -1;
-    Py_XDECREF (entries);
-    Py_XDECREF (context);
-    if (registered < 0) {
-        close_storage_list (parts, 0);
-        goto done;
-    }
-    /* The Core call runs outside the owner lock; the entry is registered. */
-    unlock_entry (guard);
-    guard = NULL;
-    submitted = hot_call (owner, hp__submit_parts, "OOiOO", target, parts, ZLINK_DONTWAIT, entry, timeout);
-    if (!submitted) {
-        PyObject *type, *error, *tb;
-        PyErr_Fetch (&type, &error, &tb);
-        call_entry_method (entry, "fail_submit", NULL);
-        call_entry_method (owner, "_unregister", entry);
-        PyErr_Restore (type, error, tb);
-        goto done;
-    }
-    int rc, err;
-    unsigned long long completion_id;
-    if (!PyArg_ParseTuple (submitted, "iiK", &rc, &err, &completion_id))
-        goto done;
-    guard = lock_attribute (owner, hp__lock);
-    if (!guard)
-        goto done;
-    if (rc == ZLINK_SUBMIT_OK) {
-        if (!completion_id) {
-            if (call_entry_method (entry, "fail_submit", NULL) < 0
-                || call_entry_method (owner, "_unregister", entry) < 0)
-                goto done;
-            raise_submit_error (ZLINK_SUBMIT_INTERNAL_ERROR, EPROTO);
-            goto done;
-        }
-        PyObject *finished = hot_call (owner, hp__finish_request_submit,
-                                       "OK", entry, completion_id);
-        if (!finished)
-            goto done;
-        Py_DECREF (finished);
-    } else {
-        if (completion_id) {
-            PyObject *published =
-              hot_call (owner, hp__publish_writable_locked, "OK", entry, completion_id);
-            if (!published)
-                goto done;
-            resubmit = rc == ZLINK_SUBMIT_BACKPRESSURED && err == EAGAIN
-              && PyObject_IsTrue (published);
-            Py_DECREF (published);
-        }
-        PyObject *failure = NULL;
-        if (rc == ZLINK_SUBMIT_BACKPRESSURED && err == EAGAIN && completion_id) {
-            PyObject *retained = hot_call (entry, hp_retain_retry, "OO", target, payload);
-            if (!retained) {
-                PyObject *type, *tb;
-                PyErr_Fetch (&type, &failure, &tb);
-                PyErr_NormalizeException (&type, &failure, &tb);
-                Py_XDECREF (type);
-                Py_XDECREF (tb);
-            }
-            Py_XDECREF (retained);
-        } else if (completion_id)
-            failure = hot_call (owner, hp__submit_error, "ii", rc, err);
-        else {
-            if (call_entry_method (entry, "fail_submit", NULL) < 0
-                || call_entry_method (owner, "_unregister", entry) < 0)
-                goto done;
-            raise_submit_error (rc, err);
-            goto done;
-        }
-        if (PyErr_Occurred ()) {
-            Py_XDECREF (failure);
-            goto done;
-        }
-        if (failure) {
-            int failed = call_entry_method (entry, "fail", failure);
-            Py_DECREF (failure);
-            if (failed < 0)
-                goto done;
-        }
-        if (rc == ZLINK_SUBMIT_BACKPRESSURED && entry_truth (entry, hp_releasable)) {
-            if (call_entry_method (owner, "_unregister", entry) < 0)
-                goto done;
-        }
-    }
-    result = Py_BuildValue ("iO", rc, entry);
-    if (result && resubmit) {
-        unlock_entry (guard);
-        guard = NULL;
-        if (call_entry_method (owner, "_defer_retry", entry) < 0)
-            Py_CLEAR (result);
-    }
-done:
-    if (guard)
-        unlock_entry (guard);
-    Py_XDECREF (submitted);
-    Py_DECREF (parts);
     Py_DECREF (entry);
     return result;
 }
@@ -1842,6 +1688,7 @@ static PyObject *entry_capture (PyObject *entry, PyObject *completion)
     PyObject *condition = lock_entry (entry);
     PyObject *value = Py_NewRef (Py_None), *failure = Py_NewRef (Py_None);
     PyObject *deliver = NULL, *result = NULL, *discarded = NULL;
+    int context_matches = 0;
     if (!condition)
         goto close_completion;
     int captured = entry_truth (entry, hp__captured);
@@ -1849,12 +1696,15 @@ static PyObject *entry_capture (PyObject *entry, PyObject *completion)
     PyObject *entry_id = PyObject_GetAttr (entry, hp_completion_id);
     int matches = entry_id && PyLong_AsUnsignedLongLong (entry_id) == record.completion_id;
     Py_XDECREF (entry_id);
+    PyObject *entry_context = PyObject_GetAttr (entry, hp_context);
+    context_matches = entry_context && PyLong_AsVoidPtr (entry_context) == record.user_context;
+    Py_XDECREF (entry_context);
     unlock_entry (condition);
     condition = NULL;
     if (PyErr_Occurred ())
         goto close_completion;
     if (!captured) {
-        if ((published && (!matches || record.user_context != (void *) entry))
+        if ((published && (!matches || !context_matches))
             || record.kind != ZLINK_COMPLETION_REQUEST) {
             Py_SETREF (failure, request_failure (module, ZLINK_REQUEST_INTERNAL_ERROR, EPROTO));
         } else if (record.request_result != ZLINK_REQUEST_OK) {
@@ -1930,7 +1780,7 @@ close_completion:;
         entry_id = PyObject_GetAttr (entry, hp_completion_id);
         matches = entry_id && PyLong_AsUnsignedLongLong (entry_id) == record.completion_id;
         Py_XDECREF (entry_id);
-        if (!matches || record.user_context != (void *) entry) {
+        if (!matches || !context_matches) {
             Py_XSETREF (failure, request_failure (module, ZLINK_REQUEST_INTERNAL_ERROR, EPROTO));
             if (!failure || PyObject_SetAttr (entry, hp__value, Py_None) < 0)
                 goto done;

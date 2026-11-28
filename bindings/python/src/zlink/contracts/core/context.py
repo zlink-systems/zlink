@@ -149,8 +149,8 @@ class ContextOptions(Protocol):
 
     @property
     def auto_hwm_recalc_debounce(self):
-        """The minimum delay between automatic high-water-mark
-        recalculations."""
+        """The minimum delay, in milliseconds, between automatic
+        high-water-mark recalculations."""
         ...
     @auto_hwm_recalc_debounce.setter
     def auto_hwm_recalc_debounce(self, value): ...

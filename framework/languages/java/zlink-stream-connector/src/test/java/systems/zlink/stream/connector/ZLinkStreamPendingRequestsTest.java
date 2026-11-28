@@ -2,6 +2,7 @@ package systems.zlink.stream.connector;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import org.junit.jupiter.api.Test;
 
@@ -34,8 +35,20 @@ final class ZLinkStreamPendingRequestsTest {
     }
 
     static ZLinkStreamPendingRequests pendingRequests() {
-        return new ZLinkStreamPendingRequests(
-                ZLinkStreamExecutionResources.timeouts(), System::nanoTime, () -> 0);
+        return pendingRequests(ZLinkStreamExecutionResources.timeouts(), System::nanoTime);
+    }
+
+    static ZLinkStreamPendingRequests pendingRequests(
+            java.util.concurrent.ScheduledExecutorService scheduler,
+            java.util.function.LongSupplier clock) {
+        var queue =
+                new ZLinkStreamAdmissionQueue(
+                        scheduler,
+                        () -> 0,
+                        (owner, sequence, canWrite) -> fail("unexpected admission enqueue"),
+                        () -> fail("unexpected queued event"),
+                        position -> fail("unexpected position event"));
+        return new ZLinkStreamPendingRequests(scheduler, clock, () -> 0, queue);
     }
 
     static CompletableFuture<ZLinkStreamEncodedPayload> addAttempt(

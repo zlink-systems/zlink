@@ -55,9 +55,11 @@ Message fromString = Message.from("hello");
 | `contentEquals(byte[])` | payload 동등성 확인 |
 | `closeAll(Message[])` / `closeAll(Iterable<? extends Message>)` | static; 한 호출로 모든 part를 닫으며 개별 close 실패는 조용히 무시 |
 
-**완료 결과.** 모든 member는 동기다. `Message implements AutoCloseable`이다. 메시지를
-보내면 native frame이 socket으로 이전돼 이후 읽기에 대해 instance가 무효화된다 —
-보내지 않을 메시지를 해제하려면 `close()`를 사용한다. 범위를 벗어난 offset/length는
+**완료 결과.** 모든 메서드는 동기다. `Message`는 `AutoCloseable`을 구현한다.
+submit에서 메시지를 소비하거나 호출자가 `close()`를 호출하면
+`size()`와 `refCount()`는 0이고 payload 읽기는 빈 값을 반환한다. `copy()`와
+`clone()`은 새 빈 메시지를 반환한다. 닫힌 메시지를 다시 제출하면
+`ZlinkSubmitException`(`INVALID_HANDLE`)이 발생한다. 범위를 벗어난 offset이나 length는
 `IndexOutOfBoundsException`을 던진다.
 
 **선택 기준.** outbound payload를 만들 땐 크기 지정 생성자나 복사하는 `from(...)`

@@ -370,7 +370,7 @@ public sealed class test_request_reply
         Assert.NotNull(owned);
         Assert.Equal("pong-owned", owned!.GetString());
         owned.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => _ = owned.Size);
+        Assert.Equal(0, owned.Size);
         await serverTask;
     }
 

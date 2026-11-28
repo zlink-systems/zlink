@@ -51,7 +51,7 @@ final class ZLinkStreamReceiveDispatcher {
         this.actors = actors;
     }
 
-    void dispatch(byte[] encodedHeader, byte[] payload) {
+    void dispatch(ZLinkStreamTransportConnection owner, byte[] encodedHeader, byte[] payload) {
         ZLinkStreamWireProtocol.Header header = ZLinkStreamWireProtocol.decodeHeader(encodedHeader);
         if (header.kind() == ZLinkStreamWireProtocol.KIND_CONTROL) {
             if (DefaultZLinkStreamConnector.traceEnabled()) {
@@ -73,6 +73,13 @@ final class ZLinkStreamReceiveDispatcher {
             dispatchControl(header, payload);
             return;
         }
+        if (header.kind() == ZLinkStreamWireProtocol.KIND_SEND
+                && (ZLinkStreamAdmissionQueue.POSITION.equals(header.name())
+                        || ZLinkStreamAdmissionQueue.TICKET.equals(header.name()))) {
+            pendingRequests.queue.pushed(
+                    owner, header.name(), () -> payloadCodec.decode(header, payload));
+            return;
+        }
         long errorReceivedAt =
                 header.kind() == ZLinkStreamWireProtocol.KIND_ERROR
                         ? pendingRequests.nanoTime()
@@ -82,7 +89,10 @@ final class ZLinkStreamReceiveDispatcher {
         try {
             actor = header.actorSlot() == null ? null : actors.actor(header.actorSlot());
             if (header.kind() == ZLinkStreamWireProtocol.KIND_RESPONSE) {
-                completeResponse(header, payload);
+                if (!completeResponse(header, payload)) {
+                    pendingRequests.queue.response(
+                            owner, header.requestSeq(), () -> payloadCodec.decode(header, payload));
+                }
                 return;
             }
             decodedPayload = payloadCodec.decode(header, payload);
@@ -119,7 +129,7 @@ final class ZLinkStreamReceiveDispatcher {
                                     + header.correlationId());
         }
         if (header.kind() == ZLinkStreamWireProtocol.KIND_ERROR) {
-            dispatchError(header, decodedPayload, errorReceivedAt);
+            dispatchError(owner, header, decodedPayload, errorReceivedAt);
             return;
         }
         if (header.kind() == ZLinkStreamWireProtocol.KIND_SEND
@@ -183,8 +193,8 @@ final class ZLinkStreamReceiveDispatcher {
                 () -> "Ignored STREAM control name=" + name + " payloadBytes=" + payloadLength);
     }
 
-    private void completeResponse(ZLinkStreamWireProtocol.Header header, byte[] payload) {
-        pendingRequests.complete(
+    private boolean completeResponse(ZLinkStreamWireProtocol.Header header, byte[] payload) {
+        return pendingRequests.complete(
                 header.requestSeq(),
                 () ->
                         new ZLinkStreamEncodedPayload(
@@ -195,7 +205,10 @@ final class ZLinkStreamReceiveDispatcher {
     }
 
     private void dispatchError(
-            ZLinkStreamWireProtocol.Header header, byte[] payload, long receivedAt) {
+            ZLinkStreamTransportConnection owner,
+            ZLinkStreamWireProtocol.Header header,
+            byte[] payload,
+            long receivedAt) {
         ZLinkStreamError error;
         RuntimeException requestFailure;
         try {
@@ -212,12 +225,9 @@ final class ZLinkStreamReceiveDispatcher {
                     || message.textValue().isBlank()) {
                 throw new IOException("error payload requires string code and message fields");
             }
-            String retryAfter = header.metadata().get(ADMISSION_RETRY_AFTER);
-            if (retryAfter != null
-                    && header.requestSeq() != null
+            if (header.requestSeq() != null
                     && "unavailable".equals(code.textValue())
-                    && pendingRequests.admissionRejected(
-                            header.requestSeq(), retryAfter, receivedAt)) {
+                    && handleAdmissionError(header, receivedAt)) {
                 return;
             }
             requestFailure =
@@ -233,10 +243,31 @@ final class ZLinkStreamReceiveDispatcher {
                             "Remote error payload is invalid.",
                             requestFailure);
         }
+        var failure = new ZLinkStreamException(error);
         if (header.requestSeq() == null
-                || !pendingRequests.fail(header.requestSeq(), new ZLinkStreamException(error))) {
+                || (!pendingRequests.fail(header.requestSeq(), failure)
+                        && !pendingRequests.queue.rejectResponse(
+                                owner, header.requestSeq(), failure))) {
             errorPublisher.accept(error);
         }
+    }
+
+    private boolean handleAdmissionError(ZLinkStreamWireProtocol.Header header, long receivedAt) {
+        String queueRequired = header.metadata().get(ZLinkStreamAdmissionQueue.REQUIRED);
+        String retryAfter = header.metadata().get(ADMISSION_RETRY_AFTER);
+        long sequence = header.requestSeq();
+        if (queueRequired != null) {
+            if (!"1".equals(queueRequired) || retryAfter != null) {
+                return pendingRequests.fail(
+                        sequence,
+                        ZLinkStreamException.of(
+                                ZLinkStreamErrorCode.FRAME_DECODE_FAILED,
+                                "Invalid authentication admission metadata."));
+            }
+            return pendingRequests.queueRequired(sequence, receivedAt);
+        }
+        return retryAfter != null
+                && pendingRequests.admissionRejected(sequence, retryAfter, receivedAt);
     }
 
     private void dispatchToHandlers(

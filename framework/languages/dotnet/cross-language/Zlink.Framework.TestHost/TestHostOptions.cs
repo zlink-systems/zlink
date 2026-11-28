@@ -30,7 +30,11 @@ internal sealed record TestHostOptions(
     string? OutageControlPrefix = null,
     string? OutageRunId = null,
     string? OutageOrder = null,
-    string? StartFilePath = null
+    string? StartFilePath = null,
+    string? ActorDestroyScenario = null,
+    string? ActorDestroyRunId = null,
+    string? ActorDestroyControlPrefix = null,
+    string? AdvertiseHost = null
 )
 {
     public static TestHostOptions Parse(string[] args)
@@ -64,6 +68,10 @@ internal sealed record TestHostOptions(
 
     private sealed class ParsedTestHostOptions
     {
+        public string? ActorDestroyScenario { get; set; }
+        public string? ActorDestroyRunId { get; set; }
+        public string? ActorDestroyControlPrefix { get; set; }
+        public string? AdvertiseHost { get; set; }
         public string? OutageControlPrefix { get; set; }
         public string? OutageRunId { get; set; }
         public string? OutageOrder { get; set; }
@@ -99,6 +107,18 @@ internal sealed record TestHostOptions(
         {
             switch (argument)
             {
+                case "--advertise-host":
+                    AdvertiseHost = readValue();
+                    break;
+                case "--actor-destroy-scenario":
+                    ActorDestroyScenario = readValue();
+                    break;
+                case "--actor-destroy-run-id":
+                    ActorDestroyRunId = readValue();
+                    break;
+                case "--actor-destroy-control-prefix":
+                    ActorDestroyControlPrefix = readValue();
+                    break;
                 case "--outage-control-prefix":
                     OutageControlPrefix = readValue();
                     break;
@@ -221,7 +241,11 @@ internal sealed record TestHostOptions(
                 OutageControlPrefix,
                 OutageRunId,
                 OutageOrder,
-                StartFilePath
+                StartFilePath,
+                ActorDestroyScenario,
+                ActorDestroyRunId,
+                ActorDestroyControlPrefix,
+                AdvertiseHost
             );
         }
     }

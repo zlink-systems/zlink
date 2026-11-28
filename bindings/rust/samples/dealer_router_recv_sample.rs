@@ -9,8 +9,8 @@ fn main() {
     let ctx = Context::new().expect("context creation failed");
     let endpoint = sample_support::tcp_endpoint();
 
-    let router = ctx.router_socket().expect("router socket failed");
-    let dealer = ctx.dealer_socket().expect("dealer socket failed");
+    let router = ctx.create_router_socket().expect("router socket failed");
+    let dealer = ctx.create_dealer_socket().expect("dealer socket failed");
     let rid = RoutingId::from(b"dealer-node-7");
     dealer.set_routing_id(&rid).expect("set routing id failed");
 
@@ -51,7 +51,7 @@ fn main() {
         .expect("dealer recv failed");
     assert_eq!(response.parts()[0].as_str().unwrap(), "pong");
     println!(
-        "[dealer-router/recv] send: \"ping\" → recv: \"{}\"",
+        "[dealer-router/recv] send: \"ping\" -> recv: \"{}\"",
         response.parts()[0].as_str().unwrap()
     );
     // --8<-- [end:doc]

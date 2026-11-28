@@ -94,6 +94,7 @@ final class ZLinkRemoteJoinedActorChannelHeaderTest {
                                         target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH)
                                                 .endpoint()),
                                 sourceBackend)) {
+            assertTrue(target.isReady());
             assertTrue(source.isReady());
             await(target.spotManager().getOrCreate(SPOT_ID, "table").submit());
             await(target.actorManager().create(ACTOR_ID, "player").submit());

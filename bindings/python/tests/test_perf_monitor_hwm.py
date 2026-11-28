@@ -13,27 +13,27 @@ class PerfMonitorHwmTests(unittest.TestCase):
     def test_resolves_exact_nonnegative_byte_values(self):
         self.assertEqual(resolve_multi_monitor_hwm_bytes({}), 4_096_000)
         self.assertEqual(
-            resolve_multi_monitor_hwm_bytes({"PERF_MONITOR_HWM": "123"}),
+            resolve_multi_monitor_hwm_bytes({"PERF_MONITOR_HWM_BYTES": "123"}),
             123,
         )
         self.assertEqual(
             resolve_multi_monitor_hwm_bytes(
                 {
-                    "PERF_MULTI_MONITOR_HWM": "456",
-                    "PERF_MONITOR_HWM": "123",
+                    "PERF_MULTI_MONITOR_HWM_BYTES": "456",
+                    "PERF_MONITOR_HWM_BYTES": "123",
                 }
             ),
             456,
         )
         self.assertEqual(
-            resolve_multi_monitor_hwm_bytes({"PERF_MULTI_MONITOR_HWM": "0"}),
+            resolve_multi_monitor_hwm_bytes({"PERF_MULTI_MONITOR_HWM_BYTES": "0"}),
             0,
         )
         self.assertEqual(
             resolve_multi_monitor_hwm_bytes(
                 {
-                    "PERF_MULTI_MONITOR_HWM": "invalid",
-                    "PERF_MONITOR_HWM": "789",
+                    "PERF_MULTI_MONITOR_HWM_BYTES": "invalid",
+                    "PERF_MONITOR_HWM_BYTES": "789",
                 }
             ),
             789,

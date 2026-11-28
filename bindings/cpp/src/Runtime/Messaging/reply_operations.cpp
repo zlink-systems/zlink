@@ -1,12 +1,16 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
-#include <zlink/Contracts/Messaging/operation_contracts.hpp>
-#include <Runtime/Messaging/received_access.hpp>
-#include "operation_detail.hpp"
-#include "operation_submit.hpp"
 #include "operation_state.hpp"
+#include "received_access.hpp"
+#include "../Native/native_message_parts.hpp"
+
+#include <zlink/Contracts/Errors/errors.hpp>
+#include <zlink/Contracts/Messaging/operation_contracts.hpp>
 
 #include <cerrno>
+#include <memory>
+#include <optional>
+#include <utility>
 
 namespace zlink
 {
@@ -40,16 +44,14 @@ void submit_raw_reply (detail::operation_state_t &state_)
       state_.message.parts, [&] (zlink_msg_t *parts_, size_t part_count_) {
           return zlink_reply (call->handle (), &first_rid, token, parts_, part_count_);
       });
-    if (rc == -1) {
-        detail::restore_send_parts_to_sources (state_, state_.message.parts);
-        throw last_error ();
-    }
+    if (rc == ZLINK_SUBMIT_OK)
+        return;
 
-    const submit_result_t result = static_cast<submit_result_t> (rc);
-    if (result != submit_result_t::ok) {
-        detail::restore_send_parts_to_sources (state_, state_.message.parts);
-        throw submit_error_t (result, zlink_errno ());
-    }
+    const int submit_errno = zlink_errno ();
+    detail::restore_send_parts_to_sources (state_, state_.message.parts);
+    if (rc == -1)
+        throw error_t (submit_errno);
+    throw submit_error_t (static_cast<submit_result_t> (rc), submit_errno);
 }
 
 } // namespace

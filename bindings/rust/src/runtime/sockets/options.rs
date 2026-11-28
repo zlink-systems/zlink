@@ -4,10 +4,17 @@ use crate::contracts::errors::errors::ConfigError;
 use crate::contracts::messaging::message::{Message, RoutingId};
 use crate::contracts::sockets::dealer_socket::DealerSocket;
 use crate::internal::SocketStorage;
-use crate::runtime::handles::ctx::duration_to_millis;
+use crate::runtime::errors::native_errors::config_validation_error;
+use crate::runtime::handles::ctx::{duration_from_millis, duration_to_millis};
 use crate::runtime::native::ffi;
 
 impl SocketStorage {
+    pub(crate) fn mandatory(&self) -> Result<bool, ConfigError> {
+        Ok(self.get_router_i32_opt(ffi::zlink_router_option_t::ZLINK_ROUTER_OPT_MANDATORY)? != 0)
+    }
+    pub(crate) fn probe(&self) -> Result<bool, ConfigError> {
+        Ok(self.get_router_i32_opt(ffi::zlink_router_option_t::ZLINK_ROUTER_OPT_PROBE)? != 0)
+    }
     pub(crate) fn set_mandatory(&self, enabled: bool) -> Result<(), ConfigError> {
         self.set_router_bool_opt(
             ffi::zlink_router_option_t::ZLINK_ROUTER_OPT_MANDATORY,
@@ -27,12 +34,15 @@ impl SocketStorage {
         self.get_router_u32_opt(ffi::zlink_router_option_t::ZLINK_ROUTER_OPT_WEIGHT)
     }
     pub(crate) fn set_weight(&self, value: u32) -> Result<(), ConfigError> {
-        self.set_router_u32_opt(ffi::zlink_router_option_t::ZLINK_ROUTER_OPT_WEIGHT, value)
+        self.set_router_u32_opt(
+            ffi::zlink_router_option_t::ZLINK_ROUTER_OPT_WEIGHT,
+            validated_weight(value)?,
+        )
     }
     pub(crate) fn request_timeout(&self) -> Result<Duration, ConfigError> {
         let ms = self
             .get_router_i32_opt(ffi::zlink_router_option_t::ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS)?;
-        Ok(Duration::from_millis(ms as u64))
+        duration_from_millis(ms)
     }
     pub(crate) fn set_request_timeout(&self, value: Duration) -> Result<(), ConfigError> {
         let millis = duration_to_millis(value)?;
@@ -44,6 +54,18 @@ impl SocketStorage {
 }
 
 impl DealerSocket {
+    pub(crate) fn probe(&self) -> Result<bool, ConfigError> {
+        Ok(self
+            .inner
+            .get_dealer_i32_opt(ffi::zlink_dealer_option_t::ZLINK_DEALER_OPT_PROBE)?
+            != 0)
+    }
+    pub(crate) fn request_timeout(&self) -> Result<Duration, ConfigError> {
+        let ms = self
+            .inner
+            .get_dealer_i32_opt(ffi::zlink_dealer_option_t::ZLINK_DEALER_OPT_REQUEST_TIMEOUT_MS)?;
+        duration_from_millis(ms)
+    }
     pub(crate) fn set_probe(&self, enabled: bool) -> Result<(), ConfigError> {
         crate::runtime::sockets::socket::dealer_inner(self)
             .set_dealer_bool_opt(ffi::zlink_dealer_option_t::ZLINK_DEALER_OPT_PROBE, enabled)
@@ -53,8 +75,10 @@ impl DealerSocket {
             .get_dealer_u32_opt(ffi::zlink_dealer_option_t::ZLINK_DEALER_OPT_WEIGHT)
     }
     pub(crate) fn set_weight(&self, value: u32) -> Result<(), ConfigError> {
-        crate::runtime::sockets::socket::dealer_inner(self)
-            .set_dealer_u32_opt(ffi::zlink_dealer_option_t::ZLINK_DEALER_OPT_WEIGHT, value)
+        crate::runtime::sockets::socket::dealer_inner(self).set_dealer_u32_opt(
+            ffi::zlink_dealer_option_t::ZLINK_DEALER_OPT_WEIGHT,
+            validated_weight(value)?,
+        )
     }
     pub(crate) fn set_request_timeout(&self, value: Duration) -> Result<(), ConfigError> {
         let millis = duration_to_millis(value)?;
@@ -126,4 +150,10 @@ impl SocketStorage {
     pub(crate) fn sub_topics_count(&self) -> Result<i32, ConfigError> {
         self.get_sub_int_opt(ffi::zlink_sub_option_t::ZLINK_SUB_OPT_TOPICS_COUNT)
     }
+}
+
+fn validated_weight(weight: u32) -> Result<u32, ConfigError> {
+    (weight <= 10_000)
+        .then_some(weight)
+        .ok_or_else(config_validation_error)
 }

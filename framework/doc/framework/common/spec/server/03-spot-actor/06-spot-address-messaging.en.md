@@ -629,7 +629,7 @@ decided again while it waits on the steps of the Close in progress. The registra
 Close's result is settled. If the joined caller's
 cancellation is observed before the shared result is settled, that call ends as cancelled and the Close in
 progress is unaffected. An internal reason a lifecycle turn couldn't resume (the Spot is closed) isn't the
-joined call's result; a joined call ends only with the shared result or its own cancellation.
+joined call's result; a joined call ends only with the shared result or its own cancellation. Own cancellation exists only in languages whose public Close accepts a caller cancellation (a cancellation token, signal and so on). In a language whose public Close does not (C++ `spot_context_t::close()`), a joined call ends only with the shared result.
 
 **A context Close requested before Ready starts after Ready.** Handlers and timer callbacks don't run
 before Ready ([Spot timer §1](10-spot-timer.en.md#1-timer-generation-and-cancel)), so such a request only comes from
