@@ -49,7 +49,10 @@ import type { Type } from '../../contracts/Common/CoreTypes';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
 import { requireMessageFlowLogMode } from '../../contracts/Configuration/DiagnosticsValidation';
-import { DEFAULT_ACTIVATION_CONCURRENCY_LIMIT } from '../../contracts/Configuration/InternalDefaults';
+import {
+  DEFAULT_ACTIVATION_CONCURRENCY_LIMIT,
+  DEFAULT_HOST_CONTROL_TIMEOUT_MS
+} from '../../contracts/Configuration/InternalDefaults';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import {
   ZLinkDispatchErrorSurface,
@@ -244,7 +247,6 @@ import { decodeRemoteActorPacketRelay } from '../spots/spot-remote-route-codec';
 import { decodeStreamHeader } from '../streams/protocol';
 
 const HOST_SHUTDOWN_POLL_INTERVAL_MS = 100;
-const DEFAULT_HOST_CONTROL_TIMEOUT_MS = 30_000;
 
 export interface ZLinkFrameworkRuntimeLifecycle {
   readonly isStarted: boolean;

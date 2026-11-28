@@ -10,6 +10,9 @@ export const RELOCATION_STATE_CHUNK_DATA_MAX_BYTES = 67_108_864;
 /** Default MeshNode pending activation limit (spec 03-mesh-node §5.1). */
 export const DEFAULT_ACTIVATION_CONCURRENCY_LIMIT = 128;
 
+/** Default timeout for host control operations, including Stop. */
+export const DEFAULT_HOST_CONTROL_TIMEOUT_MS = 30_000;
+
 /** Defaults shared by registration normalization and the runtime worker pool. */
 export const DEFAULT_WORKER_MIN_THREADS = 0;
 export const DEFAULT_WORKER_IDLE_TIMEOUT_MS = 30_000;

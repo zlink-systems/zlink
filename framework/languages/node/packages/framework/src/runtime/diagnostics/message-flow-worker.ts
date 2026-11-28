@@ -7,7 +7,7 @@ import {
   type Tracer,
   type Counter
 } from '@opentelemetry/api';
-import { logs, SeverityNumber, type Logger } from '@opentelemetry/api-logs';
+import { logs, SeverityNumber, type Logger, type LogRecord } from '@opentelemetry/api-logs';
 import { initialLoggerProvider } from './message-flow-bootstrap';
 import {
   TelemetryState,
@@ -62,28 +62,16 @@ function failed(
   }
 }
 
-function deliver(record: ZLinkTelemetryRecord): void {
+function deliver(record: ZLinkTelemetryRecord | LogRecord): void {
+  const isMessageFlow = 'eventId' in record;
   if (logger !== undefined) {
     try {
-      const severity =
-        record.severity === 'warning'
-          ? 'WARN'
-          : record.eventId === DISPATCH_ERROR_EVENT_ID
-            ? 'ERROR'
-            : 'INFO';
-      logger.emit({
-        eventName: record.eventId,
-        timestamp: record.timestamp,
-        severityNumber: SeverityNumber[severity],
-        severityText: severity,
-        body: structuredLogBody(record),
-        attributes: structuredLogAttributes(record)
-      });
+      logger.emit(isMessageFlow ? messageFlowLog(record) : record);
     } catch (error) {
       failed(TelemetryCounter.LoggerFailures, error);
     }
   }
-  if (tracer === undefined) return;
+  if (!isMessageFlow || tracer === undefined) return;
   try {
     const span = tracer.startSpan(record.eventId, { attributes: traceAttributes(record) });
     if (record.eventId === DISPATCH_ERROR_EVENT_ID) {
@@ -93,6 +81,23 @@ function deliver(record: ZLinkTelemetryRecord): void {
   } catch (error) {
     failed(TelemetryCounter.TraceFailures, error);
   }
+}
+
+function messageFlowLog(record: ZLinkTelemetryRecord): LogRecord {
+  const severity =
+    record.severity === 'warning'
+      ? 'WARN'
+      : record.eventId === DISPATCH_ERROR_EVENT_ID
+        ? 'ERROR'
+        : 'INFO';
+  return {
+    eventName: record.eventId,
+    timestamp: record.timestamp,
+    severityNumber: SeverityNumber[severity],
+    severityText: severity,
+    body: structuredLogBody(record),
+    attributes: structuredLogAttributes(record)
+  };
 }
 
 process.stderr.once('error', () => Atomics.store(counters, TelemetryCounter.FallbackFailures, 1n));
@@ -123,10 +128,11 @@ try {
 // an ERROR-only processor may reject an unspecified-severity enabled() query.
 Atomics.store(state, TelemetryState.Enabled, hasLoggerProvider || hasTraceProvider ? 1 : 0);
 parentPort!.postMessage(TELEMETRY_WORKER_AVAILABLE);
-parentPort!.on('message', (batch: ZLinkTelemetryDelivery<ZLinkTelemetryRecord>[]) => {
+parentPort!.on('message', (batch: ZLinkTelemetryDelivery<ZLinkTelemetryRecord | LogRecord>[]) => {
   for (const item of batch) {
     Atomics.sub(state, TelemetryState.Pending, 1);
-    if (Atomics.load(new Int32Array(item.lease), 0) === 0) deliver(item.record);
+    if (item.lease === undefined || Atomics.load(new Int32Array(item.lease), 0) === 0)
+      deliver(item.record);
   }
   const dropped = Atomics.load(counters, TelemetryCounter.Overflow);
   if (dropped !== reportedOverflow) {

@@ -5,6 +5,8 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { startupClaim } = require('./fixtures/startup-claim');
+const deferred = require('./helpers/deferred.cjs');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist');
 const internal = require('../../packages/framework/dist/internal');
@@ -442,6 +444,105 @@ test('location runtime preserves claim conflict when confirmation fails', async 
   }
 });
 
+test('direct startup cancellation releases a claim committed after the renew timeout', async (t) => {
+  const store = testInMemoryLocationStore();
+  const claim = startupClaim(t, store);
+  const cancellation = new AbortController();
+  const stop = new AbortController();
+  const timers = [];
+  const runtime = runtimeFor(store, { ownerLeaseStore: claim.leaseStore, timers });
+  const starting = assert.rejects(runtime.start(rid('late-direct-claim'), cancellation.signal), {
+    name: 'AbortError'
+  });
+  await claim.started;
+  cancellation.abort();
+  await claim.cancelled;
+  const stopping = runtime.stop(stop.signal);
+  const stopped = Promise.allSettled([stopping]);
+  claim.commitAfterRenewTimeout();
+  await starting;
+
+  assert.deepEqual(claim.calls, ['read', 'release']);
+  assert.deepEqual(await stopped, [{ status: 'fulfilled', value: undefined }]);
+  assert.equal(timers.length, 0);
+  assert.equal(claim.diagnostics.length, 0);
+  assert.equal((await store.readOwnerLease(runtime.ownerId)).kind, 'missing');
+});
+
+test('direct startup claim cleanup abandons a pending claim when the Stop deadline expires', async (t) => {
+  const store = testInMemoryLocationStore();
+  const claim = startupClaim(t, store);
+  const cancellation = new AbortController();
+  const stop = new AbortController();
+  const sweep = t.mock.method(store, 'removeAllByOwner');
+  const runtime = runtimeFor(store, { ownerLeaseStore: claim.leaseStore });
+  const starting = assert.rejects(runtime.start(rid('expired-direct-claim'), cancellation.signal), {
+    name: 'AbortError'
+  });
+  await claim.started;
+  cancellation.abort();
+  await claim.cancelled;
+  const deadline = new Error('Stop deadline exceeded');
+  const stopping = assert.rejects(runtime.stop(stop.signal), {
+    name: 'ZLinkOwnerCleanupError',
+    cause: deadline
+  });
+  stop.abort(deadline);
+  await starting;
+  await stopping;
+  await claim.commitAfterRenewTimeout();
+
+  assert.deepEqual(claim.calls, []);
+  assert.equal(sweep.mock.callCount(), 0);
+  assert.equal(claim.diagnostics.length, 1);
+  assert.equal(claim.diagnostics[0].attributes.owner_id, runtime.ownerId);
+  assert.equal((await store.readOwnerLease(runtime.ownerId)).kind, 'found');
+});
+
+test(
+  'direct stop without a signal uses the default deadline for startup claim cleanup',
+  { timeout: 1_000 },
+  async (t) => {
+    const store = testInMemoryLocationStore();
+    const claim = startupClaim(t, store);
+    const cancellation = new AbortController();
+    const timers = [];
+    const clearedTimers = [];
+    const sweep = t.mock.method(store, 'removeAllByOwner');
+    const runtime = runtimeFor(store, {
+      ownerLeaseStore: claim.leaseStore,
+      timers,
+      clearTimer: (handle) => clearedTimers.push(handle)
+    });
+    const starting = assert.rejects(
+      runtime.start(rid('expired-default-direct-claim'), cancellation.signal),
+      { name: 'AbortError' }
+    );
+    await claim.started;
+    cancellation.abort();
+    await claim.cancelled;
+
+    const testTimeoutGuard = setTimeout(() => {}, 2_000);
+    t.after(() => clearTimeout(testTimeoutGuard));
+    const stopping = runtime.stop();
+    timers.find(({ delayMs }) => delayMs === 30_000)?.callback();
+    await starting;
+    const [stopped] = await Promise.allSettled([stopping]);
+
+    assert.equal(stopped.status, 'rejected');
+    assert.equal(stopped.reason.name, 'ZLinkOwnerCleanupError');
+    assert.equal(stopped.reason.cause?.name, 'DeadlineExceededError');
+    assert.deepEqual(claim.calls, []);
+    assert.equal(sweep.mock.callCount(), 0);
+    assert.equal(claim.diagnostics.length, 1);
+    assert.equal(claim.diagnostics[0].eventName, 'location.startup_claim_cleanup_abandoned');
+    assert.equal(claim.diagnostics[0].attributes.owner_id, runtime.ownerId);
+    assert.deepEqual(timers.map(({ delayMs }) => delayMs), [30_000]);
+    assert.deepEqual(clearedTimers, [0]);
+    assert.equal((await store.readOwnerLease(runtime.ownerId)).kind, 'missing');
+  }
+);
+
 test('location runtime releases a claim confirmed after startup cancellation without starting heartbeat', async () => {
   const store = testInMemoryLocationStore();
   const timers = [];
@@ -492,13 +593,15 @@ test('location runtime releases a claim confirmed after startup cancellation wit
   assert.deepEqual(await store.readOwnerLease('owner-startup-cancel'), { kind: 'missing' });
 });
 
-test('location runtime preserves cancellation when confirmed-claim release does not respond', async () => {
+test('location runtime preserves startup cancellation when Stop expires during release', async () => {
   const store = testInMemoryLocationStore();
-  const controller = new AbortController();
-  let claimStarted;
+  const cancellation = new AbortController();
+  const stop = new AbortController();
+  const started = deferred();
+  const releasing = deferred();
   const leaseStore = {
     async claimOwnerLease(ownerId, leaseTtlMs, signal) {
-      claimStarted?.();
+      started.resolve();
       await new Promise((_resolve, reject) => {
         signal.addEventListener(
           'abort',
@@ -513,26 +616,29 @@ test('location runtime preserves cancellation when confirmed-claim release does 
     readOwnerLease: store.readOwnerLease.bind(store),
     renewOwnerLease: store.renewOwnerLease.bind(store),
     async releaseOwnerLease() {
+      releasing.resolve();
       return await new Promise(() => {});
     }
   };
   const runtime = runtimeFor(store, {
     ownerId: 'owner-cancel-release-failure',
-    ownerLeaseStore: leaseStore,
-    locationOptions: { ownerLeaseRenewTimeoutMs: 20 }
+    ownerLeaseStore: leaseStore
   });
-  const started = new Promise((resolve) => {
-    claimStarted = resolve;
-  });
-  const keepAlive = setTimeout(() => {}, 100);
-  const starting = runtime.start(rid('node-cancel-release-failure'), controller.signal);
-  await started;
-  controller.abort();
+  const starting = assert.rejects(
+    runtime.start(rid('node-cancel-release-failure'), cancellation.signal),
+    { name: 'AbortError' }
+  );
+  await started.promise;
+  cancellation.abort();
+  await releasing.promise;
+  const deadline = new Error('Stop deadline exceeded');
+  const stopping = assert.rejects(runtime.stop(stop.signal), { cause: deadline });
+  stop.abort(deadline);
 
-  await assert.rejects(starting, (error) => error?.name === 'AbortError');
-  assert.match(runtime.lastError, /Owner lease renewal exceeded/u);
+  await starting;
+  await stopping;
+  assert.equal(runtime.lastError, deadline.message);
   assert.equal(runtime.currentOwnerToken, undefined);
-  clearTimeout(keepAlive);
 });
 
 test('location runtime records a stop-race claim release failure', async () => {

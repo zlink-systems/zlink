@@ -1,4 +1,5 @@
 const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
+const { startupClaim } = require('./fixtures/startup-claim');
 const { createMeshHost } = require('./fixtures/mesh-host');
 const { createRelayHost } = require('./fixtures/relay-host');
 const { createSpotNodeLocationAutoConnectContext } = require('../../packages/framework/dist/runtime/spots/spot-node-autoconnect');
@@ -194,6 +195,46 @@ test('framework runtime host uses the explicit location store for Actor lifecycl
   assert.equal(spotOptions.locationLifecycle, actorOptions.locationLifecycle);
   assert.equal(typeof spotOptions.spotRouteResolver?.resolve, 'function');
 });
+
+for (const deadlineExpires of [false, true]) {
+  test(`host startup claim cleanup observes the Stop deadline (expires: ${deadlineExpires})`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+    const store = new framework.ZLinkInMemoryLocationStore(() => new Date(), () => performance.now(), 0);
+    const claim = startupClaim(t, store);
+    const host = new framework.ZLinkFrameworkRuntimeHost({
+      registration: framework.createFrameworkRegistration({
+        locations: { storeInstance: new framework.ZLinkInMemoryProviderLocationStore() }
+      })
+    }, { backendAdapterFactory: fakeBackendAdapterFactory([], rid('late-host-claim')) });
+    const runtime = host.locationOwner.ensureRuntime(undefined);
+    const stores = host.locationOwner.currentStores;
+    stores.ownerLeaseStore = claim.leaseStore;
+    const sweep = t.mock.method(stores.locationStore, 'removeAllByOwner');
+    const starting = assert.rejects(host.start(), { name: 'AbortError' });
+    await claim.started;
+    const stopping = host.shutdown({ deadlineMs: 10_000 });
+    await claim.cancelled;
+
+    if (deadlineExpires) t.mock.timers.tick(10_000);
+    else claim.commitAfterRenewTimeout();
+    await starting;
+    const result = await stopping;
+    if (deadlineExpires) await claim.commitAfterRenewTimeout();
+    t.mock.timers.tick(5000);
+    await Promise.resolve();
+    assert.equal(result.outcome, deadlineExpires
+      ? framework.ZLinkFrameworkTerminationOutcome.ForceStopped
+      : framework.ZLinkFrameworkTerminationOutcome.Stopped);
+    if (deadlineExpires) {
+      assert.equal(result.reason, framework.ZLinkFrameworkTerminationReason.DeadlineExceeded);
+    }
+    assert.deepEqual(claim.calls, deadlineExpires ? [] : ['read', 'release']);
+    assert.equal(sweep.mock.callCount(), 0);
+    assert.equal(claim.diagnostics.length, deadlineExpires ? 1 : 0);
+    if (deadlineExpires) assert.equal(claim.diagnostics[0].attributes.owner_id, runtime.ownerId);
+    assert.equal((await store.readOwnerLease(runtime.ownerId)).kind, deadlineExpires ? 'found' : 'missing');
+  });
+}
 
 test('host shutdown cancels startup and releases a provider claim committed after cancellation', async () => {
   const calls = [];

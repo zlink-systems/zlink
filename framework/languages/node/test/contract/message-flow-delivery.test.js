@@ -23,8 +23,10 @@ const hostPath = join(root, 'packages/framework/src/runtime/host/index.ts');
 const hostSource = ts.createSourceFile(hostPath, readFileSync(hostPath, 'utf8'), ts.ScriptTarget.Latest, true);
 const hostClass = hostSource.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'ZLinkFrameworkRuntimeHost');
 const stopMethods = hostClass.members.filter(node => ['stop', 'teardownRuntime', 'teardown'].includes(node.name?.getText(hostSource)));
-const timeoutConstant = hostSource.statements.find(node => ts.isVariableStatement(node)
-  && node.declarationList.declarations.some(value => value.name.getText(hostSource) === 'DEFAULT_HOST_CONTROL_TIMEOUT_MS'));
+const defaultsPath = join(root, 'packages/framework/src/contracts/Configuration/InternalDefaults.ts');
+const defaultsSource = ts.createSourceFile(defaultsPath, readFileSync(defaultsPath, 'utf8'), ts.ScriptTarget.Latest, true);
+const timeoutConstant = defaultsSource.statements.find(node => ts.isVariableStatement(node)
+  && node.declarationList.declarations.some(value => value.name.getText(defaultsSource) === 'DEFAULT_HOST_CONTROL_TIMEOUT_MS'));
 const errorsPath = join(root, 'packages/framework/src/contracts/Errors/ZLinkFrameworkException.ts');
 const errorsOutput = join(runDir, 'host-stop-errors.cjs');
 const compilerOptions = { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS };
@@ -36,14 +38,14 @@ const { retireTelemetryLease } = require(${JSON.stringify(join(moduleDir, 'messa
 const { RuntimeDisposal } = require(${JSON.stringify(join(root, 'packages/framework/dist/runtime/disposal.js'))});
 const { ZLinkFrameworkTerminationOutcome, ZLinkFrameworkTerminationReason } = require(${JSON.stringify(join(root, 'packages/framework/dist/contracts/RouteMesh/RuntimeTopology.js'))});
 const { ZLinkFrameworkRuntimeState } = require(${JSON.stringify(join(root, 'packages/framework/dist/contracts/Locations/Rows.js'))});
-${timeoutConstant.getText(hostSource)}
+${timeoutConstant.getText(defaultsSource)}
 class HostStopSourceProof { ${stopMethods.map(method => method.getText(hostSource)).join('\n')} }
 module.exports = HostStopSourceProof;
 `, { compilerOptions }).outputText);
 
 for (const mode of ['bootstrap', 'none', 'main-only', 'logger', 'trace', 'both', 'false-enabled', 'registered-noop',
   'error-filter', 'blocked', 'blocked-trace', 'overflow-width', 'failures', 'fallback-failure', 'logger-init-failure', 'trace-init-failure', 'lease-renewal',
-  'throwing-preload', 'worker-start-failure', 'worker-exit', 'role-counter-width', 'common-helper']) {
+  'throwing-preload', 'worker-start-failure', 'worker-exit', 'role-counter-width', 'common-helper', 'process-diagnostic']) {
   test(`message-flow process delivery: ${mode}`, () => {
     const result = spawnSync(process.execPath, ['--require', fixture, scenario], {
       cwd: root,
