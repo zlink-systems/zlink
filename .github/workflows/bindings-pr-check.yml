@@ -183,6 +183,10 @@ jobs:
               exit 1
             fi
           done
+          if ! pkg-config --exists openssl; then
+            echo "::error::OpenSSL development files (openssl.pc) are missing on the self-hosted runner."
+            exit 1
+          fi
 
       - name: Prepare verified Linux x64 Core release
         if: matrix.scope != 'docs' && needs.changes.outputs[matrix.scope] == 'true'
