@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.binding;
 
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -1200,9 +1201,6 @@ final class ZLinkJavaRawServicePortContractTest {
         }
     }
 
-    private static void assertConsumed(Message message) {
-        assertThrows(IllegalStateException.class, message::refCount);
-    }
 
     private static void awaitInbound(
             ZLinkJavaRawServicePort port, RouterSocket router, int expected, long deadline)

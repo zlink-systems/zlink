@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.binding;
 
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
 import static org.junit.jupiter.api.Assertions.*;
 
 import jdk.jfr.Recording;
@@ -76,7 +77,7 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                 var outputs = new Message[SENDS];
                 for (int i = 0; i < 200; i++) {
                     reject(prepare(runtime, direct));
-                    assertThrows(IllegalStateException.class, serializer.output::refCount);
+                    assertConsumed(serializer.output);
                 }
                 long[] control =
                         tuples(
@@ -107,7 +108,7 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                     for (int i = 0; i < SENDS; i++)
                         if (calls[i] != null) {
                             reject(calls[i]);
-                            assertThrows(IllegalStateException.class, outputs[i]::refCount);
+                            assertConsumed(outputs[i]);
                         }
                 }
                 System.out.printf(
@@ -133,9 +134,7 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                                 () -> {
                                     for (int i = 0; i < SENDS; i++) {
                                         reject(prepare(runtime, direct));
-                                        assertThrows(
-                                                IllegalStateException.class,
-                                                serializer.output::refCount);
+                                        assertConsumed(serializer.output);
                                     }
                                 });
                 System.out.printf(

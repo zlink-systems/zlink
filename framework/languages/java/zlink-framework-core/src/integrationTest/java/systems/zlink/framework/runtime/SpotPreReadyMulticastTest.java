@@ -306,10 +306,9 @@ final class SpotPreReadyMulticastTest {
         assertFalse(parts.isEmpty());
         spotQueue().awaitQuiescence().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
         for (Message part : parts) {
-            assertThrows(
-                    IllegalStateException.class,
-                    part::refCount,
-                    "retained native frame was not released");
+            // a consumed Message reads as empty (bindings/doc/spec/README.ko.md:1203)
+            assertEquals(0, part.size(), "retained native frame was not released");
+            assertEquals(0, part.refCount(), "retained native frame was not released");
         }
     }
 
