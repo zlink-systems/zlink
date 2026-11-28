@@ -9,16 +9,23 @@ from perf_metrics import HEADER_MAGIC, HEADER_SIZE, decode_header
 
 MAX_BURST_PER_SENDER = 64
 SETTLE_SECONDS = 0.5
+CATCH_UP_WINDOW_SECONDS = 0.5
 RECEIVE_QUANTUM = 1
+RECHECK_BELOW_MS = 1
+MAX_WAIT_MS = 50
 PHASE_WARMUP = 0
 PHASE_ACTIVE = 1
 PHASE_LATENCY = 3
 NS_PER_SECOND = 1_000_000_000
+NS_PER_MS = 1_000_000
 
 
 def wait_ms(now, until):
     remaining_ns = round(until * NS_PER_SECOND) - round(now * NS_PER_SECOND)
-    return min(50, max(0, remaining_ns // 1_000_000))
+    remaining_ms = remaining_ns // NS_PER_MS
+    if remaining_ms < RECHECK_BELOW_MS:
+        return 0
+    return min(MAX_WAIT_MS, remaining_ms)
 
 
 def active_receive(observed_ns, deadline_ns):
@@ -83,12 +90,12 @@ class CatchUp:
         self.start_in_flight = 0
         self.in_flight = 0
 
-    def observe(self, elapsed, received, scheduled):
-        if not received:
+    def observe(self, elapsed, received, scheduled, target_rate):
+        if target_rate <= 0 or not received:
             return False
         self.in_flight = max(0, scheduled - min(received))
         if self.received and self.in_flight <= self.start_in_flight:
-            if elapsed - self.start < SETTLE_SECONDS:
+            if elapsed - self.start < CATCH_UP_WINDOW_SECONDS:
                 return False
             expected = scheduled - self.scheduled
             if all(

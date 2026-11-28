@@ -161,7 +161,9 @@ def main(argv=None):
                         if schedule is not None and epoch is not None and not caught_up:
                             elapsed = (time.monotonic_ns() - epoch) / NS_PER_SECOND
                             scheduled = schedule.scheduled(elapsed)
-                            caught_up = elapsed <= duration and tracker.observe(elapsed, paced, scheduled)
+                            caught_up = elapsed <= duration and tracker.observe(
+                                elapsed, paced, scheduled, schedule.rate
+                            )
                             if elapsed >= next_progress:
                                 floor = max(0, scheduled - min(paced))
                                 inflight_floor = floor if inflight_floor is None else min(inflight_floor, floor)
