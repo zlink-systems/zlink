@@ -103,10 +103,12 @@ class InstanceSpotHostRelocation : public ::testing::Test
             stable_type,
             [this, rid] (fw::instance_spot_context_t context) {
                 auto spot = std::make_shared<instance_t> (std::move (context), restores);
-                if (std::string_view (rid) == source_rid)
+                if (std::string_view (rid) == source_rid) {
                     source_spot = spot;
-                else
+                } else {
+                    ++target_activations;
                     spot->restoring = restoring;
+                }
                 return spot;
             },
             [] (auto &factory) { factory.template preserve_state_with<instance_adapter_t> (); });
@@ -159,6 +161,7 @@ class InstanceSpotHostRelocation : public ::testing::Test
     }
 
     std::atomic<unsigned> restores = 0;
+    std::atomic<unsigned> target_activations = 0;
     std::function<fw::task_t<void> ()> restoring;
     std::shared_ptr<instance_t> source_spot;
     std::shared_ptr<fw::runtime::in_memory_location_store_t> locations =
@@ -355,6 +358,53 @@ TEST_F (InstanceSpotHostRelocation, RestoresHeldDirectMessagesAndLogicalTimerAft
     ASSERT_TRUE (relocated);
     EXPECT_EQ (target_native->objects ().timers (*relocated),
                std::vector<stateful::logical_timer_t>{timer});
+}
+
+TEST_F (InstanceSpotHostRelocation, DoesNotActivateAnInstanceMissingFromTheSourceRegistry)
+{
+    ASSERT_NO_FATAL_FAILURE (start_source ());
+    ASSERT_NO_FATAL_FAILURE (start_target ());
+    const auto before = std::get<fw::authority_snapshot_t> (read_authority ());
+    ASSERT_EQ (before.allocation.target.node_rid.value (), source_rid);
+
+    const auto source_runtime =
+      fw::detail::spot_node_runtime_t::from (source.app.advanced ().zlink (), mesh_name);
+    const auto target_runtime =
+      fw::detail::spot_node_runtime_t::from (target.app.advanced ().zlink (), mesh_name);
+    ASSERT_TRUE (source_runtime);
+    ASSERT_TRUE (target_runtime);
+    const auto source_native = source_runtime->native_node ();
+    const auto target_native = target_runtime->native_node ();
+    ASSERT_TRUE (source_native);
+    ASSERT_TRUE (target_native);
+
+    // Remove only the native record, leaving the host inventory and Store authority intact.
+    const auto owner = source_native->resolve_spot_async (spot_id).result ().value ();
+    ASSERT_TRUE (owner);
+    const auto [error, removed] = source_native->objects ().close_spot (*owner);
+    ASSERT_EQ (error, stateful::stateful_error_t::none);
+    ASSERT_TRUE (removed);
+    ASSERT_FALSE (source_native->resolve_spot_async (spot_id).result ().value ());
+    const auto inventory = source_runtime->read_relocation_units ().result ().value ();
+    ASSERT_EQ (inventory.spots.size (), 1u);
+    ASSERT_EQ (inventory.spots.front ().spot_id, spot_id);
+    ASSERT_EQ (inventory.spots.front ().kind, fw::placement_object_kind_t::instance_spot);
+    ASSERT_EQ (inventory.spots.front ().object_generation, before.object_generation);
+
+    const auto moved =
+      source.app
+        .relocate ({.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget})
+        .result ();
+    ASSERT_TRUE (moved);
+    EXPECT_EQ (moved.value ().outcome, fw::relocation_outcome_t::blocked);
+    EXPECT_EQ (moved.value ().reason, fw::relocation_reason_t::state_incompatible);
+
+    EXPECT_FALSE (target_native->resolve_spot_async (spot_id).result ().value ());
+    const auto authority = read_authority ();
+    const auto *after = std::get_if<fw::authority_snapshot_t> (&authority);
+    ASSERT_TRUE (after);
+    EXPECT_TRUE (after->same_incarnation (before));
+    EXPECT_EQ (target_activations.load (), 0u);
 }
 
 TEST_F (InstanceSpotHostRelocation, SkipsAnInstanceWhoseClosingFenceCommittedFirst)
