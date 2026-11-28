@@ -366,8 +366,8 @@ internal sealed class ZLinkActorRemoteJoiner(
                     }
                     finally
                     {
-                        runtime.CompleteSessionRelocation(
-                            actor.Context.MeshName,
+                        ZLinkFrameworkRuntime.CompleteSessionRelocation(
+                            sourceNode.Node,
                             Guid.ParseExact(targetReservationRoute?.HandoffId ?? handoffId, "N")
                         );
                     }
@@ -393,8 +393,8 @@ internal sealed class ZLinkActorRemoteJoiner(
         finally
         {
             if (!completionTransferred)
-                runtime.CompleteSessionRelocation(
-                    actor.Context.MeshName,
+                ZLinkFrameworkRuntime.CompleteSessionRelocation(
+                    sourceNode.Node,
                     Guid.ParseExact(targetReservationRoute?.HandoffId ?? handoffId, "N")
                 );
         }

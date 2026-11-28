@@ -7,8 +7,12 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class RemoteActorJoinStopDeadlineTests
 {
-    [Fact]
-    public async Task Remote_join_reports_unavailable_when_authority_is_unsettled_at_stop_deadline()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Remote_join_reports_unavailable_when_authority_is_unsettled_at_stop_deadline(
+        bool forceStopRuntime
+    )
     {
         using var flowListener = Environment.GetEnvironmentVariable(
             RelocationBehaviorHost.FlowPathEnvironmentVariable
@@ -65,6 +69,7 @@ public sealed class RemoteActorJoinStopDeadlineTests
         Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
 
         var sourceState = await source.Runtime.EnsureStartedStateAsync(CancellationToken.None);
+        Task? forceStop = null;
         try
         {
             trace.ReleaseJoinHandler.SetResult();
@@ -83,9 +88,16 @@ public sealed class RemoteActorJoinStopDeadlineTests
             await store.SourceAbortWriteStarted.Task.WaitAsync(timeout);
             Assert.Empty(trace.JoinCompletions);
             var callsBeforeStop = sourceStore.Calls;
-            sourceState.ForceStopTokenSource.Cancel();
-            store.ReleaseSourceAbortWrite.SetResult();
+            using var releasePreserve = sourceState.ForceStopTokenSource.Token.Register(() =>
+                store.ReleaseSourceAbortWrite.TrySetResult()
+            );
+            if (forceStopRuntime)
+                forceStop = source.Runtime.ForceStopAsync(CancellationToken.None).AsTask();
+            else
+                sourceState.ForceStopTokenSource.Cancel();
             await trace.WaitAsync("publicJoinCompleted");
+            if (forceStop is not null)
+                await forceStop.WaitAsync(timeout);
 
             var completion = Assert.Single(trace.JoinCompletions);
             Assert.Equal("source", completion.Node);
@@ -107,6 +119,8 @@ public sealed class RemoteActorJoinStopDeadlineTests
             store.ReleaseSourceAbortWrite.TrySetResult();
             trace.ReleaseSourceLeave.TrySetResult();
             trace.ReleaseTargetLifecycle.TrySetResult();
+            if (forceStop is not null)
+                await forceStop.WaitAsync(timeout);
         }
     }
 

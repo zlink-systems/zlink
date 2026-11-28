@@ -56,9 +56,12 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ConfigureAwait(false);
     }
 
-    internal void CompleteSessionRelocation(string meshName, Guid relocationId)
+    internal void CompleteSessionRelocation(string meshName, Guid relocationId) =>
+        CompleteSessionRelocation(GetMeshNodeRuntime(meshName).Node, relocationId);
+
+    internal static void CompleteSessionRelocation(IZLinkBackendSpotNode node, Guid relocationId)
     {
-        if (GetMeshNodeRuntime(meshName).Node is IZLinkBackendSessionRelocationBarrier barrier)
+        if (node is IZLinkBackendSessionRelocationBarrier barrier)
             barrier.CompleteSessionRelocation(relocationId);
     }
 
