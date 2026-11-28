@@ -908,6 +908,7 @@ export interface ZLinkMeshBackendAdapter {
       readonly trustProfile?: string;
       readonly applicationJobQueue: import('../../application-jobs/contracts').ApplicationJobQueuePort;
       readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;
+      readonly diagnosticLease?: import('../../diagnostics/message-flow-delivery').ZLinkTelemetryLease;
       readonly infrastructureTaskRunner?: import('../../spots/spot-actor-join-dispatch').ZLinkDetachedTaskRunner;
       readonly peerAdmissionSealed?: () => boolean;
     }

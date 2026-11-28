@@ -1,3 +1,4 @@
+const { observeDiagnosticSubmissions } = require('./helpers/diagnostic-submissions.cjs');
 'use strict';
 
 const assert = require('node:assert/strict');
@@ -289,14 +290,11 @@ test(
     const deadlineDiagnostics = [];
     const debug = process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
     process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = '1';
-    const logError = console.error.bind(console);
-    const observeDeadline = t.mock.method(console, 'error', (...args) => {
-      const [prefix, marker, detail] = args;
-      if (prefix === '[zlink.runtime.relocation]' && marker === 'shutdown_deadline_exceeded') {
+    const observeDeadline = observeDiagnosticSubmissions(({ marker, message, detail }) => {
+      if (marker === '[zlink.runtime.relocation]' && message === 'shutdown_deadline_exceeded') {
         deadlineDiagnostics.push(detail);
       }
-      if (prefix !== '[zlink.runtime.relocation]' || debug === '1') logError(...args);
-    });
+    }, t.mock);
     let stopped;
     try {
       const stopping = source.host.shutdown({ deadlineMs: 400 });

@@ -1,3 +1,5 @@
+import { logDiagnostic, type ZLinkDiagnosticLease } from '../diagnostics/diagnostic-log';
+import type { ZLinkTelemetryLease } from '../diagnostics/message-flow-delivery';
 import {
   type RoutingId,
   ZLinkFrameworkException,
@@ -54,6 +56,7 @@ type ZLinkMeshDrainResult =
     };
 
 export interface ZLinkRouteMeshRuntimeCoordinatorOptions {
+  readonly diagnosticLease?: ZLinkDiagnosticLease;
   readonly meshNames: readonly string[];
   readonly meshOptions: ReadonlyMap<string, ZLinkSpotNodeOptions>;
   readonly meshNode: (meshName: string) => ZLinkBackendMeshNode | undefined;
@@ -385,6 +388,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       throw new TypeError('Relocation deadlineMs must be greater than zero.');
     }
     const entries = [...this.states.entries()];
+    const lease = this.options.diagnosticLease?.();
     const deadline = new AbortController();
     const timer = setTimeout(
       () => deadline.abort(createDeadlineExceededError('Relocation deadline exceeded.')),
@@ -399,9 +403,12 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       this.hostRetiringPrepared = false;
       return { kind: 'drained' };
     } catch (error) {
-      const classified = drainFailureReason(error);
+      const classified = drainFailureReason(error, lease);
       if (isRelocationDebugEnabled()) {
-        console.error('[zlink.runtime.relocation.drain_failed]', classified, error);
+        logDiagnostic(lease, 'error', 'relocation', '[zlink.runtime.relocation.drain_failed]', {
+          detail: { reason: classified },
+          error
+        });
       }
       const reason: ZLinkDrainForceReason = deadline.signal.aborted
         ? 'deadline_exceeded'
@@ -453,7 +460,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       result = { kind: 'drained' };
       this.transition(meshName, state, ZLinkTopologyState.Stopped);
     } catch (error) {
-      const classified = drainFailureReason(error);
+      const classified = drainFailureReason(error, this.options.diagnosticLease?.());
       const reason: ZLinkDrainForceReason =
         classified !== 'teardown_failed'
           ? classified
@@ -514,7 +521,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
         this.transition(meshName, state, ZLinkTopologyState.Stopped);
       }
     } catch (error) {
-      const classified = drainFailureReason(error);
+      const classified = drainFailureReason(error, this.options.diagnosticLease?.());
       const reason: ZLinkDrainForceReason =
         classified !== 'teardown_failed'
           ? classified
@@ -595,7 +602,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
         this.transition(meshName, state, ZLinkTopologyState.Stopped);
       }
     } catch (error) {
-      const classified = drainFailureReason(error);
+      const classified = drainFailureReason(error, this.options.diagnosticLease?.());
       const reason: ZLinkDrainForceReason =
         classified !== 'teardown_failed'
           ? classified
@@ -878,10 +885,17 @@ function peerUnavailableReason(state: ZLinkPeerState): ZLinkTopologyReason | und
   }
 }
 
-function drainFailureReason(error: unknown): ZLinkDrainForceReason {
+function drainFailureReason(
+  error: unknown,
+  lease: ZLinkTelemetryLease | undefined
+): ZLinkDrainForceReason {
   if (isStructuralGuardEnabled()) {
     const pending = debugPendingWorkNames();
-    if (pending.length > 0) console.error('[zlink.runtime.drain.pending]', pending);
+    if (pending.length > 0) {
+      logDiagnostic(lease, 'error', 'shutdown', '[zlink.runtime.drain.pending]', {
+        detail: { pending }
+      });
+    }
   }
   if (error instanceof ZLinkDrainingStatePublishError) return 'drain_state_publish_failed';
   if (

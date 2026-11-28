@@ -1,3 +1,4 @@
+import type { ZLinkTelemetryLease } from '../diagnostics/message-flow-delivery';
 import { awaitWithAbort } from '../abort';
 import type { PendingOperation } from '../foundation/operation-registry';
 import { inspectRuntime } from '../internal-observation';
@@ -80,6 +81,7 @@ export interface ZLinkLocationResolverEventSink {
 }
 
 export interface ZLinkStoreLocationResolversOptions {
+  readonly diagnosticLease?: ZLinkTelemetryLease;
   readonly stores: ZLinkStoreLocationResolverStores;
   readonly leaseTracker: ZLinkOwnerLeaseTracker;
   readonly events?: ZLinkLocationResolverEventSink;
@@ -518,12 +520,15 @@ export class ZLinkStoreLocationResolvers
         remainingLeaseMs: 0
       };
       if (isRelocationDebugEnabled()) {
-        emitActorOwnerLeaseObservation({
-          actorId,
-          authorityGeneration: unavailable.authorityGeneration,
-          remainingLeaseMs: 0,
-          decision: 'owner_unavailable'
-        });
+        emitActorOwnerLeaseObservation(
+          {
+            actorId,
+            authorityGeneration: unavailable.authorityGeneration,
+            remainingLeaseMs: 0,
+            decision: 'owner_unavailable'
+          },
+          this.options.diagnosticLease
+        );
       }
       return unavailable;
     }

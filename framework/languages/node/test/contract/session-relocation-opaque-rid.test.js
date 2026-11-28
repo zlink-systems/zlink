@@ -1,3 +1,4 @@
+const { observeDiagnosticSubmissions } = require('./helpers/diagnostic-submissions.cjs');
 const { relocationAuthorityStore } = require('./fixtures/relocation-authority-store');
 const { createRelayHost } = require('./fixtures/relay-host');
 const assert = require('node:assert/strict');
@@ -758,8 +759,9 @@ test('closed seal ignores duplicate 42 without a reply and disappears with its b
     target: 'target'
   });
   const warnings = [];
-  const originalWarn = console.warn;
-  console.warn = (value) => warnings.push(value);
+  const stopObserving = observeDiagnosticSubmissions(({ marker, message }) => {
+    warnings.push(`${marker} ${message}`);
+  });
   try {
     const sealed = await h.seal();
     await h.transfer.abortBoundSessionRouteSeal(h.actor, h.state, sealed);
@@ -778,7 +780,7 @@ test('closed seal ignores duplicate 42 without a reply and disappears with its b
     await h.receiveSeal(h.sent[0]);
     assert.equal(h.responses.at(-1).sealResult, 'bindingAbsent');
   } finally {
-    console.warn = originalWarn;
+    stopObserving();
     await h.close();
   }
 });

@@ -1,3 +1,4 @@
+const { observeDiagnosticSubmissions } = require('./helpers/diagnostic-submissions.cjs');
 const { createMeshHost } = require('./fixtures/mesh-host');
 const {
   mapZLinkRequestReply,
@@ -4738,15 +4739,11 @@ test('Node direct deadline reports the last route request stage once', async (t)
     const generation = raw.selectedRoutes.get('node-b');
     assert.equal(typeof generation, 'bigint');
     const socket = raw.router.socket;
-    const originalError = console.error;
-    const debug = t.mock.method(console, 'error', (prefix, marker, ...details) => {
-      if (prefix !== '[zlink.runtime.relocation]' || marker !== 'node_request_deadline')
-        originalError(prefix, marker, ...details);
-    });
+    const debug = observeDiagnosticSubmissions(() => {}, t.mock);
     const records = () =>
       debug.mock.calls
-        .filter(({ arguments: args }) => args[1] === 'node_request_deadline')
-        .map(({ arguments: args }) => args[2]);
+        .filter(({ arguments: [, record] }) => record.message === 'node_request_deadline')
+        .map(({ arguments: [, record] }) => record.detail);
 
     const stages = {
       route_unselected: 0,

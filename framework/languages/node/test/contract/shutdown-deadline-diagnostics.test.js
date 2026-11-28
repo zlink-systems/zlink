@@ -1,3 +1,4 @@
+const { observeDiagnosticSubmissions, debugArguments } = require('./helpers/diagnostic-submissions.cjs');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate, setTimeout } = require('node:timers/promises');
@@ -47,10 +48,9 @@ function captureDeadlineDiagnostics(t, enabled = true) {
 
   const records = [];
   const meshDrained = deferred();
-  const originalError = console.error;
-  t.mock.method(console, 'error', (...args) => {
-    const [prefix, marker, detail] = args;
-    if (prefix !== '[zlink.runtime.relocation]') return originalError(...args);
+  observeDiagnosticSubmissions((record) => {
+    const [prefix, marker, detail] = debugArguments(record);
+    if (prefix !== '[zlink.runtime.relocation]') return;
     if (marker === 'shutdown_deadline_exceeded') records.push(detail);
     if (
       marker === 'shutdown_step' &&
@@ -59,7 +59,7 @@ function captureDeadlineDiagnostics(t, enabled = true) {
     ) {
       meshDrained.resolve();
     }
-  });
+  }, t.mock);
   return { records, meshDrained: meshDrained.promise };
 }
 

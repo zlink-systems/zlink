@@ -1,3 +1,4 @@
+const { observeDiagnosticSubmissions, debugArguments } = require('./helpers/diagnostic-submissions.cjs');
 const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -847,15 +848,15 @@ test('direct actor resolver maps an active authority with an expired owner lease
   }, 0);
 
   const previousDebug = process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
-  const originalError = console.error;
+
   const observations = [];
   process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = '1';
-  console.error = (...args) => observations.push(args);
+  const stopObserving = observeDiagnosticSubmissions(record => observations.push(debugArguments(record)));
   let resolution;
   try {
     resolution = await resolver.resolveDirectActorRoute('actor-1');
   } finally {
-    console.error = originalError;
+    stopObserving();
     if (previousDebug === undefined) {
       delete process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
     } else {

@@ -1,3 +1,4 @@
+const { observeDiagnosticSubmissions, debugArguments } = require('./helpers/diagnostic-submissions.cjs');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -11,23 +12,24 @@ test('runtime event publisher continues after a monitoring handler fails', async
   const publisher = new framework.DefaultZLinkRuntimeEventPublisher();
   publisher.register({ async handle() { throw new Error('handler failed'); } });
   publisher.register({ async handle(event) { events.push(event); } });
-  const originalError = console.error;
-  console.error = () => undefined;
+  const errors = [];
+  const stopObserving = observeDiagnosticSubmissions(record => errors.push(record));
   try {
     await publisher.publish({ sourceName: 'runtime', timestamp: new Date(), event: 'test' });
   } finally {
-    console.error = originalError;
+    stopObserving();
   }
 
   assert.equal(events.length, 1);
+  assert.equal(errors[0].marker, '[monitoring-event-dispatch]');
+  assert.equal(errors[0].error.errorMessage, 'handler failed');
 });
 
 test('actor owner-lease observation uses the gated relocation debug path', () => {
   const previousDebug = process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
-  const originalError = console.error;
   const calls = [];
   process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = '1';
-  console.error = (...args) => calls.push(args);
+  const stopObserving = observeDiagnosticSubmissions(record => calls.push(debugArguments(record)));
   try {
     framework.emitActorOwnerLeaseObservation({
       actorId: 'actor-1',
@@ -36,7 +38,7 @@ test('actor owner-lease observation uses the gated relocation debug path', () =>
       decision: 'owner_unavailable'
     });
   } finally {
-    console.error = originalError;
+    stopObserving();
     if (previousDebug === undefined) {
       delete process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
     } else {

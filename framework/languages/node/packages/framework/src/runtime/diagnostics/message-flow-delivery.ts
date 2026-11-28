@@ -1,4 +1,5 @@
 import { Worker } from 'node:worker_threads';
+import type { ZLinkTelemetryRecord } from './message-flow-record';
 
 // The process owner counts records until the worker takes them, including batches
 // already posted to its port. Only the worker decrements in-transit records.
@@ -15,6 +16,7 @@ export enum TelemetryCounter {
   TraceFailures,
   FallbackFailures,
   WorkerFailures,
+  DiagnosticOverflow,
   Length
 }
 export const TELEMETRY_STATE_BYTES =
@@ -26,9 +28,21 @@ export interface ZLinkTelemetryLease {
   readonly retired: Int32Array;
 }
 
-export interface ZLinkTelemetryDelivery<T = unknown> {
+export interface ZLinkDiagnosticRecord {
+  readonly level: 'warn' | 'error';
+  readonly marker: string;
+  readonly category: string;
+  readonly message?: string;
+  readonly detail?: Readonly<Record<string, unknown>>;
+  readonly error?: Readonly<Record<string, string | undefined>>;
+  readonly timestamp: Date;
+}
+
+type TelemetryRecord = ZLinkTelemetryRecord | ZLinkDiagnosticRecord;
+
+export interface ZLinkTelemetryDelivery {
   readonly lease: SharedArrayBuffer;
-  readonly record: T;
+  readonly record: TelemetryRecord;
 }
 
 export function openTelemetryLease(): ZLinkTelemetryLease {
@@ -76,6 +90,7 @@ export class ZLinkMessageFlowDelivery {
   private pending: ZLinkTelemetryDelivery[] = [];
   private executing = false;
   private workerReady = false;
+  private overflowPending = false;
   private scheduled?: NodeJS.Immediate;
 
   constructor() {
@@ -125,6 +140,7 @@ export class ZLinkMessageFlowDelivery {
     this.workerReady = false;
     this.executing = false;
     this.pending = [];
+    this.overflowPending = false;
     Atomics.store(this.state, TelemetryState.Pending, 0);
   }
 
@@ -136,10 +152,21 @@ export class ZLinkMessageFlowDelivery {
     return this.enabled() && Atomics.load(lease.retired, 0) === 0;
   }
 
-  submit(lease: ZLinkTelemetryLease, record: unknown): void {
-    if (!this.accepts(lease)) return;
+  submit(lease: ZLinkTelemetryLease, record: TelemetryRecord): void {
+    const diagnostic = 'marker' in record;
+    if (
+      this.failure !== undefined ||
+      (!diagnostic && !this.enabled()) ||
+      Atomics.load(lease.retired, 0) !== 0
+    )
+      return;
     if (Atomics.load(this.state, TelemetryState.Pending) === MESSAGE_FLOW_PENDING_LIMIT) {
-      Atomics.add(this.counters, TelemetryCounter.Overflow, 1n);
+      Atomics.add(
+        this.counters,
+        diagnostic ? TelemetryCounter.DiagnosticOverflow : TelemetryCounter.Overflow,
+        1n
+      );
+      this.overflowPending = true;
       return;
     }
     Atomics.add(this.state, TelemetryState.Pending, 1);
@@ -164,11 +191,12 @@ export class ZLinkMessageFlowDelivery {
       this.worker === undefined ||
       !this.workerReady ||
       this.executing ||
-      this.pending.length === 0
+      (this.pending.length === 0 && !this.overflowPending)
     )
       return;
     const batch = this.pending;
     this.pending = [];
+    this.overflowPending = false;
     this.executing = true;
     this.worker.postMessage(batch);
   }

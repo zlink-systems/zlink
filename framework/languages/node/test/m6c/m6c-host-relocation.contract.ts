@@ -1,3 +1,4 @@
+import { ZLinkMessageFlowDelivery } from '../../packages/framework/src/runtime/diagnostics/message-flow-delivery';
 import {
   commitAuthorityRelocation,
   encodeAuthorityAggregate
@@ -1760,12 +1761,11 @@ test('ActorJoin target keeps the route cache intact and preserves post-open rela
     releaseJoinAdmission: () => undefined,
     releaseActivation: () => undefined
   };
-  const originalWarn = console.warn;
-  console.warn = () => events.push('sourceLeave:warning');
+  const stopObserving = observeRelocationWarnings(() => events.push('sourceLeave:warning'));
   try {
     await runtime.finalizeTargetStage('mesh-a', 'actor-join-stage', stage as never);
   } finally {
-    console.warn = originalWarn;
+    stopObserving();
     await runtime.dispose();
   }
 
@@ -1882,8 +1882,7 @@ test('target admission opens after one publication-clear conflict and a later cl
     releaseJoinAdmission: () => undefined,
     releaseActivation: () => undefined
   };
-  const originalWarn = console.warn;
-  console.warn = (marker) => events.push(String(marker));
+  const stopObserving = observeRelocationWarnings((marker) => events.push(marker));
   try {
     await runtime.finalizeTargetStage('mesh-a', 'clear-retry-stage', stage as never);
     assert.equal(
@@ -1908,7 +1907,7 @@ test('target admission opens after one publication-clear conflict and a later cl
     );
     assert.equal(codec.read(current.payload), undefined);
   } finally {
-    console.warn = originalWarn;
+    stopObserving();
     await runtime.dispose();
   }
 });
@@ -2315,13 +2314,12 @@ test('the 1000ms cutover wait records a Warning only; the source Preserve fence 
   const fallbackObserved = new Promise<void>((resolve) => {
     reportFallback = resolve;
   });
-  const originalWarn = console.warn;
-  console.warn = (...args: unknown[]) => {
-    if (args[0] === '[zlink.runtime.relocation.cutover_timeout]') {
+  const stopObserving = observeRelocationWarnings((marker) => {
+    if (marker === '[zlink.runtime.relocation.cutover_timeout]') {
       harness.events.push('fallback:1000');
       reportFallback();
     }
-  };
+  });
   try {
     const relocation = harness.relocate();
     relocation.catch(() => undefined);
@@ -2347,7 +2345,7 @@ test('the 1000ms cutover wait records a Warning only; the source Preserve fence 
     assert.equal(harness.location.commits, 0);
     assert.equal(harness.targetActorManager.published, 0);
   } finally {
-    console.warn = originalWarn;
+    stopObserving();
     globalThis.setTimeout = originalSetTimeout;
     await harness.dispose();
   }
@@ -5208,4 +5206,19 @@ for (const terminal of ['Store validation error', 'source disposal'] as const) {
       await harness.dispose();
     }
   });
+}
+
+function observeRelocationWarnings(observe: (marker: string) => void): () => void {
+  const prototype = ZLinkMessageFlowDelivery.prototype;
+  const submit = prototype.submit;
+  prototype.submit = function (lease, record) {
+    if ('marker' in record && record.level === 'warn' && record.category === 'relocation') {
+      observe(record.marker);
+      return;
+    }
+    submit.call(this, lease, record);
+  };
+  return () => {
+    prototype.submit = submit;
+  };
 }

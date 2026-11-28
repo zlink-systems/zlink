@@ -1,3 +1,4 @@
+const { observeDiagnosticSubmissions, debugArguments } = require('./helpers/diagnostic-submissions.cjs');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -6,10 +7,10 @@ const diagnosticText = require('../../packages/framework/dist/runtime/diagnostic
 
 test('absent diagnostic text is emitted as <none> on the enabled relocation debug path', () => {
   const previousDebug = process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
-  const originalError = console.error;
+
   const calls = [];
   process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = '1';
-  console.error = (...args) => calls.push(args);
+  const stopObserving = observeDiagnosticSubmissions(record => calls.push(debugArguments(record)));
   try {
     framework.emitActorOwnerLeaseObservation({
       actorId: diagnosticText.diagnosticTextOrAbsent(undefined),
@@ -18,7 +19,7 @@ test('absent diagnostic text is emitted as <none> on the enabled relocation debu
       decision: 'owner_unavailable'
     });
   } finally {
-    console.error = originalError;
+    stopObserving();
     if (previousDebug === undefined) {
       delete process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
     } else {

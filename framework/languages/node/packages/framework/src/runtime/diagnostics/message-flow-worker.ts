@@ -1,4 +1,7 @@
 import { parentPort, workerData } from 'node:worker_threads';
+import { Console } from 'node:console';
+import { writeSync } from 'node:fs';
+import { Writable } from 'node:stream';
 import {
   metrics,
   trace,
@@ -14,6 +17,7 @@ import {
   TelemetryCounter,
   TELEMETRY_STATE_BYTES,
   TELEMETRY_WORKER_AVAILABLE,
+  type ZLinkDiagnosticRecord,
   type ZLinkTelemetryDelivery
 } from './message-flow-delivery';
 import { COUNTER_UNITS, METRIC_NAMES } from './runtime-metrics';
@@ -36,8 +40,44 @@ const counters = new BigUint64Array(
 let logger: Logger | undefined;
 let tracer: Tracer | undefined;
 let overflow: Counter | undefined;
-const overflowAttributes = { source: 'message_flow' };
-let reportedOverflow = 0n;
+const overflowSources = [
+  { counter: TelemetryCounter.Overflow, attributes: { source: 'message_flow' }, reported: 0n },
+  {
+    counter: TelemetryCounter.DiagnosticOverflow,
+    attributes: { source: 'diagnostic' },
+    reported: 0n
+  }
+];
+
+// Worker stdio is forwarded through the parent thread by default. Write to the
+// stderr descriptor here so a slow destination can only stall this worker.
+const diagnosticStderr = new Writable({
+  write(chunk: Buffer, _encoding, done) {
+    try {
+      let offset = 0;
+      while (offset < chunk.length) {
+        const written = writeSync(2, chunk, offset, chunk.length - offset);
+        if (written === 0) throw new Error('Diagnostic stderr made no write progress.');
+        offset += written;
+      }
+    } catch (error) {
+      failed(TelemetryCounter.LoggerFailures, error);
+    }
+    done();
+  }
+});
+const diagnosticConsole = new Console({ stdout: diagnosticStderr, stderr: diagnosticStderr });
+
+function deliverDiagnostic(record: ZLinkDiagnosticRecord): void {
+  const { marker, message, detail, error, timestamp, category } = record;
+  diagnosticConsole[record.level](marker, ...(message === undefined ? [] : [message]), {
+    level: record.level,
+    timestamp,
+    category,
+    ...detail,
+    ...error
+  });
+}
 
 function failed(
   role: TelemetryCounter.LoggerFailures | TelemetryCounter.TraceFailures,
@@ -123,24 +163,27 @@ try {
 // an ERROR-only processor may reject an unspecified-severity enabled() query.
 Atomics.store(state, TelemetryState.Enabled, hasLoggerProvider || hasTraceProvider ? 1 : 0);
 parentPort!.postMessage(TELEMETRY_WORKER_AVAILABLE);
-parentPort!.on('message', (batch: ZLinkTelemetryDelivery<ZLinkTelemetryRecord>[]) => {
+parentPort!.on('message', (batch: ZLinkTelemetryDelivery[]) => {
   for (const item of batch) {
     Atomics.sub(state, TelemetryState.Pending, 1);
-    if (Atomics.load(new Int32Array(item.lease), 0) === 0) deliver(item.record);
+    if (Atomics.load(new Int32Array(item.lease), 0) !== 0) continue;
+    if ('marker' in item.record) deliverDiagnostic(item.record);
+    else deliver(item.record);
   }
-  const dropped = Atomics.load(counters, TelemetryCounter.Overflow);
-  if (dropped !== reportedOverflow) {
+  for (const source of overflowSources) {
+    const dropped = Atomics.load(counters, source.counter);
+    if (dropped === source.reported) continue;
     try {
       overflow ??= metrics
         .getMeter(ZLinkMeters.Framework)
         .createCounter(METRIC_NAMES.ObservabilityEventsOverflow, {
           unit: COUNTER_UNITS[METRIC_NAMES.ObservabilityEventsOverflow]
         });
-      overflow.add(Number(dropped - reportedOverflow), overflowAttributes);
+      overflow.add(Number(dropped - source.reported), source.attributes);
     } catch (error) {
       failed(TelemetryCounter.TraceFailures, error);
     }
-    reportedOverflow = dropped;
+    source.reported = dropped;
   }
   parentPort!.postMessage(TELEMETRY_WORKER_AVAILABLE);
 });

@@ -1,3 +1,4 @@
+const { observeDiagnosticSubmissions } = require('./helpers/diagnostic-submissions.cjs');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -9,8 +10,9 @@ test('RID-fenced admission warning reports rejection reason, intended endpoint, 
   const target = createRuntime('node-b', 'tcp://127.0.0.1:*', '127.0.0.2');
   let caller;
   const warnings = [];
-  const originalWarn = console.warn;
-  console.warn = (...values) => warnings.push(values.join(' '));
+  const stopObserving = observeDiagnosticSubmissions(({ marker, message }) => {
+    if (marker === 'route_mesh.admission_rejected') warnings.push(message);
+  });
 
   try {
     await target.start();
@@ -27,7 +29,7 @@ test('RID-fenced admission warning reports rejection reason, intended endpoint, 
       message.includes(`actual='${advertisedEndpoint}'`)
     ));
   } finally {
-    console.warn = originalWarn;
+    stopObserving();
     await caller?.stop();
     await target.stop();
   }

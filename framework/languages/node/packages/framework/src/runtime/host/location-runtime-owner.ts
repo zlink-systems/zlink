@@ -1,3 +1,4 @@
+import type { ZLinkDiagnosticLease } from '../diagnostics/diagnostic-log';
 import type { RoutingId } from '../../contracts';
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
 import type { ZLinkActorTransferStore } from '../../contracts/Locations/ActorTransfer';
@@ -19,6 +20,7 @@ import type { ZLinkSpotNodeRuntimeManager } from '../spots';
 import type { ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
 
 export interface ZLinkLocationRuntimeOwnerOptions {
+  readonly diagnosticLease?: ZLinkDiagnosticLease;
   readonly registration: ZLinkFrameworkRegistration;
   readonly runtimeEventPublisher: ZLinkRuntimeEventPublisher;
   readonly fallbackNodeRid: RoutingId;
@@ -131,6 +133,7 @@ export class ZLinkLocationRuntimeOwner {
       return undefined;
     }
     return new ZLinkStoreLocationResolvers({
+      diagnosticLease: this.options.diagnosticLease?.(),
       stores: { ...stores, authorityStore: stores.locationStore },
       leaseTracker: this.leaseTracker(stores),
       events: this.events,
@@ -153,6 +156,7 @@ export class ZLinkLocationRuntimeOwner {
     }
     return new ZLinkLocationSpotRouteResolver(
       new ZLinkStoreLocationResolvers({
+        diagnosticLease: this.options.diagnosticLease?.(),
         stores: { ...stores, authorityStore: stores.locationStore },
         leaseTracker: this.leaseTracker(stores),
         events: this.events,
@@ -173,6 +177,7 @@ export class ZLinkLocationRuntimeOwner {
       return undefined;
     }
     return new ZLinkStoreLocationResolvers({
+      diagnosticLease: this.options.diagnosticLease?.(),
       stores: { ...stores, authorityStore: stores.locationStore },
       leaseTracker: this.leaseTracker(stores),
       events: this.events,

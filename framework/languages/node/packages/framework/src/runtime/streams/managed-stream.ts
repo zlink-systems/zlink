@@ -1,4 +1,5 @@
-import { relocationDebug, relocationDebugTerminal } from '../diagnostics';
+import type { ZLinkTelemetryLease } from '../diagnostics/message-flow-delivery';
+import { isRelocationDebugEnabled, relocationDebug, relocationDebugTerminal } from '../diagnostics';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -88,7 +89,8 @@ export class ZLinkManagedStream implements ZLinkStream {
     private readonly nativeSessionRouteForMesh?: (
       meshName: string
     ) => ZLinkNativeSessionRoute | undefined,
-    private readonly onTransportClosed?: () => void
+    private readonly onTransportClosed?: () => void,
+    readonly diagnosticLease?: ZLinkTelemetryLease
   ) {}
 
   get sessionId(): string {
@@ -175,7 +177,12 @@ export class ZLinkManagedStream implements ZLinkStream {
     if (this.isShutdownForced()) return;
     this.markTransportClosed();
 
-    relocationDebug('closeForDrain.disconnectPeer.start', { sessionId: this.sessionId });
+    if (isRelocationDebugEnabled())
+      relocationDebug(
+        'closeForDrain.disconnectPeer.start',
+        { sessionId: this.sessionId },
+        this.diagnosticLease
+      );
     let failure: { error: unknown } | undefined;
     try {
       this.socket.disconnectPeer(this.backendRoutingId());
@@ -183,11 +190,13 @@ export class ZLinkManagedStream implements ZLinkStream {
       failure = { error };
       throw error;
     } finally {
-      relocationDebugTerminal(
-        'closeForDrain.disconnectPeer.terminal',
-        { sessionId: this.sessionId },
-        failure
-      );
+      if (isRelocationDebugEnabled())
+        relocationDebugTerminal(
+          'closeForDrain.disconnectPeer.terminal',
+          { sessionId: this.sessionId },
+          failure,
+          this.diagnosticLease
+        );
     }
   }
 
@@ -210,7 +219,12 @@ export class ZLinkManagedStream implements ZLinkStream {
     diagnostic: string,
     signal?: AbortSignal
   ): Promise<void> {
-    relocationDebug('closeForDrain.enter', { sessionId: this.sessionId, reason, diagnostic });
+    if (isRelocationDebugEnabled())
+      relocationDebug(
+        'closeForDrain.enter',
+        { sessionId: this.sessionId, reason, diagnostic },
+        this.diagnosticLease
+      );
     let failure: { error: unknown } | undefined;
     try {
       throwIfAborted(signal);
@@ -218,7 +232,12 @@ export class ZLinkManagedStream implements ZLinkStream {
       this.markTransportClosed();
       const closing = NativeMessage.from(encodeSessionClosingFrame(diagnostic, reason));
       try {
-        relocationDebug('closeForDrain.submit.start', { sessionId: this.sessionId });
+        if (isRelocationDebugEnabled())
+          relocationDebug(
+            'closeForDrain.submit.start',
+            { sessionId: this.sessionId },
+            this.diagnosticLease
+          );
         let failure: { error: unknown } | undefined;
         try {
           await this.socket.submit(this.backendRoutingId(), closing);
@@ -226,11 +245,13 @@ export class ZLinkManagedStream implements ZLinkStream {
           failure = { error };
           throw error;
         } finally {
-          relocationDebugTerminal(
-            'closeForDrain.submit.terminal',
-            { sessionId: this.sessionId },
-            failure
-          );
+          if (isRelocationDebugEnabled())
+            relocationDebugTerminal(
+              'closeForDrain.submit.terminal',
+              { sessionId: this.sessionId },
+              failure,
+              this.diagnosticLease
+            );
         }
       } finally {
         closing.close();
@@ -240,11 +261,13 @@ export class ZLinkManagedStream implements ZLinkStream {
       failure = { error };
       throw error;
     } finally {
-      relocationDebugTerminal(
-        'closeForDrain.exit',
-        { sessionId: this.sessionId, reason, diagnostic },
-        failure
-      );
+      if (isRelocationDebugEnabled())
+        relocationDebugTerminal(
+          'closeForDrain.exit',
+          { sessionId: this.sessionId, reason, diagnostic },
+          failure,
+          this.diagnosticLease
+        );
     }
   }
 

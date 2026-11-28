@@ -1,7 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
-const { isMainThread, parentPort } = require('node:worker_threads');
+const { isMainThread, parentPort, threadId } = require('node:worker_threads');
 const { trace, metrics } = require('@opentelemetry/api');
 const { logs, createNoopLogger } = require('@opentelemetry/api-logs');
 const mode = process.env.ZLINK_TEST_TELEMETRY_CASE;
@@ -20,7 +20,7 @@ function barrier(path) {
   }
 }
 
-if (mode === 'blocked' || mode === 'blocked-trace' || mode === 'overflow-width') {
+if (mode === 'blocked' || mode === 'blocked-trace' || mode === 'overflow-width' || mode === 'diagnostic-overflow') {
   metrics.setGlobalMeterProvider({ getMeter(meterName) { return {
     createCounter(name, options) { return { add(value, attributes) {
       record('metric', { meterName, name, unit: options.unit, value, attributes });
@@ -34,7 +34,7 @@ if (!isMainThread && mode === 'bootstrap') {
   barrier(process.env.ZLINK_TEST_TELEMETRY_GATE);
 }
 
-if (mode !== 'none' && mode !== 'common-helper' && !(mode === 'main-only' && !isMainThread)) {
+if (mode !== 'none' && mode !== 'diagnostic-progress' && mode !== 'common-helper' && !(mode === 'main-only' && !isMainThread)) {
   if (mode !== 'trace' && mode !== 'blocked-trace' && mode !== 'trace-init-failure') {
     if (mode === 'error-filter') {
       const { LoggerProvider } = require('@opentelemetry/sdk-logs');
@@ -77,5 +77,26 @@ if (!isMainThread && (mode === 'failures' || mode === 'role-counter-width' || mo
     record('fallback', message);
     if (mode === 'fallback-failure') throw new Error('fallback failed');
     return true;
+  };
+}
+
+
+if (!isMainThread && (mode === 'diagnostic-progress' || mode === 'diagnostic-overflow')) {
+  const write = fs.writeSync;
+  fs.writeSync = function (fd, chunk, offset, length, ...rest) {
+    if (fd !== 2 || !Buffer.isBuffer(chunk)) return write.apply(this, arguments);
+    const text = chunk.toString('utf8', offset, offset + length);
+    if (text.startsWith('[diagnostic.blocked]')) {
+      record('diagnostic-entered');
+      barrier(process.env.ZLINK_TEST_TELEMETRY_GATE);
+    }
+    if (mode === 'diagnostic-progress') {
+      const started = performance.now();
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+      record('diagnostic-write', { text, threadId, elapsed: performance.now() - started });
+    } else {
+      record('diagnostic-write', { text, threadId });
+    }
+    return write.call(this, fd, chunk, offset, length, ...rest);
   };
 }

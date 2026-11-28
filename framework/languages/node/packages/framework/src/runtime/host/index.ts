@@ -135,6 +135,7 @@ import {
 import { METRIC_NAMES, MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import { RuntimeEventQueue } from '../diagnostics/runtime-observation-queue';
 import {
+  messageFlowDelivery,
   openTelemetryLease,
   renewTelemetryLease,
   retireTelemetryLease
@@ -348,6 +349,7 @@ export class ZLinkFrameworkRuntimeHost
     mode: 'errors'
   };
   private telemetryLease = openTelemetryLease();
+  private readonly diagnosticLease = () => this.telemetryLease;
   private dispatchErrorReporters = new WeakMap<
     ZLinkDispatchErrorSink,
     ZLinkDispatchErrorReporter
@@ -411,7 +413,7 @@ export class ZLinkFrameworkRuntimeHost
     this.backendAdapterFactory = resolveBackendAdapterFactory(internalOptions);
     this.lifecycleSink = options.lifecycleSink;
     this.runtimeEventPublisher =
-      options.runtimeEventPublisher ?? new DefaultZLinkRuntimeEventPublisher();
+      options.runtimeEventPublisher ?? new DefaultZLinkRuntimeEventPublisher(this.diagnosticLease);
     this.metrics = new ZLinkRuntimeMetrics(options.registration.metrics?.meterProvider);
     const relocationProvider = options.registration.locations.relocationStoreInstance;
     this.relocationStore =
@@ -471,7 +473,8 @@ export class ZLinkFrameworkRuntimeHost
       this.metrics,
       () => this.flowCreationEnabled(),
       () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
-      this.requests
+      this.requests,
+      this.diagnosticLease
     );
     this.spotAddressTransport = new ZLinkHostSpotAddressTransport({
       requests: this.requests,
@@ -491,6 +494,7 @@ export class ZLinkFrameworkRuntimeHost
       dispatchErrors: this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink)
     });
     this.locationOwner = new ZLinkLocationRuntimeOwner({
+      diagnosticLease: this.diagnosticLease,
       registration: options.registration,
       runtimeEventPublisher: this.runtimeEventPublisher,
       metrics: this.metrics,
@@ -501,6 +505,7 @@ export class ZLinkFrameworkRuntimeHost
         this.cachedLocationSpotRouteResolver?.observeAuthorityVersion?.(spotId, storeVersion)
     });
     this.streamBindingRuntime = new ZLinkStreamBindingRuntime({
+      diagnosticLease: this.diagnosticLease,
       dispatchErrors: this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink),
       streamPayloadCodec: resolveStreamPayloadCodec(options.registration),
       streamCompression: options.registration.streamCompression,
@@ -745,6 +750,7 @@ export class ZLinkFrameworkRuntimeHost
       factories?.createBoundSessionRelay ??
       ((relayOptions: ZLinkBoundSessionRelayOptions) => new ZLinkBoundSessionRelay(relayOptions));
     this.boundSessionRelay = createBoundSessionRelay({
+      diagnosticLease: this.diagnosticLease,
       currentOwner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
       admission: this.admission,
       requestTimeoutMs: options.registration.requestTimeoutMs,
@@ -806,6 +812,7 @@ export class ZLinkFrameworkRuntimeHost
       shutdownSignal: () => this.executionState?.abortController.signal
     });
     this.actorTransferRuntime = new ZLinkActorTransferRuntime({
+      diagnosticLease: this.diagnosticLease,
       routeTransport: this.routeTransport,
       flowCreationEnabled: () => this.flowCreationEnabled(),
       messageSerializers: options.registration.messageSerializers,
@@ -875,6 +882,7 @@ export class ZLinkFrameworkRuntimeHost
       shutdownSignal: () => this.executionState?.abortController.signal
     });
     this.serviceRelocation = new ZLinkHostServiceRelocationRuntime({
+      diagnosticLease: this.diagnosticLease,
       requests: this.requests,
       flowCreationEnabled: () => this.flowCreationEnabled(),
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
@@ -935,6 +943,7 @@ export class ZLinkFrameworkRuntimeHost
       factories?.createRouteMeshCoordinator ??
       ((meshOptions) => new ZLinkRouteMeshRuntimeCoordinator(meshOptions))
     )({
+      diagnosticLease: this.diagnosticLease,
       meshNames: [...options.registration.spotNodes.keys()],
       meshOptions: options.registration.spotNodes,
       meshNode: (meshName) => this.spotNodeRuntime?.meshNode(meshName),
@@ -1114,14 +1123,18 @@ export class ZLinkFrameworkRuntimeHost
     if (this.shutdownOperation === undefined) {
       if (isRelocationDebugEnabled()) {
         const nodes = this.streamRuntime?.shutdownSnapshot() ?? [];
-        relocationDebug('host.shutdown.start', { deadlineMs, nodes });
+        relocationDebug('host.shutdown.start', { deadlineMs, nodes }, this.telemetryLease);
         for (const node of nodes) {
           for (const session of node.sessions) {
-            relocationDebug('host.shutdown.session', {
-              nodeName: node.nodeName,
-              meshName: node.meshName,
-              ...session
-            });
+            relocationDebug(
+              'host.shutdown.session',
+              {
+                nodeName: node.nodeName,
+                meshName: node.meshName,
+                ...session
+              },
+              this.telemetryLease
+            );
           }
         }
       }
@@ -1249,7 +1262,7 @@ export class ZLinkFrameworkRuntimeHost
     return await this.runWithShutdownDeadline(deadlineMs, async () => {
       const deadlineAtMs = performance.now() + deadlineMs;
       const shutdownSignal = this.shutdownDeadline!.signal;
-      return traceHostShutdown(deadlineAtMs, shutdownSignal, async (step) => {
+      return traceHostShutdown(deadlineAtMs, shutdownSignal, this.telemetryLease, async (step) => {
         try {
           let drain: Awaited<ReturnType<ZLinkRouteMeshRuntimeCoordinator['shutdownHost']>> = {
             kind: 'drained'
@@ -1600,6 +1613,7 @@ export class ZLinkFrameworkRuntimeHost
     this.shutdownOperation = undefined;
     this.shutdownOperationStartedAt = undefined;
     this.shutdownRequested = new AbortController();
+    messageFlowDelivery();
     const previousLease = this.telemetryLease;
     this.telemetryLease = renewTelemetryLease(previousLease);
     if (this.telemetryLease !== previousLease) {
@@ -1637,6 +1651,7 @@ export class ZLinkFrameworkRuntimeHost
       this.channelRuntime = channelRuntime;
       channelRuntime.prepareMeshDispatch(this.executionState.taskRunner);
       spotNodeRuntime = new ZLinkSpotNodeRuntimeManager({
+        diagnosticLease: this.telemetryLease,
         requests: this.requests,
         ...this.createSpotNodeRuntimeOptions(context, dispatchErrors),
         listenerRecords
@@ -1674,6 +1689,7 @@ export class ZLinkFrameworkRuntimeHost
         );
       }
       streamRuntime = new ZLinkStreamRuntimeManager({
+        diagnosticLease: this.telemetryLease,
         listenerRecords,
         registration: this.options.registration,
         backendAdapterFactory: this.backendAdapterFactory,

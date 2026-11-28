@@ -1,3 +1,5 @@
+import type { ZLinkTelemetryLease } from '../diagnostics/message-flow-delivery';
+import type { ZLinkDiagnosticLease } from '../diagnostics/diagnostic-log';
 import {
   type ActorRef,
   type Type,
@@ -113,6 +115,7 @@ export type {
 } from './bound-session-service';
 
 export interface ZLinkStreamBindingRuntimeOptions {
+  readonly diagnosticLease?: ZLinkDiagnosticLease;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
   readonly transport?: ZLinkBoundSessionTransport;
   readonly messageFactory?: ZLinkStreamMessageFactory;
@@ -183,6 +186,7 @@ export interface ZLinkStreamSessionNodeRuntimeOptions extends Omit<
 }
 
 export interface ZLinkStreamRuntimeManagerOptions {
+  readonly diagnosticLease?: ZLinkTelemetryLease;
   readonly listenerRecords?: ZLinkListenerRecords;
   readonly registration: ZLinkFrameworkRegistration;
   readonly backendAdapterFactory: ZLinkBackendAdapterFactory;
@@ -320,6 +324,7 @@ export class ZLinkStreamRuntimeManager {
       // can fail before the runtime owns it.
       const readablePoller = streamAdapter.createReadablePoller(socket);
       const runtime = new ZLinkStreamSessionNodeRuntimeCore({
+        diagnosticLease: this.options.diagnosticLease,
         nodeName,
         sessionTypeName: sessionType.name,
         heartbeatIntervalMs: streamNode.heartbeatIntervalMs,
@@ -476,7 +481,8 @@ export class ZLinkStreamBindingRuntime {
       DEFAULT_TERMINAL_RELOCATION_CAPACITY,
       runtimeOptions.sessionRelocationSealTimeoutMs ??
         zlinkDefaultLocationOptions.sessionRelocationSealTimeoutMs,
-      runtimeOptions.errorSink
+      runtimeOptions.errorSink,
+      runtimeOptions.diagnosticLease
     );
     this.compressionCodec = resolveStreamCompressionCodec(runtimeOptions.streamCompression);
     this.frameMessages = new ZLinkStreamFrameMessageFactory(runtimeOptions);
@@ -527,7 +533,8 @@ export class ZLinkStreamBindingRuntime {
       this,
       stream,
       close ?? ((signal) => stream.close(signal)),
-      providerResolver
+      providerResolver,
+      stream.diagnosticLease
     );
   }
 

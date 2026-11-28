@@ -1,3 +1,4 @@
+const { observeDiagnosticSubmissions, debugArguments } = require('./helpers/diagnostic-submissions.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const test = require('node:test');
@@ -8,13 +9,12 @@ const { stopRuntimeParts } = require('../../packages/framework/dist/runtime/host
 for (const enabled of [false, true]) {
   test(`shutdown diagnostics ${enabled ? 'on' : 'off'} retain original errors and cleanup order`, async () => {
     const previous = process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
-    const originalConsole = console.error;
     const events = [];
     const calls = [];
     const failure = new Error('store cleanup failure');
     const listenerFailure = Promise.reject(failure);
     process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = enabled ? '1' : '0';
-    console.error = (...args) => events.push(args);
+    const stopObserving = observeDiagnosticSubmissions(record => events.push(debugArguments(record)));
     try {
       await assert.rejects(stopRuntimeParts({
         state: {
@@ -31,13 +31,13 @@ for (const enabled of [false, true]) {
       await assert.rejects(traceShutdownStep('session_barrier.test', () => { throw failure; }, 'play'), error => error === failure);
       if (enabled) {
         assert.deepEqual(events.filter(([, , detail]) => detail.stage === 'owner_cleanup.store').map(([, , detail]) => detail.outcome), ['started', 'failed']);
-        assert.equal(events.find(([, , detail]) => detail.stage === 'owner_cleanup.store' && detail.outcome === 'failed')[2].error, failure);
-        assert.equal(events.find(([, , detail]) => detail.stage === 'transport_cleanup.listener_task' && detail.outcome === 'failed')[2].error, failure);
+        assert.equal(events.find(([, , detail]) => detail.stage === 'owner_cleanup.store' && detail.outcome === 'failed')[2].errorMessage, failure.message);
+        assert.equal(events.find(([, , detail]) => detail.stage === 'transport_cleanup.listener_task' && detail.outcome === 'failed')[2].errorMessage, failure.message);
         assert.deepEqual(events.filter(([, , detail]) => detail.stage === 'transport_cleanup.streams').map(([, , detail]) => detail.outcome), ['started', 'completed']);
         assert.equal(events.at(-1)[2].meshName, 'play');
       } else assert.equal(events.length, 0);
     } finally {
-      console.error = originalConsole;
+      stopObserving();
       if (previous === undefined) delete process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
       else process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = previous;
     }
