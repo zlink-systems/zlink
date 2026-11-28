@@ -2687,13 +2687,17 @@ spot_node_runtime_t::deliver_actor_join_completion (const actor_ref_t &actor_ref
                                                     const actor_join_completion_t &completion,
                                                     std::optional<spot_id_t> source_spot_id)
 {
-    auto settled = std::make_shared<task_completion_source_t<result_t<void>>> ();
-    auto task = settled->task ();
-    deliver_actor_join_completion_async (
-      actor_ref, completion, std::move (source_spot_id), [settled] (result_t<void> value) mutable {
-          settled->complete (result_t<result_t<void>>::success (std::move (value)));
-      });
-    co_return co_await task;
+    try {
+        auto settled = std::make_shared<task_completion_source_t<result_t<void>>> ();
+        deliver_actor_join_completion_async (
+          actor_ref, completion, std::move (source_spot_id), [settled] (result_t<void> value) {
+              settled->complete (result_t<result_t<void>>::success (std::move (value)));
+          });
+        return settled->task ();
+    }
+    catch (...) {
+        return task_t<result_t<void>> (detail::current_exception_result<result_t<void>> ());
+    }
 }
 
 void spot_node_runtime_t::deliver_actor_join_completion_async (

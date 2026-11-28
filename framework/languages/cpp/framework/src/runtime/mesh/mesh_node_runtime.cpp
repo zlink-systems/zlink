@@ -3509,10 +3509,9 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
     co_return actor_join_reply_t{
       actor_join_reply_t::relayed, target_actor, zlink::message_t::from (s->admission_payload),
       [this, s, cleanup, target_actor] {
-          auto pending = [] (mesh_node_runtime_t *self,
-                             std::shared_ptr<remote_actor_join_state_t> source,
-                             runtime::stateful::relocation_source_cleanup_t settle,
-                             actor_ref_t target) -> task_t<void> {
+          return [] (mesh_node_runtime_t *self, std::shared_ptr<remote_actor_join_state_t> source,
+                     runtime::stateful::relocation_source_cleanup_t settle,
+                     actor_ref_t target) -> task_t<void> {
               // The relayed Join owns source cleanup through authority settlement.
               // Keep the accepted work in the host drain barrier while it runs.
               struct finish_work_t
@@ -3520,19 +3519,41 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
                   mesh_node_runtime_t &node;
                   ~finish_work_t () { node.application_work_finished (); }
               };
-              self->_active_application_callbacks.fetch_add (1, std::memory_order_relaxed);
-              const finish_work_t finish_work{*self};
-              auto relocated = co_await settle ();
-              co_await self->settle_remote_application_actor_join_source (
-                std::move (source), std::move (relocated), std::move (target));
+              constexpr auto unsettled_error = framework_error_kind_t::unavailable;
+              const auto failures = self->_state->spot_state->runtime_failures ();
+              try {
+                  self->_active_application_callbacks.fetch_add (1, std::memory_order_relaxed);
+                  const finish_work_t finish_work{*self};
+                  auto relocated = co_await settle ();
+                  if (relocated.reason
+                      != runtime::stateful::relocation_reason_t::authority_unsettled_at_stop) {
+                      co_await self->settle_remote_application_actor_join_source (
+                        std::move (source), std::move (relocated), std::move (target));
+                      co_return;
+                  }
+                  // Host relocation §14: complete the waiting Join and leave authority sealed.
+                  spot_node_runtime_t spot (self->_state->spot_state);
+                  co_await spot.release_source_actor_leave_reservations (source->actor);
+                  auto delivery = spot.deliver_actor_join_completion (
+                    source->actor,
+                    actor_join_failed_t{source->completion_operation_id_high,
+                                        source->completion_operation_id_low, unsettled_error},
+                    source->source_spot);
+                  detail::observe_task_terminal (
+                    delivery, [failures] (const result_t<result_t<void>> &result) {
+                        if (auto failure =
+                              result ? result.value ().exception () : result.exception ())
+                            failures->report (std::move (failure));
+                    });
+              }
+              catch (...) {
+                  failures->report (std::current_exception ());
+                  throw;
+              }
+              // Keep the gateway's source reference when settlement ends without a commit.
+              throw framework_exception_t (unsettled_error,
+                                           "Actor Join authority unsettled at stop deadline");
           }(this, s, cleanup, target_actor);
-          detail::observe_task_terminal (
-            pending,
-            [failures = _state->spot_state->runtime_failures ()] (const result_t<void> &result) {
-                if (!result)
-                    failures->report (result.exception ());
-            });
-          return pending;
       }};
 }
 
@@ -3550,45 +3571,31 @@ task_t<void> mesh_node_runtime_t::settle_remote_application_actor_join_source (
           data_lost
           || relocated.reason == runtime::stateful::relocation_reason_t::owner_lease_expired
           || relocated.reason == runtime::stateful::relocation_reason_t::authority_missing;
-        const auto authority_unsettled_at_stop =
-          relocated.reason == runtime::stateful::relocation_reason_t::authority_unsettled_at_stop;
-        if (!authority_unsettled_at_stop) {
-            if (authority_lost) {
-                const runtime::protocol::actor_route_fence_t source_fence{
-                  std::string (s->actor.actor_id ().value ()),
-                  s->actor.object_generation (),
-                  s->source_node_rid,
-                  s->source_node_generation,
-                  s->actor_authority_owner_generation,
-                  s->source_owner_lease_generation};
-                co_await spot.fast_fail_reconcile_backlog (
-                  s->actor,
-                  std::string (
-                    ::zlink::framework::detail::actor_ref_access_t::actor_type (s->actor))
-                    + ":" + std::string (s->actor.actor_id ().value ()),
-                  source_fence);
-            } else {
-                spot.fail_remote_actor_transfer (s->actor, false);
-            }
-            (void) co_await abort_remote_actor_join_seal (s);
+        if (authority_lost) {
+            const runtime::protocol::actor_route_fence_t source_fence{
+              std::string (s->actor.actor_id ().value ()),
+              s->actor.object_generation (),
+              s->source_node_rid,
+              s->source_node_generation,
+              s->actor_authority_owner_generation,
+              s->source_owner_lease_generation};
+            co_await spot.fast_fail_reconcile_backlog (
+              s->actor,
+              std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (s->actor))
+                + ":" + std::string (s->actor.actor_id ().value ()),
+              source_fence);
         } else {
-            // Host relocation §14: no expired-owner cleanup and no Store change,
-            // but the stopping source ends its own pending Leave and active
-            // callback so the host drain can finish.
-            co_await spot.release_source_actor_leave_reservations (s->actor);
+            spot.fail_remote_actor_transfer (s->actor, false);
         }
+        (void) co_await abort_remote_actor_join_seal (s);
         throw framework_exception_t (
-          data_lost ? framework_error_kind_t::data_lost
-          // Host relocation §14: the Join caller of a unit still unsettled at
-          // the stop deadline gets Unavailable, the stopping node's retry signal.
-          : authority_lost || authority_unsettled_at_stop
-            ? framework_error_kind_t::unavailable
-            : framework_error_kind_t::internal_failure,
+          data_lost        ? framework_error_kind_t::data_lost
+          : authority_lost ? framework_error_kind_t::unavailable
+                           : framework_error_kind_t::internal_failure,
           "canonical Actor Join relocation did not complete (terminal="
             + std::to_string (static_cast<int> (relocated.terminal))
             + ", reason=" + std::to_string (static_cast<int> (relocated.reason)) + ")"
-            + (authority_unsettled_at_stop ? ": authority unsettled at stop deadline"
-               : relocated.reason == runtime::stateful::relocation_reason_t::authority_missing
+            + (relocated.reason == runtime::stateful::relocation_reason_t::authority_missing
                  ? ": authority missing"
                  : ""));
     }

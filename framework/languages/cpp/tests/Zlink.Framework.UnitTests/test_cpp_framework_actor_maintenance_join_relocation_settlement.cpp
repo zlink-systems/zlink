@@ -13,9 +13,11 @@
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/spots/spot_runtime.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include <zlink/framework.hpp>
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -24,7 +26,6 @@
 #include <mutex>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -175,9 +176,12 @@ class join_settlement_store_t final : public fw::location_store_t
     {
         const auto actor_authority =
           cleanup_started.task ().await_ready () && key.value == authority_key.value;
-        if (actor_authority && withhold_authority)
-            throw fw::framework_exception_t (fw::framework_error_kind_t::unavailable,
-                                             "source cannot read relocation authority");
+        if (actor_authority) {
+            record_authority_call ();
+            if (withhold_authority)
+                throw fw::framework_exception_t (fw::framework_error_kind_t::unavailable,
+                                                 "source cannot read relocation authority");
+        }
         auto result = co_await inner->read (std::move (key));
         if (actor_authority && std::holds_alternative<fw::store_missing_t> (result))
             missing.complete (fw::result_t<void>::success ());
@@ -185,6 +189,13 @@ class join_settlement_store_t final : public fw::location_store_t
     }
     fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
     {
+        if (cleanup_started.task ().await_ready ()
+            && std::ranges::any_of (request.mutations, [this] (const auto &mutation) {
+                   return std::visit (
+                     [this] (const auto &value) { return value.key.value == authority_key.value; },
+                     mutation);
+               }))
+            record_authority_call ();
         return inner->write (std::move (request));
     }
     fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
@@ -194,9 +205,21 @@ class join_settlement_store_t final : public fw::location_store_t
     std::shared_ptr<fw::location_store_t> inner;
     const bool withhold_authority;
     fw::store_key_t authority_key;
+    fw::detail::delay_owner_t *delays = nullptr;
+    std::atomic<unsigned> authority_calls_after_deadline{0};
     fw::task_completion_source_t<void> cleanup_started;
+    fw::task_completion_source_t<void> preserve_started;
     fw::task_completion_source_t<void> release;
     fw::task_completion_source_t<void> missing;
+
+  private:
+    void record_authority_call ()
+    {
+        const auto called_at = std::chrono::steady_clock::now ();
+        const auto deadline = delays->stop_deadline ();
+        if (deadline && called_at >= *deadline)
+            ++authority_calls_after_deadline;
+    }
 };
 
 // Pause the source decision at its owner, after boundary/cutover can progress.
@@ -243,6 +266,8 @@ class join_settlement_authority_t final : public fw::runtime::stateful::authorit
         fw::runtime::infrastructure_result ([control = _control] {
             return control->release.task ();
         }).value ();
+        if (preserve)
+            _control->preserve_started.complete (fw::result_t<void>::success ());
         return _inner.settle_source_relocation (value, participants, preserve);
     }
     std::optional<bool> owner_lease_live (const fw::location_owner_token_t &owner) override
@@ -424,6 +449,7 @@ void settlement_after_target_destroy (bool drain)
     source.start ();
     ASSERT_TRUE (ready (source));
     auto services = source.app.advanced ().services ().build_provider ();
+    source_store->delays = &services.get_required<fw::detail::delay_owner_t> ();
     auto join_terminal = std::make_shared<fw::task_completion_source_t<fw::result_t<void>>> ();
     auto infrastructure_failure =
       std::make_shared<fw::task_completion_source_t<std::exception_ptr>> ();
@@ -506,27 +532,31 @@ void settlement_after_target_destroy (bool drain)
         stopping.emplace (source.app.shutdown (400ms));
     }
     source_store->release.complete (fw::result_t<void>::success ());
-    if (!drain)
+    if (drain)
+        ASSERT_TRUE (source_store->preserve_started.task ().result_for (wait_budget));
+    else
         ASSERT_TRUE (source_store->missing.task ().result_for (wait_budget));
     const auto public_result = join_terminal->task ().result_for (wait_budget);
     ASSERT_TRUE (public_result);
     ASSERT_TRUE (*public_result);
-    EXPECT_TRUE (public_result->value ())
-      << (public_result->value ().error () ? public_result->value ().error ()->what () : "");
-    const auto infrastructure = infrastructure_failure->task ().result_for (wait_budget);
-    ASSERT_TRUE (infrastructure);
-    ASSERT_TRUE (*infrastructure);
-    ASSERT_NE (infrastructure->value (), nullptr);
-    try {
-        std::rethrow_exception (infrastructure->value ());
-    }
-    catch (const fw::framework_exception_t &error) {
-        // Host relocation §14: an unsettled unit at the stop deadline is Unavailable to the caller.
-        EXPECT_EQ (error.kind (), fw::framework_error_kind_t::unavailable) << error.what ();
-        if (drain)
-            EXPECT_NE (
-              std::string_view (error.what ()).find ("authority unsettled at stop deadline"),
-              std::string_view::npos);
+    const auto &barrier_result = public_result->value ();
+    // Cancellation and shutdown §5.1 allows force stop to end the registered wait.
+    if (drain && !barrier_result)
+        EXPECT_EQ (barrier_result.error_kind (), fw::framework_error_kind_t::shutting_down);
+    else
+        EXPECT_TRUE (barrier_result)
+          << (barrier_result.error () ? barrier_result.error ()->what () : "");
+    if (!drain) {
+        const auto infrastructure = infrastructure_failure->task ().result_for (wait_budget);
+        ASSERT_TRUE (infrastructure);
+        ASSERT_TRUE (*infrastructure);
+        ASSERT_NE (infrastructure->value (), nullptr);
+        try {
+            std::rethrow_exception (infrastructure->value ());
+        }
+        catch (const fw::framework_exception_t &error) {
+            EXPECT_EQ (error.kind (), fw::framework_error_kind_t::unavailable) << error.what ();
+        }
     }
     evidence.release_leave.complete (fw::result_t<void>::success ());
     if (drain) {
@@ -544,10 +574,25 @@ void settlement_after_target_destroy (bool drain)
                                                : fw::termination_outcome_t::stopped);
     EXPECT_EQ (stopped.value ().reason, drain ? fw::termination_reason_t::deadline_exceeded
                                               : fw::termination_reason_t::none);
+    if (drain) {
+        source.thread.join ();
+        EXPECT_EQ (source.app.runtime_state (), fw::framework_runtime_state_t::stopped);
+    }
     std::lock_guard lock (evidence.mutex);
-    ASSERT_EQ (evidence.completions.size (), 2u);
-    EXPECT_TRUE (std::ranges::all_of (evidence.completion_owners,
-                                      [] (const auto &owner) { return owner == second_rid; }));
+    EXPECT_EQ (std::ranges::count (evidence.completion_owners, second_rid), 2);
+    if (drain) {
+        EXPECT_EQ (source_store->authority_calls_after_deadline.load (), 0u);
+        EXPECT_FALSE (infrastructure_failure->task ().await_ready ());
+        ASSERT_EQ (std::ranges::count (evidence.completion_owners, first_rid), 1)
+          << "Source Actor did not receive exactly one deferred Join completion";
+        const auto source_completion = std::ranges::find (evidence.completion_owners, first_rid);
+        const auto index =
+          static_cast<std::size_t> (source_completion - evidence.completion_owners.begin ());
+        const auto *failed = std::get_if<fw::actor_join_failed_t> (&evidence.completions[index]);
+        ASSERT_NE (failed, nullptr);
+        EXPECT_EQ (failed->error_kind, fw::framework_error_kind_t::unavailable);
+    }
+    EXPECT_EQ (evidence.completions.size (), drain ? 3u : 2u);
 }
 
 TEST (ActorMaintenanceJoin, MissingAfterTargetCommitAndDestroyDoesNotCompleteOnSource)
