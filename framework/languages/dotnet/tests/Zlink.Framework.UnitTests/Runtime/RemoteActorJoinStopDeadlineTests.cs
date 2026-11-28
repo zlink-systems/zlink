@@ -1,6 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
+using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests.Runtime;
@@ -115,7 +118,12 @@ public sealed class RemoteActorJoinStopDeadlineTests
         var timeout = TimeSpan.FromSeconds(5);
         var actorId = $"stop-deadline-actor-{Guid.NewGuid():N}";
         var spotId = $"stop-deadline-spot-{Guid.NewGuid():N}";
-        var trace = new RelocationBehaviorTrace { ActorId = actorId, ExpectedJoinAccepted = false };
+        var trace = new RelocationBehaviorTrace
+        {
+            ActorId = actorId,
+            ExpectedJoinAccepted = false,
+            ExpectedDeliveryNode = "source",
+        };
         var transport = new CanonicalRelocationTransportProbe(trace, holdTargetReady: true);
         var store = new RecordingLocationStore(new ZLinkInMemoryProviderLocationStore(), trace)
         {
@@ -160,6 +168,17 @@ public sealed class RemoteActorJoinStopDeadlineTests
             .Async();
         Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
 
+        Assert.True(source.Runtime.TryGetActorState(actorId, out var sourceActor));
+        var handoff = sourceActor.Handoff;
+        var backlogAtCompletion = new TaskCompletionSource<ZLinkActorHandoffFrame[]>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        trace.OnPublicJoinCompleted = async _ =>
+        {
+            backlogAtCompletion.SetResult(
+                await handoff._lane.RunAsync(() => handoff._sourceHoldFrames.ToArray())
+            );
+        };
         var sourceState = await source.Runtime.EnsureStartedStateAsync(CancellationToken.None);
         Task? forceStop = null;
         try
@@ -179,6 +198,29 @@ public sealed class RemoteActorJoinStopDeadlineTests
             await transport.CutoverSendStarted.Task.WaitAsync(timeout);
             await store.SourceAbortWriteStarted.Task.WaitAsync(timeout);
             Assert.Empty(trace.JoinCompletions);
+
+            var backlogReply = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            using var backlog = CreateBacklogRequest(
+                sourceActor.NativeActorRef!.Value,
+                backlogReply,
+                timeout
+            );
+            Assert.Equal(
+                ZLinkActorHandoffCaptureResult.Captured,
+                handoff.TryCapture(
+                    backlog,
+                    source.Runtime,
+                    static (runtime, frame) =>
+                        ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(runtime, frame)
+                )
+            );
+            var queued = Assert.Single(
+                await handoff._lane.RunAsync(() => handoff._sourceHoldFrames.ToArray())
+            );
+
+            // Count only reads and writes of this Actor's authority metadata key.
             var callsBeforeStop = sourceStore.Calls;
             using var releasePreserve = sourceState.ForceStopTokenSource.Token.Register(() =>
                 store.ReleaseSourceAbortWrite.TrySetResult()
@@ -188,9 +230,12 @@ public sealed class RemoteActorJoinStopDeadlineTests
             else
                 sourceState.ForceStopTokenSource.Cancel();
             await trace.WaitAsync("publicJoinCompleted");
+            Assert.Same(queued, Assert.Single(await backlogAtCompletion.Task.WaitAsync(timeout)));
             if (forceStop is not null)
                 await forceStop.WaitAsync(timeout);
 
+            Assert.Empty(trace.DeliveredMarkers);
+            Assert.False(backlogReply.Task.IsCompleted);
             var completion = Assert.Single(trace.JoinCompletions);
             Assert.Equal("source", completion.Node);
             Assert.Equal(
@@ -214,6 +259,59 @@ public sealed class RemoteActorJoinStopDeadlineTests
             if (forceStop is not null)
                 await forceStop.WaitAsync(timeout);
         }
+    }
+
+    private static ZLinkSpotActorFrame CreateBacklogRequest(
+        ZLinkBackendActorRef actor,
+        TaskCompletionSource reply,
+        TimeSpan timeout
+    )
+    {
+        const ulong requestId = 1;
+        const ulong nodeGeneration = 1;
+        const uint flags = ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind;
+        return new ZLinkSpotActorFrame(
+            ZLinkApplicationJobOrigin.Remote,
+            actor,
+            actor,
+            actor.NodeRid,
+            default,
+            requestId,
+            flags,
+            new ZLinkBackendActorRouteContext(
+                new MeshOperationId(1, requestId),
+                MessageFollowHopCount: 0,
+                TargetNodeGeneration: nodeGeneration,
+                AuthorityOwnerGeneration: 1,
+                OwnerLeaseGeneration: 1,
+                ReplyRequestId: requestId,
+                ReplyFlags: flags,
+                DeadlineUnixMs: checked(
+                    (ulong)(DateTimeOffset.UtcNow + timeout).ToUnixTimeMilliseconds()
+                )
+            ),
+            new ZlinkStreamHeader(
+                ZlinkStreamMessageKind.Request,
+                ZlinkStreamCodec.Json,
+                ZlinkStreamHeaderFlags.HasRequestSeq,
+                new ZlinkStreamRequestSeq(requestId),
+                nameof(BehaviorWork),
+                ZlinkStreamMetadata.Empty
+            ),
+            Message.From("""{"marker":"prefix"}"""),
+            nodeGeneration,
+            new ZLinkServiceWireCodec.RequestSourceFence(
+                "source",
+                1,
+                actor.NodeRid,
+                nodeGeneration
+            ),
+            directReply: _ =>
+            {
+                reply.SetResult();
+                return SubmitResult.Ok;
+            }
+        );
     }
 
     private sealed class ActorAuthorityCallCounter(IZLinkLocationStore inner, ZLinkAuthorityKey key)
