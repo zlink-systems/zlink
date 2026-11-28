@@ -82,7 +82,8 @@ class header_codec_t
   public:
     static constexpr std::size_t minimum_header_size = 5;
 
-    result_t<std::vector<std::uint8_t>> encode (const stream_header_t &header) const;
+    result_t<std::vector<std::uint8_t>> encode (const stream_header_t &header,
+                                                bool framework_request = false) const;
     result_t<stream_header_t> decode (const std::vector<std::uint8_t> &bytes) const;
 };
 

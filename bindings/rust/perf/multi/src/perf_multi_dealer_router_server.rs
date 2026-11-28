@@ -13,16 +13,16 @@ fn main() {
     let args = common::MultiArgs::parse();
     let settings = common::MultiSettings::from_env();
     let ctx = common::perf_server_context();
-    let router = ctx.router_socket().expect("router");
+    let router = ctx.create_router_socket().expect("router");
     // C parity: numeric HWM remains behind the manual-override gate.
     common::apply_multi_hwm(&router, &settings);
     router
         .common_options()
-        .set_send_timeout(settings.send_timeout_ms)
+        .set_send_timeout(common::timeout_ms(settings.send_timeout_ms))
         .expect("send timeout");
     router
         .common_options()
-        .set_receive_timeout(settings.receive_timeout_ms)
+        .set_receive_timeout(common::timeout_ms(settings.receive_timeout_ms))
         .expect("recv timeout");
     if matches!(args.transport.as_str(), "tls" | "wss") {
         let tls = common::resolve_perf_tls_paths().expect("TLS certs not found");

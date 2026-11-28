@@ -6,13 +6,12 @@
 
 이 category는 context 수명주기, context option, routing identity,
 package-level utility 함수를 다룬다. **socket 생성은 `Context`의
-method다**(`ctx.PairSocket()`, ...), top-level factory가 아니다 —
-지금까지 다룬 wrapper binding 중 유일하게 이런 형태다. 정확한
+method다**(`ctx.PairSocket()`, ...). 정확한
 signature는
 [`internal/native/context.go`](../../../../bindings/go/internal/native/context.go)와
 [`utility.go`](../../../../bindings/go/internal/native/utility.go)가
 소유하며,
-[`contracts/core.go`](../../../../bindings/go/contracts/core.go)를 통해
+[`root_projection.go`](../../../../bindings/go/root_projection.go)를 통해
 alias로 re-export된다.
 
 ---
@@ -22,7 +21,7 @@ alias로 re-export된다.
 메시징 context를 생성한다 — socket의 factory이자 소유자.
 
 ```go
-ctx, err := contracts.NewContext()
+ctx, err := zlink.NewContext()
 defer ctx.Close()
 ```
 
@@ -55,9 +54,8 @@ socket을 닫지 않는다. `RecalculateAutoHwm`은 아직 `AutoHwmProfile`이
 설정된 socket에 대해서만 automatic HWM을 재계산한다.
 
 **선택 기준.** 여러 goroutine에서 socket을 사용하는 중인 context엔
-`Close()` 전에 `Shutdown()`을 호출한다. auto-HWM profile이나
-message-unit option을 바꾼 후엔 새 sizing을 즉시 적용하려고
-`RecalculateAutoHwm()`을 호출한다.
+`Close()` 전에 `Shutdown()`을 호출한다. 바꾼 auto-HWM profile을 즉시
+적용하려면 `RecalculateAutoHwm()`을 호출한다.
 
 ---
 
@@ -70,7 +68,7 @@ facade를 반환한다.
 ```go
 opts := ctx.Options()
 opts.SetIOThreads(8)
-opts.SetAutoHwmProfile(contracts.AutoHwmProfileLowLatency)
+opts.SetCoreHwmProfile(zlink.AutoHwmProfileLowLatency)
 opts.AddThreadAffinity(2)
 ```
 
@@ -87,11 +85,11 @@ opts.AddThreadAffinity(2)
 | `ThreadNamePrefix()` / `SetThreadNamePrefix(string)` | OS에 보이는 dispatch thread 이름 접두사 |
 | `AutoHwmEnabled()` / `SetAutoHwmEnabled(bool)` | auto-HWM sizing 활성 여부 |
 | `AutoHwmRecalcDebounce()` / `SetAutoHwmRecalcDebounce(time.Duration)` | 자동 재계산 사이 최소 간격 |
-| `MaxMessageSize()` / `SetMaxMessageSize(int)` | 메시지 하나의 크기 상한 |
 | `MessageStructSize()` | 읽기 전용, native message struct 크기, 진단 전용 |
 | `Blocky()` / `SetBlocky(bool)` | blocking 호출이 실제로 block하는지 fail fast하는지 |
-| `AutoHwmProfile()` / `SetAutoHwmProfile(AutoHwmProfile)` | automatic HWM sizing profile — Sockets category 참고 |
-| `AutoHwmMsgUnitBytes()` / `SetAutoHwmMsgUnitBytes(int)` | auto-HWM용 accounted-byte 단위; `0`은 socket-type 기본값 선택 |
+| `CoreHwmProfile()` / `SetCoreHwmProfile(AutoHwmProfile)` | automatic HWM sizing profile — Sockets category 참고 |
+| `CoreHwmMemoryLimitBytes()` / `SetCoreHwmMemoryLimitBytes(uint64)` | 설정한 메모리 한도를 바이트로 읽거나 설정한다. |
+| `CoreHwmBudgetBytes()` / `SetCoreHwmBudgetBytes(uint64)` | 설정한 Core 예산을 바이트로 읽거나 설정한다. |
 | `AddThreadAffinity(cpu int)` | setter만, I/O thread를 CPU에 고정 |
 | `RemoveThreadAffinity(cpu int)` | setter만, I/O thread의 CPU 고정을 해제 |
 
@@ -99,16 +97,14 @@ opts.AddThreadAffinity(2)
 반환한다.
 
 **선택 기준.** 기본값이 배포 환경에 맞지 않을 때 socket 생성 전에
-조정한다. `AutoHwmProfile`/`AutoHwmEnabled` 변경은
+조정한다. `CoreHwmProfile`/`AutoHwmEnabled` 변경은
 `Context.RecalculateAutoHwm()`과 짝지어 즉시 적용한다.
 
 ---
 
 ## `Context.PairSocket()` / `DealerSocket()` / `RouterSocket()` / `PubSocket()` / `SubSocket()` / `XPubSocket()` / `XSubSocket()` / `StreamSocket()`
 
-주어진 타입의 socket을 생성한다, caller가 소유. **`*Context`의
-method로 선언돼 있다**, 자유 함수가 아니다 — 지금까지 다룬 wrapper
-binding 중 유일하게 이런 형태다.
+`*Context`의 method가 지정된 타입의 socket을 생성하고 caller가 소유한다.
 
 ```go
 dealer, err := ctx.DealerSocket()
@@ -127,43 +123,34 @@ category를 참고한다 — 이 항목은 각각이 어떻게 생성되는지�
 
 ## `RoutingID`
 
-메시징 peer나 route를 식별하는 1~255바이트의 binary-safe value
-type. value type이다(`struct`, pointer가 아님), 다른 모든 언어의
-reference/handle 형태 routing id와 다르다.
+`RoutingID`는 1~255바이트를 담는 값 타입이다. Go에서 직접 비교하거나 맵의 키로 사용할 수 있다.
 
 ```go
-fromString := contracts.NewRoutingIDString("worker-3")
-fromBytes := contracts.NewRoutingID(rawBytes)
-fromUint32 := contracts.NewRoutingIDUint32(42)
-restored, err := contracts.NewRoutingIDFromHex(previouslyPrinted.Hex())
+fromString := zlink.NewRoutingIDString("worker-3")
+fromUint32 := zlink.NewRoutingIDUint32(42)
+fromBytes := zlink.NewRoutingID(rawBytes)
+restored, err := zlink.TryNewRoutingIDFromHex(previouslyPrinted.Hex())
 ```
 
-**Options.** Package-level 생성자; `NewRoutingIDFromHex`를 제외하곤
-error를 반환하지 않는다 — 나머지는 잘못된 길이에 panic한다.
-
-| Member | 의미 |
+| 메서드 | 의미 |
 | --- | --- |
-| `NewRoutingID(data []byte)` | slice 전체를 그대로 복사; 범위를 벗어나면 panic |
-| `NewRoutingIDString(value string)` | UTF-8 인코딩; 범위를 벗어나면 panic |
-| `NewRoutingIDUint32(value uint32)` | 4-byte big-endian; 범위를 벗어나면 panic |
-| `NewRoutingIDUUIDBytes(value [16]byte)` | 16-byte, 예: UUID byte; 범위를 벗어나면 panic |
-| `NewRoutingIDFromHex(value string) (RoutingID, error)` | `Hex()`가 출력한 byte를 복원 — panic 대신 error를 반환하는 유일한 생성자 |
-| `Bytes()` | bytes의 방어적 복사 |
-| `Size()` | byte 길이, 1-255 |
-| `Hash() uint64` | 진단/map-key helper, `RoutingID`가 고정 크기 value struct라는 점에서 Go의 내장 `==` 비교 가능성과는 별개 |
-| `Hex()` | hex 인코딩, `NewRoutingIDFromHex`와 왕복 가능 |
-| `Equal(other RoutingID) bool` | 값 동등성 |
-| `String()` | 표시 형태: printable UTF-8, 그 다음 4-byte를 uint32로, 그 다음 16-byte를 UUID 포맷으로, 마지막 `hex:` 접두 fallback |
+| `NewRoutingID(data []byte) RoutingID` / `NewRoutingIDString(value string) RoutingID` | 입력 바이트를 복사한다. 길이가 1~255바이트를 벗어나면 영값을 반환한다. |
+| `NewRoutingIDFromHex(value string) RoutingID` | `Hex()`의 출력을 해석한다. 잘못된 입력에는 영값을 반환한다. |
+| `TryNewRoutingID(data []byte) (RoutingID, error)` / `TryNewRoutingIDFromHex(value string) (RoutingID, error)` | 잘못된 입력은 즉시 `ConfigInvalidArgument`인 `*ConfigError`로 반환한다. |
+| `NewRoutingIDUint32(value uint32) RoutingID` / `Uint32() (uint32, bool)` | 4바이트 big-endian 값으로 만들거나 읽는다. |
+| `NewRoutingIDUUIDBytes(value [16]byte) RoutingID` / `UUIDBytes() ([16]byte, bool)` | UUID의 16바이트로 만들거나 읽는다. |
+| `Bytes()` / `Size()` / `Hex()` | 바이트 사본, 바이트 길이 또는 16진수 문자열을 반환한다. |
+| `Equal(other RoutingID) bool` / `Hash() uint64` | 바이트를 비교하거나 해시값을 계산한다. |
+| `String()` | 표시용 문자열을 출력 가능한 UTF-8, 4바이트의 10진수 uint32, 16바이트의 UUID 표기, `hex:` 접두사가 붙은 16진수 순으로 선택한다. |
 
-**Completion result.** 모든 member는 동기다. `RoutingID`가 순수
-value struct라는 건 `==`로 직접 비교 가능하고 `Hash()`/`Equal()`
-없이도 map key로 사용할 수 있다는 뜻이다, 다만 둘 다 명시적 대안으로
-제공된다.
+`Uint32()`와 `UUIDBytes()`는 기대하는 바이트 길이가 다르면 `ok=false`를 반환한다.
 
-**선택 기준.** 입력이 잘못됐을 수 있을 땐 특별히(hex-디코딩된 byte에
-`NewRoutingID`가 아니라) `NewRoutingIDFromHex`를 사용한다 — 잘못된
-입력에 panic하는 대신 error를 보고하는 유일한 routing-id 생성자이기
-때문이다.
+**Completion result.** 모든 member는 동기다. ID는 `==` 또는 `Equal()`로 비교한다.
+`RoutingID`는 map key로 직접 쓸 수 있다. `Hash()`는 해시값을 반환한다.
+
+**선택 기준.** 나중에 복원할 ID는 `Hex()`로 저장한다. 잘못된 16진수 입력을 오류로
+처리하려면 `TryNewRoutingIDFromHex`를, 잘못된 바이트 슬라이스를 오류로 처리하려면
+`TryNewRoutingID`를 사용한다.
 
 ---
 
@@ -172,7 +159,7 @@ value struct라는 건 `==`로 직접 비교 가능하고 `Hash()`/`Equal()`
 선택적 빌드 역할을 확인한다.
 
 ```go
-hasTLS, err := contracts.Has("tls")
+hasTLS, err := zlink.Has("tls")
 ```
 
 **Options.** `capability string` — 인식하는 이름은 `"tcp"`, `"ipc"`,
@@ -196,14 +183,14 @@ thread를 생성한다 — 세 개의 독립된 utility resource, 모두
 `utility.go`에 선언됨.
 
 ```go
-watch := contracts.NewStopwatch()
+watch := zlink.NewStopwatch()
 partialUs := watch.Intermediate()
 totalUs := watch.Stop()
 
-counter := contracts.NewAtomicCounter()
+counter := zlink.NewAtomicCounter()
 newValue := counter.Increment()
 
-thread, err := contracts.NewThread(doWork)
+thread, err := zlink.NewThread(doWork)
 _ = thread.Join()
 ```
 
@@ -233,41 +220,32 @@ _ = thread.Join()
 
 ---
 
-## `Proxy(...)` / `ProxySteerable(...)` / `Sleep(seconds)` / `MultipartClose(parts)`
+## `Proxy(...)` / `Sleep(seconds)` / `MultipartClose(parts)`
 
-두 socket 사이의 양방향 message-forwarding loop을
-실행하거나(선택적으로 control socket을 통해 조종 가능), 호출
-goroutine을 sleep하거나, multipart slice의 모든 메시지를 닫는다.
+`Proxy`는 두 socket 사이에서 메시지를 양방향으로 전달한다. 선택한 캡처 socket에 트래픽을 복사할
+수 있다.
 
 ```go
-contracts.Proxy(frontend, backend, capture) // capture는 nil 가능; context 종료까지 block
-contracts.ProxySteerable(frontend, backend, capture, control)
-contracts.Sleep(1) // 초 단위, 밀리초 아님
-contracts.MultipartClose(parts)
+err := zlink.Proxy(frontend, backend, capture) // capture에는 nil을 전달할 수 있다.
+zlink.Sleep(1) // 단위는 초다.
+zlink.MultipartClose(parts)
 ```
 
-**Options.** `Proxy`와 모든 socket type이 `SocketTarget` interface를
-만족하므로(Eventing category도 `Poller`/`SocketMonitor` 등록에 이걸
-사용한다), 어떤 구체 socket이든 직접 넘길 수 있다.
+**Options.** 여덟 socket 타입은 모두 `SocketTarget`을 구현하므로
+`Proxy`에 직접 넘길 수 있다.
 
 | Member | 의미 |
 | --- | --- |
-| `Proxy(frontend, backend, capture SocketTarget) error` | `capture`는 `nil` 가능 |
-| `ProxySteerable(frontend, backend, capture, control SocketTarget) error` | 필수 `control` source를 더함 |
-| `Sleep(seconds int)` | 호출 goroutine을 block; 반환값이 전혀 없다 — 여기 대부분의 함수가 반환하는 값 없는 `error`조차 없다 |
-| `MultipartClose(parts []*Message)` | 모든 part를 한 번에 닫음 |
+| `Proxy(frontend, backend, capture SocketTarget) error` | 캡처를 생략하려면 `nil`을 전달한다. |
+| `Sleep(seconds int)` | 지정한 초만큼 호출 goroutine을 대기시킨다. |
+| `MultipartClose(parts []*Message)` | 슬라이스의 메시지를 각각 닫는다. |
 
-**Completion result.** `Proxy`/`ProxySteerable`은 `error`를
-반환하며 context가 종료될 때까지(또는 `ProxySteerable`의 경우 control
-명령이나 에러가 loop을 끝낼 때까지) 호출 goroutine을 block한다 —
-둘 중 하나를 전용 goroutine에서 실행한다. `Sleep`/`MultipartClose`는
-반환값이 없다.
+**Completion result.** `Proxy`는 context가 종료되거나 전달에 실패할 때까지
+대기한 뒤 `error`를 반환한다. `Sleep`과 `MultipartClose`는 반환값이 없다.
 
-**선택 기준.** 단순한 fire-and-forget forwarding loop엔 `Proxy`를,
-application이 다른 goroutine에서 control socket을 통해 loop을
-일시정지·재개·종료해야 할 땐 `ProxySteerable`을 사용한다. 수신되거나
-구성된 multipart slice의 모든 메시지를 손으로 짠 loop 대신 한
-호출로 해제하려면 `MultipartClose`를 사용한다.
+**선택 기준.** 메시지 전달 중에도 caller가 계속 실행돼야 하면 `Proxy`를 별도
+goroutine에서 실행한다. 수신하거나 구성한 multipart 슬라이스의 메시지를
+한꺼번에 닫을 때는 `MultipartClose`를 사용한다.
 
 ---
 

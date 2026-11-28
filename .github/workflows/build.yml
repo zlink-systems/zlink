@@ -334,6 +334,9 @@ jobs:
           ZLINK_CORE_SOURCE=local CCU=8 DUR=2 TIMEOUT=600 \
             bash bindings/c/perf/ci_multi_smoke.sh
 
+      - name: Build C binding perf targets and run binding tests
+        run: ZLINK_CORE_SOURCE=local nice -n 10 bash bindings/c/tests/run_tests.sh
+
       - name: Verify WebSocket build without TLS
         run: |
           cmake -S core -B build-linux-x64-no-tls \

@@ -162,21 +162,3 @@ func monitorEventFromC(raw C.zlink_socket_monitor_event_t) *MonitorEvent {
 		Flags:         MonitorEventFlag(raw.flags),
 	}
 }
-
-// monitorEventFromRawFieldsForTest exercises monitorEventFromC's field-by-field
-// conversion from plain Go values so tests can verify the 64-bit round-trip
-// without importing C from a test compilation unit.
-func monitorEventFromRawFieldsForTest(
-	eventType MonitorEventType,
-	value, connectionID uint64,
-	transportLane MonitorTransportLane,
-	flags MonitorEventFlag,
-) *MonitorEvent {
-	var raw C.zlink_socket_monitor_event_t
-	raw.event = C.uint64_t(eventType)
-	raw.value = C.uint64_t(value)
-	raw.connection_id = C.uint64_t(connectionID)
-	raw.transport_lane = C.uint32_t(transportLane)
-	raw.flags = C.uint32_t(flags)
-	return monitorEventFromC(raw)
-}

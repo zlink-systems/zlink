@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import org.junit.jupiter.api.Test;
@@ -142,11 +143,12 @@ final class ZLinkUserSpotCloseClassificationTest {
                             ClassifySpot.class,
                             factory -> factory.disableRelocation());
             runtime =
-                    ZLinkFrameworkRuntimeTestAccess.start(
+                    ZLinkFrameworkRuntimeTestAccess.startHost(
                             options, new ZLinkJavaBackendAdapterFactory());
         }
 
         SpotRef create() throws Exception {
+            assertTrue(runtime.isReady());
             return runtime.spotManager()
                     .getOrCreate(spotId, "classify-spot")
                     .submit()

@@ -3,6 +3,8 @@ package systems.zlink.framework.runtime.internal.execution;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
@@ -34,6 +36,8 @@ import java.util.function.Supplier;
 public final class ZLinkStateLane {
     private static final int DRAIN_BATCH_LIMIT = 100;
     private static final int CLOSED = Integer.MIN_VALUE;
+    private static final boolean TRACE_TURNS =
+            "1".equals(System.getenv("ZLINK_DEBUG_FRAMEWORK_RELOCATION"));
     // A private mailbox signal, never returned as an operation's completion result.
     private static final CompletableFuture<Void> TURN_FINISHED =
             CompletableFuture.completedFuture(null);
@@ -69,6 +73,7 @@ public final class ZLinkStateLane {
     // The sign bit seals admission; the remaining bits count submissions still publishing a turn.
     private volatile int admission;
     private volatile CompletableFuture<Void> completed;
+    private volatile ActiveTurn activeTurn;
     final Executor executor;
 
     public ZLinkStateLane() {
@@ -96,6 +101,10 @@ public final class ZLinkStateLane {
     int queuedTurnCountForTest() {
         var queue = mailbox;
         return queue == null ? 0 : queue.size();
+    }
+
+    ActiveTurn activeTurnForTest() {
+        return activeTurn;
     }
 
     boolean sharesExecutorWith(ZLinkStateLane other) {
@@ -162,7 +171,7 @@ public final class ZLinkStateLane {
 
     private <T> T runSynchronousTurn(Supplier<T> work) {
         try {
-            return callWithCurrent(this, work);
+            return runTurn(work);
         } catch (CompletionException failure) {
             // Preserve the synchronous boundary's existing failure unwrapping.
             return ZLinkCompletionBridge.await(CompletableFuture.failedFuture(failure));
@@ -245,7 +254,7 @@ public final class ZLinkStateLane {
     private static <T> void completeWork(
             ZLinkStateLane owner, Supplier<T> work, CompletableFuture<T> result) {
         try {
-            result.complete(callWithCurrent(owner, work));
+            result.complete(owner.runTurn(work));
         } catch (RuntimeException | Error error) {
             result.completeExceptionally(
                     error instanceof CompletionException ? error : new CompletionException(error));
@@ -282,6 +291,7 @@ public final class ZLinkStateLane {
     }
 
     private void releaseInlineTurn() {
+        clearTurnObservation();
         scheduled = 0;
         if (!mailboxEmpty()) {
             scheduleDrain();
@@ -298,8 +308,7 @@ public final class ZLinkStateLane {
                     .add(
                             owner -> {
                                 try {
-                                    return callWithCurrent(
-                                            owner,
+                                    return owner.runTurn(
                                             () ->
                                                     Objects.requireNonNull(
                                                             work.get(), "work result"));
@@ -398,6 +407,7 @@ public final class ZLinkStateLane {
     private boolean grantWaitingTurn(WorkItem work) {
         if (work instanceof WaitingTurn turn) {
             mailbox().poll();
+            clearTurnObservation();
             turn.complete(null);
             return true;
         }
@@ -405,6 +415,8 @@ public final class ZLinkStateLane {
     }
 
     private void runNext(int processed) {
+        // Keep a suspended turn visible until the scheduled drain begins to run.
+        clearTurnObservation();
         while (processed < DRAIN_BATCH_LIMIT) {
             WorkItem work = mailbox().peek();
             if (work == null) break;
@@ -422,6 +434,7 @@ public final class ZLinkStateLane {
                 execution.whenComplete((ignored, error) -> resumeDrain(next));
                 return;
             }
+            clearTurnObservation();
         }
         releaseInlineTurn();
     }
@@ -430,9 +443,26 @@ public final class ZLinkStateLane {
         try {
             dispatchNext(processed);
         } catch (RuntimeException rejected) {
+            clearTurnObservation();
             scheduled = 0;
             if (admission < 0) completed.completeExceptionally(rejected);
         }
+    }
+
+    private <T> T runTurn(Supplier<T> command) {
+        if (TRACE_TURNS) {
+            long startedNanos = System.nanoTime();
+            boolean application =
+                    ZLinkSuspendInvocationContext.currentApplicationExecution() != null
+                            || ZLinkSuspendInvocationContext.currentSerialExecutionTurn() != null
+                            || ZLinkApplicationJobContext.current().isPresent();
+            activeTurn = new ActiveTurn(application, startedNanos);
+        }
+        return callWithCurrent(this, command);
+    }
+
+    private void clearTurnObservation() {
+        if (TRACE_TURNS) activeTurn = null;
     }
 
     private static void runWithCurrent(ZLinkStateLane lane, Runnable command) {
@@ -462,6 +492,8 @@ public final class ZLinkStateLane {
             return this;
         }
     }
+
+    record ActiveTurn(boolean application, long startedNanos) {}
 
     @FunctionalInterface
     interface WorkItem {

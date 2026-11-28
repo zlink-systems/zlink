@@ -21,9 +21,11 @@ func main() {
 	samplecommon.Must(err)
 	defer client.Close()
 
-	serverMon := samplecommon.OpenMonitor(server)
+	serverMon, err := zlink.OpenSocketMonitor(server, zlink.MonitorEventConnectionReady)
+	samplecommon.Must(err)
 	defer serverMon.Close()
-	clientMon := samplecommon.OpenMonitor(client)
+	clientMon, err := zlink.OpenSocketMonitor(client, zlink.MonitorEventConnectionReady)
+	samplecommon.Must(err)
 	defer clientMon.Close()
 
 	endpoint := samplecommon.UniqueTCP("pair-recv")

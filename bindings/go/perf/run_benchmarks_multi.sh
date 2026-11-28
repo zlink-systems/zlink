@@ -129,7 +129,8 @@ print_total_time() {
 }
 PATTERN="ALL"
 CONTROL_PLANE_PATTERNS=()
-DURATION="5"
+DURATION="${PERF_MULTI_DURATION_SECONDS:-5}"
+unset LATENCY_DURATION
 PART_COUNT="${PERF_PART_COUNT:-2}"
 MSG_SIZES=""
 TRANSPORTS="${PERF_TRANSPORTS:-tcp,tls,ws,wss}"
@@ -157,7 +158,7 @@ AUTO_HWM_PROFILE=""
 CONNECT_READY_TIMEOUT_MS=""
 CONNECT_CONCURRENCY=""
 SERVER_READY_TIMEOUT_MS=""
-MONITOR_HWM_BYTES=""
+MONITOR_HWM_BYTES="${PERF_MULTI_MONITOR_HWM_BYTES:-${PERF_MONITOR_HWM_BYTES:-4096000}}"
 SERVER_SHUTDOWN_TIMEOUT_MS=""
 SERVER_BIND_PORT=""
 RUN_COOLDOWN_MS="${PERF_MULTI_RUN_COOLDOWN_MS:-${PERF_RUN_COOLDOWN_MS:-3000}}"
@@ -327,6 +328,7 @@ Usage: bindings/go/perf/run_benchmarks_multi.sh [options]
 Options:
   --pattern NAME
   --duration N
+  --latency-duration N    Latency seconds (positive integer; default: --duration).
   --part-count N          Application frame count per measured message (1 or 2; default: 2).
   --msg-sizes LIST
   --transports LIST       Comma-separated transports (default: tcp,tls,ws,wss).
@@ -360,7 +362,8 @@ Options:
   --server-ready-timeout-ms N
   --connect-ready-timeout-ms N
                           Connection-ready timeout in milliseconds (default: 10000).
-  --monitor-hwm-bytes N
+  --monitor-hwm-bytes BYTES
+                          Override PERF_MULTI_MONITOR_HWM_BYTES (default: 4096000).
   --server-shutdown-timeout-ms N
   --server-bind-port N
   --auto-hwm-profile NAME
@@ -386,6 +389,14 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage; exit 0 ;;
     --pattern) PATTERN="$2"; shift 2 ;;
     --duration) DURATION="$2"; shift 2 ;;
+    --latency-duration)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --latency-duration requires a value." >&2
+        exit 1
+      fi
+      LATENCY_DURATION="$2"
+      shift 2 ;;
+    --latency-duration=*) LATENCY_DURATION="${1#*=}"; shift ;;
     --part-count) PART_COUNT="$2"; shift 2 ;;
     --msg-sizes) MSG_SIZES="$2"; shift 2 ;;
     --transports) TRANSPORTS="$2"; shift 2 ;;
@@ -414,6 +425,10 @@ while [[ $# -gt 0 ]]; do
       SERVER_READY_TIMEOUT_MS="$2"
       shift 2 ;;
     --monitor-hwm-bytes)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --monitor-hwm-bytes requires a value." >&2
+        exit 1
+      fi
       MONITOR_HWM_BYTES="$2"
       shift 2 ;;
     --server-shutdown-timeout-ms)
@@ -478,6 +493,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+LATENCY_DURATION="${LATENCY_DURATION-${PERF_MULTI_LATENCY_DURATION_SECONDS:-${DURATION}}}"
+if ! is_uint "${LATENCY_DURATION}" || [[ ! "${LATENCY_DURATION}" =~ [1-9] ]]; then
+  echo "Error: --latency-duration must be a positive integer." >&2
+  exit 1
+fi
+if ! is_uint "${MONITOR_HWM_BYTES}"; then
+  echo "Error: --monitor-hwm-bytes must be a non-negative integer." >&2
+  exit 1
+fi
+
 if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
   echo "Error: --part-count must be 1 or 2." >&2
   exit 1
@@ -492,11 +517,7 @@ if [[ "${SMOKE}" -eq 1 && -n "${OUTPUT_FILE}" ]]; then
   echo "Error: --smoke cannot be combined with --output." >&2
   exit 1
 fi
-if [[ -n "${MONITOR_HWM_BYTES}" ]] && ! is_uint "${MONITOR_HWM_BYTES}"; then
-  echo "Error: --monitor-hwm-bytes must be a non-negative integer." >&2
-  exit 1
-fi
-
+export PERF_MULTI_LATENCY_DURATION_SECONDS="${LATENCY_DURATION}"
 if [[ -n "${HWM}" ]]; then
   export PERF_MULTI_HWM="${HWM}"
 fi
@@ -539,9 +560,7 @@ fi
 if [[ -n "${SERVER_READY_TIMEOUT_MS}" ]]; then
   export PERF_MULTI_SERVER_READY_TIMEOUT_MS="${SERVER_READY_TIMEOUT_MS}"
 fi
-if [[ -n "${MONITOR_HWM_BYTES}" ]]; then
-  export PERF_MULTI_MONITOR_HWM_BYTES="${MONITOR_HWM_BYTES}"
-fi
+export PERF_MULTI_MONITOR_HWM_BYTES="${MONITOR_HWM_BYTES}"
 if [[ -n "${SERVER_SHUTDOWN_TIMEOUT_MS}" ]]; then
   export PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS="${SERVER_SHUTDOWN_TIMEOUT_MS}"
 fi
@@ -594,16 +613,12 @@ build_go_perf_binary() {
     fi
     return
   fi
-  go build -o "${GO_MULTI_BIN}" ./perf/multi
+  local build_dir
+  build_dir="$(cd "${BUILD_DIR}" && pwd)"
+  go -C "${SCRIPT_DIR}" build -o "${build_dir}/${GO_MULTI_BIN##*/}" ./multi
 }
 
 run_go_perf() {
-  local package="$1"
-  shift
-  if [[ "${package}" != "./perf/multi" ]]; then
-    echo "Error: unsupported Go perf package: ${package}" >&2
-    return 1
-  fi
   if [[ "${PIN_CPU}" != "on" ]]; then
     exec "${GO_MULTI_BIN}" "$@"
     return
@@ -969,6 +984,7 @@ emit_effective_options_multi() {
   echo "- msg_sizes: ${EFFECTIVE_MSG_SIZES_CSV}"
   echo "- routed_echo_per_socket_payload: $(effective_routed_echo_per_socket_payload)"
   echo "- duration_seconds: ${DURATION}"
+  echo "- latency_duration_seconds: ${LATENCY_DURATION}"
   echo "- clients: ${CLIENTS_DISPLAY}"
   echo "- default_clients: ${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
   echo "- default_stream_clients: ${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
@@ -986,7 +1002,7 @@ emit_effective_options_multi() {
   echo "- rcvtimeo_ms: ${RCVTIMEO_MS:-${PERF_MULTI_RCVTIMEO_MS:-200}}"
   echo "- connect_concurrency: ${CONNECT_CONCURRENCY:-128 (default)}"
   echo "- connect_ready_timeout_ms: ${CONNECT_READY_TIMEOUT_MS:-${PERF_MULTI_CONNECT_READY_TIMEOUT_MS:-${PERF_CONNECT_READY_TIMEOUT_MS:-10000}}}"
-  echo "- monitor_hwm_bytes: ${MONITOR_HWM_BYTES:-${PERF_MULTI_MONITOR_HWM_BYTES:-${PERF_MONITOR_HWM_BYTES:-4096000}}}"
+  echo "- monitor_hwm_bytes: ${MONITOR_HWM_BYTES}"
   echo "- server_ready_timeout_ms: ${SERVER_READY_TIMEOUT_MS:-${PERF_MULTI_SERVER_READY_TIMEOUT_MS:-${PERF_SERVER_READY_TIMEOUT_MS:-10000}}}"
   echo "- server_shutdown_timeout_ms: ${SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}}"
   echo "- server_bind_port: ${SERVER_BIND_PORT:-${PERF_MULTI_SERVER_BIND_PORT:-0}}"
@@ -1072,6 +1088,44 @@ timeout_seconds_from_ms() {
 SERVER_READY_TIMEOUT_SECONDS="$(timeout_seconds_from_ms "${PERF_MULTI_SERVER_READY_TIMEOUT_MS:-${PERF_SERVER_READY_TIMEOUT_MS:-10000}}")"
 SERVER_SHUTDOWN_TIMEOUT_SECONDS="$(timeout_seconds_from_ms "${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}")"
 ONE_WAY_CLIENT_READY_TIMEOUT=10
+
+forward_one_way_phases() {
+    local pattern="$1" size="$2" deadline="$3"
+    local receiver_file="${srv_out}" receiver_fd="${server_control_fd}"
+    local sender_file="${client_out}" sender_fd="${client_control_fd}"
+    local line count done=0 catchup=0
+    if [[ "${pattern}" == PUBSUB ]]; then
+        receiver_file="${client_out}"
+        receiver_fd="${client_control_fd}"
+        sender_file="${srv_out}"
+        sender_fd="${server_control_fd}"
+        line="$(wait_for_file_prefix "${sender_file}" "PHASE_DONE,${size},1" "$((deadline - SECONDS))")" || return 1
+        printf '%s\n' "${line}" >&"${receiver_fd}" || return 1
+    fi
+    line="$(wait_for_file_prefix "${receiver_file}" "PHASE_DRAINED,${size}," "$((deadline - SECONDS))")" || return 1
+    count="${line##*,}"
+    [[ "${count}" =~ ^[1-9][0-9]*$ ]] || return 1
+    printf 'PHASE_PACED,%s,%s\n' "${size}" "${count}" >&"${sender_fd}" || return 1
+    if [[ "${pattern}" == PUBSUB ]]; then
+        while (( SECONDS < deadline && !done )); do
+            if (( !catchup )) && grep -Fxq "PHASE_CATCHUP,${size}" "${receiver_file}"; then
+                printf 'PHASE_CATCHUP,%s\n' "${size}" >&"${sender_fd}" || return 1
+                catchup=1
+            fi
+            if grep -Fxq "PHASE_DONE,${size},3" "${sender_file}"; then
+                printf 'PHASE_DONE,%s,3\n' "${size}" >&"${receiver_fd}" || return 1
+                done=1
+            else
+                sleep 0.01
+            fi
+        done
+        (( done )) || return 1
+    fi
+    line="$(wait_for_file_prefix "${receiver_file}" "PHASE_COMPLETE,${size}," "$((deadline - SECONDS))")" || return 1
+    count="${line##*,}"
+    [[ "${count}" =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n' "${line}" >&"${sender_fd}" || return 1
+}
 
 wait_for_file_prefix() {
   local file_path="$1"
@@ -1165,20 +1219,21 @@ resolve_client_timeout_seconds() {
     echo "${PERF_MULTI_TIMEOUT_SECONDS:-${PERF_TIMEOUT_SECONDS}}"
     return
   fi
+  local paced=$((2 * 10#${LATENCY_DURATION}))
   if [[ "${pattern}" == "STREAM" ]]; then
-    local stream_timeout=$((duration * 3 + 20))
+    local stream_timeout=$((duration * 3 + paced + 20))
     (( stream_timeout < 45 )) && stream_timeout=45
     echo "${stream_timeout}"
     return
   fi
   if { [[ "${pattern}" == "PUBSUB" ]] && (( size >= 262144 )); } \
     || { [[ "${transport}" == "tls" || "${transport}" == "wss" ]] && (( size >= 131072 )); }; then
-	local large_case_timeout=$((duration * 6 + 30))
+	local large_case_timeout=$((duration * 6 + paced + 30))
 	(( large_case_timeout < 90 )) && large_case_timeout=90
 	echo "${large_case_timeout}"
     return
   fi
-  local timeout=$((duration * 3 + 20))
+  local timeout=$((duration * 3 + paced + 20))
   (( timeout < 45 )) && timeout=45
   echo "${timeout}"
 }
@@ -1246,7 +1301,7 @@ run_multi_process_case() {
   server_fifo="$(mktemp -u "${TMP_DIR}/server_fifo.XXXXXX")"
   mkfifo "${server_fifo}"
 
-  GOMAXPROCS="${case_gomaxprocs}" run_go_perf ./perf/multi \
+  GOMAXPROCS="${case_gomaxprocs}" run_go_perf \
     --role server \
     --pattern "${pattern}" \
     --transport "${transport}" \
@@ -1280,7 +1335,7 @@ run_multi_process_case() {
   if [[ "${pattern}" == "DEALER_DEALER" || "${pattern}" == "PUBSUB" ]]; then
     client_fifo="$(mktemp -u "${TMP_DIR}/client_fifo.XXXXXX")"
     mkfifo "${client_fifo}"
-    GOMAXPROCS="${case_gomaxprocs}" run_go_perf ./perf/multi \
+    GOMAXPROCS="${case_gomaxprocs}" run_go_perf \
       --role client \
       --pattern "${pattern}" \
       --transport "${transport}" \
@@ -1301,7 +1356,11 @@ run_multi_process_case() {
     else
       printf 'START,%s\n' "${size}" >&"${server_control_fd}" || true
       printf 'START,%s\n' "${size}" >&"${client_control_fd}" || true
-      if ! wait_for_pid "${client_pid}" "${client_timeout}"; then
+      if ! forward_one_way_phases "${pattern}" "${size}" "$((SECONDS + client_timeout))"; then
+        case_status=1; LAST_CASE_FAIL_REASON=phase_timeout
+        kill_process_tree "${client_pid}"
+        wait "${client_pid}" 2>/dev/null || true
+      elif ! wait_for_pid "${client_pid}" "${client_timeout}"; then
         case_status=1; LAST_CASE_FAIL_REASON=client_timeout
         kill_process_tree "${client_pid}"
         wait "${client_pid}" 2>/dev/null || true
@@ -1309,12 +1368,15 @@ run_multi_process_case() {
         case_status=1; LAST_CASE_FAIL_REASON=client_exit_nonzero
       fi
     fi
+    if [[ "${case_status}" -eq 0 ]] && ! wait_for_pid "${server_pid}" "${client_timeout}"; then
+      case_status=1; LAST_CASE_FAIL_REASON=server_timeout
+    fi
     exec {client_control_fd}>&- || true
   elif [[ "${pattern}" == "DEALER_ROUTER_REQREP" || "${pattern}" == "ROUTER_ROUTER_REQREP" ]]; then
     reqrep_client=1
     client_fifo="$(mktemp -u "${TMP_DIR}/client_fifo.XXXXXX")"
     mkfifo "${client_fifo}"
-    run_go_perf ./perf/multi \
+    run_go_perf \
       --role client \
       --pattern "${pattern}" \
       --transport "${transport}" \
@@ -1368,7 +1430,7 @@ run_multi_process_case() {
     fi
     exec {client_control_fd}>&- || true
   else
-    run_go_perf ./perf/multi \
+    run_go_perf \
       --role client \
       --pattern "${pattern}" \
       --transport "${transport}" \
@@ -1649,6 +1711,11 @@ fi
       --suite multi --runs "${RUNS}"
   fi
   echo
+  if grep -Eq '^(BENCH_DIAG|PUBSUB_CATCHUP_PROGRESS|PUBSUB_CATCHUP_DIAG|PUBSUB_LATENCY_DIAG|REFERENCE),' "${RAW_RESULTS_FILE}"; then
+    echo "## Diagnostics"
+    awk '/^(BENCH_DIAG|PUBSUB_CATCHUP_PROGRESS|PUBSUB_CATCHUP_DIAG|PUBSUB_LATENCY_DIAG|REFERENCE),/' "${RAW_RESULTS_FILE}"
+    echo
+  fi
   echo "## Completion"
   echo "- success: $((result_lines / 5))"
   echo "- unsupported: ${unsupported}"

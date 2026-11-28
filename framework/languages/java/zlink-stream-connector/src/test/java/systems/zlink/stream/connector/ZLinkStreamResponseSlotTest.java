@@ -56,7 +56,8 @@ final class ZLinkStreamResponseSlotTest {
                         7);
         byte[] encoded = ZLinkStreamWireProtocol.encodeHeader(header);
         assertThrows(
-                IllegalArgumentException.class, () -> dispatcher.dispatch(encoded, new byte[0]));
+                IllegalArgumentException.class,
+                () -> dispatcher.dispatch(null, encoded, new byte[0]));
         assertFalse(result.isDone());
         byte[] id = "player".getBytes(StandardCharsets.UTF_8);
         actors.bound(
@@ -66,7 +67,7 @@ final class ZLinkStreamResponseSlotTest {
                         .put((byte) id.length)
                         .put(id)
                         .array());
-        assertDoesNotThrow(() -> dispatcher.dispatch(encoded, new byte[0]));
+        assertDoesNotThrow(() -> dispatcher.dispatch(null, encoded, new byte[0]));
         assertEquals(hasPending, result.isDone());
         if (hasPending) result.join().payload().close();
     }

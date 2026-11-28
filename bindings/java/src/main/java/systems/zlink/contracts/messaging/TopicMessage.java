@@ -2,10 +2,13 @@
 
 package systems.zlink.contracts.messaging;
 
+import systems.zlink.contracts.errors.ErrorCategory;
+import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.internal.ContractAccess;
+import systems.zlink.internal.NativeErrorCodes;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -168,7 +171,7 @@ public final class TopicMessage implements AutoCloseable {
     /** Returns the first payload part. */
     public Message firstPart() {
         if (parts.isEmpty())
-            throw new ZlinkRecvException(RecvResult.NO_DATA);
+            throw ZlinkException.fromErrno(ErrorCategory.RECV, NativeErrorCodes.EINVAL);
         return parts.get(0);
     }
 

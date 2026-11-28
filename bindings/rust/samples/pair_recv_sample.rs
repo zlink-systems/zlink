@@ -9,8 +9,8 @@ fn main() {
     let ctx = Context::new().expect("context creation failed");
     let endpoint = sample_support::tcp_endpoint();
 
-    let server = ctx.pair_socket().expect("server socket failed");
-    let client = ctx.pair_socket().expect("client socket failed");
+    let server = ctx.create_pair_socket().expect("server socket failed");
+    let client = ctx.create_pair_socket().expect("client socket failed");
 
     let server_mon = SocketMonitor::open(&server).expect("server monitor open failed");
     let client_mon = SocketMonitor::open(&client).expect("client monitor open failed");
@@ -33,8 +33,9 @@ fn main() {
     server
         .recv(&mut received, zlink::RecvFlags::NONE)
         .expect("recv failed");
-    let payload = received.parts()[0].as_str().expect("utf8 error");
+    let message = received.single_part_or_throw().expect("expected one part");
+    let payload = message.as_str().expect("utf8 error");
     assert_eq!(payload, "hello-pair");
-    println!("[pair/recv] send: \"hello-pair\" → recv: \"{}\"", payload);
+    println!("[pair/recv] send: \"hello-pair\" -> recv: \"{}\"", payload);
     // --8<-- [end:doc]
 }

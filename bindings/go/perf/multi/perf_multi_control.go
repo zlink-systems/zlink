@@ -116,3 +116,21 @@ func (control *multiStreamControl) waitForStart(timeout time.Duration) error {
 func activeDeadline(duration time.Duration) perfcommon.BenchmarkWindow {
 	return perfcommon.NewBenchmarkWindow(duration)
 }
+
+func readPhaseCount(command string, msgSize int) uint64 {
+	prefix := fmt.Sprintf("%s,%d,", command, msgSize)
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if value, ok := strings.CutPrefix(line, prefix); ok {
+			count, err := strconv.ParseUint(value, 10, 64)
+			perfcommon.Must(err)
+			return count
+		}
+		if line == "STOP" || line == "QUIT" {
+			break
+		}
+	}
+	perfcommon.Must(fmt.Errorf("missing phase control %s", command))
+	return 0
+}

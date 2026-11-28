@@ -457,7 +457,7 @@ internal sealed class CompletionOwner
         {
             var (result, errno) = RequestReplySupport.TrySubmitPreservingOnFailure(
                 _handle, parts, ref submitter);
-            return new SubmitAttempt(submitter.CompletionId, result, errno);
+            return SubmitAttempt.FromNative(submitter.CompletionId, result, errno);
         }
         catch (Exception exception)
         {
@@ -507,7 +507,7 @@ internal sealed class CompletionOwner
         {
             var (result, errno) = RequestReplySupport.TrySubmitPreservingOnFailure(
                 _handle, parts, ref submitter);
-            return new SubmitAttempt(submitter.CompletionId, result, errno);
+            return SubmitAttempt.FromNative(submitter.CompletionId, result, errno);
         }
         catch (Exception exception)
         {
@@ -608,6 +608,15 @@ internal sealed class CompletionOwner
         ulong CompletionId, SubmitResult Result, int NativeErrno,
         Exception? ManagedFailure = null)
     {
+        internal static SubmitAttempt FromNative(
+            ulong completionId, SubmitResult result, int nativeErrno)
+        {
+            var attempt = new SubmitAttempt(completionId, result, nativeErrno);
+            return IsWritableWait(attempt) && nativeErrno != (int)ErrorCode.EAgain
+                ? new SubmitAttempt(0, SubmitResult.InternalError, (int)ErrorCode.EProto)
+                : attempt;
+        }
+
         internal bool Succeeded => Result == SubmitResult.Ok && ManagedFailure is null;
 
         internal Exception CreateFailure() =>

@@ -326,19 +326,21 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                             "local actor dispatch requires a Spot runtime"));
         }
         Message payload = Message.from(payloadBytes);
-        ZLinkRequestMetrics.Series metric =
-                header.requestSequence().isPresent() ? ZLinkRequestMetrics.actor(meshName) : null;
+        boolean request = header.requestSequence().isPresent();
+        ZLinkRequestMetrics.Series metric = request ? ZLinkRequestMetrics.actor(meshName) : null;
         long started =
                 metric != null && ZLinkRequestMetrics.durationEnabled()
                         ? System.nanoTime()
                         : ZLinkRequestMetrics.NO_START;
         ZLinkRequestMetrics.start(metric);
         var submitted =
-                new java.util.concurrent.atomic.AtomicReference<CompletionStage<Void>>(
-                        CompletableFuture.completedFuture(null));
-        CompletionStage<Void> request;
+                request
+                        ? new java.util.concurrent.atomic.AtomicReference<CompletionStage<Void>>(
+                                CompletableFuture.completedFuture(null))
+                        : null;
+        CompletionStage<Void> dispatch;
         try {
-            request =
+            dispatch =
                     localActorDispatcher.dispatch(
                             ref,
                             ref.nodeRid(),
@@ -347,18 +349,20 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                             sourceSessionSequence,
                             header,
                             payload,
-                            reply -> submitted.set(replyLocal(requestHeader, header, reply)));
-        } catch (RuntimeException failure) {
+                            request
+                                    ? reply ->
+                                            submitted.set(replyLocal(requestHeader, header, reply))
+                                    : reply -> reply.payload().close());
+        } catch (RuntimeException | Error failure) {
             payload.close();
             completeRequest(metric, started, failure);
             throw failure;
         }
-        return request.whenComplete(
-                        (ignored, failure) -> {
-                            payload.close();
-                            completeRequest(metric, started, failure);
-                        })
-                .thenCompose(ignored -> submitted.get());
+        return request
+                ? dispatch.whenComplete(
+                                (ignored, failure) -> completeRequest(metric, started, failure))
+                        .thenCompose(ignored -> submitted.get())
+                : dispatch;
     }
 
     private CompletionStage<Void> replyLocal(

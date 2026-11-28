@@ -112,8 +112,9 @@ class ZLinkFrameworkLocationRuntimeTest {
                         factory -> factory.disableRelocation());
 
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             var created =
                     runtime.spotManager()
                             .getOrCreate(spotId, "location-spot")
@@ -157,8 +158,9 @@ class ZLinkFrameworkLocationRuntimeTest {
                         factory -> factory.disableRelocation());
 
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             var created =
                     runtime.spotManager()
                             .getOrCreate(spotId, "location-spot")
@@ -202,8 +204,9 @@ class ZLinkFrameworkLocationRuntimeTest {
                         factory -> factory.disableRelocation());
 
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             var created =
                     runtime.spotManager()
                             .getOrCreate(spotId, "location-spot")
@@ -269,8 +272,9 @@ class ZLinkFrameworkLocationRuntimeTest {
                         factory -> factory.disableRelocation());
 
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             var created =
                     runtime.actorManager()
                             .create("durable-player", "player")
@@ -316,8 +320,9 @@ class ZLinkFrameworkLocationRuntimeTest {
                         factory -> factory.disableRelocation());
 
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             var first =
                     runtime.actorManager()
                             .getOrCreate("durable-concurrent-player", "player")
@@ -378,8 +383,9 @@ class ZLinkFrameworkLocationRuntimeTest {
         RoutingId actualNodeRid = options.registration().meshNodes().getFirst().routingId();
 
         try (ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             runtime.actorManager()
                     .create("player-join", "player")
                     .submit()

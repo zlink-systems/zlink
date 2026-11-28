@@ -668,14 +668,12 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
             .RunAsync(() =>
             {
                 var owner = RequireOwnerTokenOnLane();
-                if (
-                    _lastSuccessfulLease is not { } lease
-                    || lease.Token != owner
-                    || Remaining(lease.Deadline) <= TimeSpan.Zero
-                )
-                    throw new InvalidOperationException(
-                        "The owner lease admission deadline has expired."
-                    );
+                TimeSpan? remaining =
+                    _lastSuccessfulLease is { } lease && lease.Token == owner
+                        ? Remaining(lease.Deadline)
+                        : null;
+                if (!(remaining > TimeSpan.Zero))
+                    throw OwnerAdmissionClosed(remaining);
                 return owner;
             })
             .ConfigureAwait(false);
@@ -1445,7 +1443,18 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
     private void EnsureOwnerAdmissionOpenOnLane()
     {
         if (!IsOwnerAdmissionOpenOnLane())
-            throw new InvalidOperationException("The owner lease admission deadline has expired.");
+            throw OwnerAdmissionClosed(OwnerAdmissionRemaining());
+    }
+
+    private InvalidOperationException OwnerAdmissionClosed(TimeSpan? remaining)
+    {
+        if (Volatile.Read(ref _disposeState) != 0)
+            return new InvalidOperationException("The location runtime is stopping or stopped.");
+        if (remaining <= TimeSpan.Zero)
+            return new InvalidOperationException("The owner lease admission deadline has expired.");
+        if (_lastSuccessfulLease is null)
+            return new InvalidOperationException("The owner lease admission is not open yet.");
+        return new InvalidOperationException("The owner lease admission is closed.");
     }
 
     private readonly record struct StopState(
