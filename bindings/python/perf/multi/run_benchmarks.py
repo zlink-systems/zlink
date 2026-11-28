@@ -25,6 +25,7 @@ from perf_multi_common import (
     table_header_lines,
     throughput_unit,
 )
+from perf_metrics import resolve_multi_latency_duration
 from perf_report import (
     median_result_data_lines,
     multi_auto_hwm_lines,
@@ -278,13 +279,12 @@ def parse_args(argv):
         ),
     )
     args = parser.parse_args(argv)
-    if args.latency_duration is None:
-        args.latency_duration = (
-            os.environ.get("PERF_MULTI_LATENCY_DURATION_SECONDS") or args.duration
+    try:
+        args.latency_duration = resolve_multi_latency_duration(
+            args.duration, cli_value=args.latency_duration
         )
-    latency = args.latency_duration
-    if not latency.isascii() or not latency.isdecimal() or not latency.lstrip("0"):
-        parser.error("--latency-duration must be a positive integer")
+    except ValueError as exc:
+        parser.error(str(exc))
     return args
 
 
@@ -1390,6 +1390,7 @@ def main(argv=None):
     start_time = time.perf_counter()
     args = parse_args(argv or sys.argv[1:])
     _validate_python_build_options(args)
+    monitor_hwm = resolve_multi_monitor_hwm_bytes(cli_value=args.monitor_hwm)
     require_binding_runtime(DEFAULT_PYTHONPATH)
     if args.pin_cpu and not pin_current_process_cpu0():
         print("warning: cpu pinning requested but could not pin to cpu 0", file=sys.stderr)
@@ -1444,15 +1445,6 @@ def main(argv=None):
         env["PERF_MULTI_SERVER_READY_TIMEOUT_MS"] = args.server_ready_timeout_ms
     if args.connect_ready_timeout_ms:
         env["PERF_MULTI_CONNECT_READY_TIMEOUT_MS"] = args.connect_ready_timeout_ms
-    if args.monitor_hwm:
-        try:
-            monitor_hwm = int(args.monitor_hwm)
-        except ValueError as exc:
-            raise SystemExit("--monitor-hwm-bytes must be a nonnegative integer") from exc
-        if monitor_hwm < 0:
-            raise SystemExit("--monitor-hwm-bytes must be a nonnegative integer")
-    else:
-        monitor_hwm = resolve_multi_monitor_hwm_bytes()
     env["PERF_MULTI_MONITOR_HWM_BYTES"] = str(monitor_hwm)
     if args.server_shutdown_timeout_ms:
         env["PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS"] = args.server_shutdown_timeout_ms
