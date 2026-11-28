@@ -12,7 +12,7 @@ perf_dir_text = str(PERF_DIR)
 if perf_dir_text not in sys.path:
     sys.path.insert(0, perf_dir_text)
 
-from perf_multi_measurement import MAX_BURST_PER_SENDER, latency_duration, wait_ms
+from perf_multi_measurement import MAX_BURST_PER_SENDER, wait_ms
 
 from perf_stop_token import (
     STOP_TOKEN,
@@ -326,7 +326,7 @@ def resolve_multi_recv_timeout_ms():
 
 def resolve_multi_monitor_hwm_bytes(environment=None):
     environment = os.environ if environment is None else environment
-    for name in ("PERF_MULTI_MONITOR_HWM", "PERF_MONITOR_HWM"):
+    for name in ("PERF_MULTI_MONITOR_HWM_BYTES", "PERF_MONITOR_HWM_BYTES"):
         value = environment.get(name)
         if value in (None, ""):
             continue
@@ -372,13 +372,10 @@ def resolve_multi_server_shutdown_timeout_ms():
     return _env_int("PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS", _env_int("PERF_SERVER_SHUTDOWN_TIMEOUT_MS", 5000))
 
 
-def resolve_multi_timeout_seconds(duration_seconds, pattern, transport, msg_size):
-    override = _env_int("PERF_MULTI_TIMEOUT_SECONDS", _env_int("PERF_TIMEOUT_SECONDS", 0))
-    if override > 0:
-        return override
+def resolve_multi_timeout_seconds(duration_seconds, latency_seconds, pattern, transport, msg_size):
     size = max(int(msg_size), 64)
     duration = max(float(duration_seconds), 1.0)
-    paced = 2 * latency_duration(duration)
+    paced = 2 * int(latency_seconds)
     if transport in {"tls", "wss"} and size >= 131072 and pattern != "STREAM":
         return max(90, int(duration * 6.0 + paced) + 30)
     return max(45, int(duration * 3.0 + paced) + 20)

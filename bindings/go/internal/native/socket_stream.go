@@ -130,56 +130,61 @@ func (s *StreamSocket) Close() error {
 	return s.core.Close()
 }
 
+// CommonOptions returns the shared option facade for this STREAM socket.
+func (s *StreamSocket) CommonOptions() *CommonSocketOptions {
+	return s.core.CommonOptions()
+}
+
 // SetSendHighWaterMark sets the send byte HWM over the full uint64 range.
 func (s *StreamSocket) SetSendHighWaterMark(value uint64) error {
-	return s.core.SetSendHighWaterMark(value)
+	return s.CommonOptions().SetSendHighWaterMark(value)
 }
 
 // SendHighWaterMark returns the send byte HWM without narrowing the Core value.
 func (s *StreamSocket) SendHighWaterMark() (uint64, error) {
-	return s.core.SendHighWaterMark()
+	return s.CommonOptions().SendHighWaterMark()
 }
 
 // SetReceiveHighWaterMark sets the receive byte HWM over the full uint64 range.
 func (s *StreamSocket) SetReceiveHighWaterMark(value uint64) error {
-	return s.core.SetReceiveHighWaterMark(value)
+	return s.CommonOptions().SetReceiveHighWaterMark(value)
 }
 
 // ReceiveHighWaterMark returns the receive byte HWM without narrowing the Core value.
 func (s *StreamSocket) ReceiveHighWaterMark() (uint64, error) {
-	return s.core.ReceiveHighWaterMark()
+	return s.CommonOptions().ReceiveHighWaterMark()
 }
 
 func (s *StreamSocket) SetLinger(value time.Duration) error {
-	return s.core.SetLinger(value)
+	return s.CommonOptions().SetLinger(value)
 }
 
 func (s *StreamSocket) SetReceiveTimeout(value time.Duration) error {
-	return s.core.SetReceiveTimeout(value)
+	return s.CommonOptions().SetReceiveTimeout(value)
 }
 
 func (s *StreamSocket) SetSendTimeout(value time.Duration) error {
-	return s.core.SetSendTimeout(value)
+	return s.CommonOptions().SetSendTimeout(value)
 }
 
 func (s *StreamSocket) SetTCPKeepalive(value bool) error {
-	return s.core.SetTCPKeepalive(value)
+	return s.CommonOptions().SetTCPKeepalive(value)
 }
 
 func (s *StreamSocket) SetTCPNoDelay(value bool) error {
-	return s.core.SetTCPNoDelay(value)
+	return s.CommonOptions().SetTCPNoDelay(value)
 }
 
 func (s *StreamSocket) SetIPv6(value bool) error {
-	return s.core.SetIPv6(value)
+	return s.CommonOptions().SetIPv6(value)
 }
 
 func (s *StreamSocket) LastEndpoint() (string, error) {
-	return s.core.LastEndpoint()
+	return s.CommonOptions().LastEndpoint()
 }
 
 func (s *StreamSocket) SetReceiveFlowState(value ReceiveFlowState) error {
-	return s.core.SetReceiveFlowState(value)
+	return s.CommonOptions().SetReceiveFlowState(value)
 }
 
 func (s *StreamSocket) SetTLSServer(certPath string, keyPath string, requireClientCert bool) error {
