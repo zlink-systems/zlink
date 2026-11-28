@@ -64,7 +64,7 @@ import {
   runWithFlow,
   type ZLinkRuntimeEventPublisher
 } from '../diagnostics';
-import { diagnosticTextOrAbsent } from '../diagnostics/diagnostic-text';
+
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import { SubmitResult } from '../backend/runtime-values';
 import {
@@ -109,16 +109,11 @@ import {
   REMOTE_ACTOR_JOIN_PACKET,
   REMOTE_ACTOR_JOIN_ABORT,
   REMOTE_ACTOR_JOIN_ADMISSION,
-  REMOTE_ACTOR_JOIN_COMMIT,
   type ZLinkRemoteActorJoinWirePayload
 } from '../actors/actor-remote-wire';
-import { replayActorHandoffBacklog, type ZLinkActorHandoffPacket } from '../actors/actor-handoff';
-import {
-  decodeHandoffBacklog,
-  decodeRemoteActorRef,
-  decodeRemoteBoundSessionTarget
-} from './spot-remote-codec';
-import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
+import type { ZLinkActorHandoffPacket } from '../actors/actor-handoff';
+import { decodeRemoteActorRef } from './spot-remote-codec';
+import { encodeRoutingIdStorageHex } from '../routing-id';
 import type { CanonicalActorJoinRecovery } from '../foundation/actor-join-recovery-codec';
 import { SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE } from '../foundation/service-wire-constants.generated';
 
@@ -144,11 +139,10 @@ import type { ZLinkSpotActivation } from './spot-activation-state';
 import type { ZLinkSpotPreparationCompletion } from './spot-serial-executor';
 import { ZLinkSpotActivationLifecycle, type ZLinkNativeSpotAuthority } from './spot-activation';
 import { ZLinkSpotActorMembership } from './spot-actor-membership';
-import { ZLinkFormalRemoteActorTransferRegistry } from './formal-remote-actor-transfer-registry';
+
 import {
   ZLinkFormalRemoteActorAdmissionRegistry,
-  type ZLinkFormalRemoteActorAdmissionResult,
-  type ZLinkFormalRemoteActorAdmissionRecord
+  type ZLinkFormalRemoteActorAdmissionResult
 } from './formal-remote-actor-admission-registry';
 import type {
   ZLinkSpotActorHandoffRuntime,
@@ -363,7 +357,7 @@ export class DefaultZLinkSpotManager {
   private readonly routedSpotPackets: ZLinkRoutedSpotPacketDispatch;
   private readonly actorMembership: ZLinkSpotActorMembership;
   private readonly activationLifecycle: ZLinkSpotActivationLifecycle;
-  private readonly formalRemoteTransfers = new ZLinkFormalRemoteActorTransferRegistry();
+
   readonly formalRemoteActorAdmissions = new ZLinkFormalRemoteActorAdmissionRegistry();
   private readonly pendingInstanceMaterializations = new Map<
     string,
@@ -463,7 +457,6 @@ export class DefaultZLinkSpotManager {
       actorResolver: options.actorResolver,
       actorIngressMembership: this.actorIngressMembership,
       detachedTaskRunner: options.detachedTaskRunner,
-      actorTransferRuntime: options.actorTransferRuntime,
       boundSessionRuntime: options.boundSessionRuntime,
       actorHandoffRuntime: options.actorHandoffRuntime,
       admission: options.admission,
@@ -2371,11 +2364,6 @@ export class DefaultZLinkSpotManager {
       : undefined;
     try {
       const dispatch = async () => {
-        if (this.formalRemoteTransfers.has(actor.actorId)) {
-          throw new Error(
-            `Actor '${actor.actorId}' target transfer reconciliation is not complete.`
-          );
-        }
         const response = targetsEntrySpot
           ? await this.options.dispatchEntryActorPacket?.(
               origin,
@@ -2510,15 +2498,12 @@ export class DefaultZLinkSpotManager {
       record.parts.length === 0 ? undefined : decodeFormalRemoteTransferRequest(record.parts[0]!);
     const remoteJoinPhase = transferRequest?.phase;
     const isRemoteAdmission = remoteJoinPhase === REMOTE_ACTOR_JOIN_ADMISSION;
-    const isRemoteCommit = remoteJoinPhase === REMOTE_ACTOR_JOIN_COMMIT;
     const isRemoteAbort = remoteJoinPhase === REMOTE_ACTOR_JOIN_ABORT;
     let admissionRecord =
       transferRequest !== undefined
         ? this.formalRemoteActorAdmissions.get(transferRequest.transferId)
         : undefined;
     let canonicalAdmissionCreated = false;
-    let pendingAdmission = isRemoteCommit ? admissionRecord : undefined;
-    let commitAdmissionMissing = isRemoteCommit && admissionRecord === undefined;
     const applicationClaim =
       transferRequest === undefined
         ? this.options.admission?.claim(meshName, 'Actor join dispatch')
@@ -2577,13 +2562,10 @@ export class DefaultZLinkSpotManager {
     let callbackRequest: Message | undefined =
       record.parts.length === 0 ? undefined : record.parts[0]!;
     let ownedCallbackRequest: Message | undefined;
-    let materialized = false;
     let reply: Message | undefined;
     let deferredJoinCompletion: ZLinkDeferredJoinCompletion | undefined;
-    let preparedTransferState: Message | undefined;
     let admissionOutcome: ZLinkFormalRemoteActorAdmissionResult | undefined;
     let accepted = false;
-    let committedAdmissionReplay = isRemoteCommit && admissionRecord?.state === 'committed';
     const actorJoinIsCurrent = (): boolean =>
       (activation === undefined || this.activations.resolve(meshName, spotId!) === activation) &&
       (record.deadlineUnixMs === undefined || record.deadlineUnixMs > BigInt(Date.now())) &&
@@ -2697,13 +2679,6 @@ export class DefaultZLinkSpotManager {
           admissionOutcome.reply === undefined
             ? undefined
             : RuntimeMessage.from(admissionOutcome.reply);
-      }
-      if (transferRequest !== undefined && !targetsEntrySpot && remoteJoinPhase === undefined) {
-        // User Spot transfers must carry the private admission/commit phases.
-        // A legacy one-phase request would otherwise read relocation state
-        // before the target application has accepted the Actor.
-        requireMeshSpotReply(record.replyActorJoin(1, []));
-        return;
       }
       if (isRemoteAdmission && transferRequest !== undefined) {
         const rawActorRef = transferRequest.actorRef ?? control.currentActor ?? undefined;
@@ -2828,81 +2803,29 @@ export class DefaultZLinkSpotManager {
             ? undefined
             : RuntimeMessage.from(admissionOutcome.reply);
       }
-      if (isRemoteCommit && admissionRecord !== undefined) {
-        admissionOutcome = await admissionRecord.resultTask;
-        if ('error' in admissionOutcome) {
-          throw admissionOutcome.error;
-        }
-        deferredJoinCompletion = admissionOutcome.deferredJoinCompletion;
-      }
-      if (
-        actor === undefined &&
-        transferRequest !== undefined &&
-        this.options.actorTransferRuntime !== undefined &&
-        !isRemoteAdmission &&
-        !commitAdmissionMissing &&
-        admissionRecord?.state !== 'committed' &&
-        (targetsEntrySpot || activation !== undefined)
-      ) {
-        // Relocation state travels inline with the join request. The store
-        // reference handoff was removed with the direct-transfer contract
-        // (spec 28 §2 — Relocation Store keeps no relocation state payloads).
-        if (transferRequest.transferState === undefined) {
-          throw new ZLinkConfigurationException(
-            `Actor '${actorId}' transfer commit carries no inline relocation state.`
-          );
-        }
-        preparedTransferState = RuntimeMessage.from(
-          Buffer.from(transferRequest.transferState, 'base64')
-        );
-      }
       if (isRemoteAdmission && targetsEntrySpot) {
         accepted =
           admissionOutcome !== undefined &&
           !('error' in admissionOutcome) &&
           admissionOutcome.accepted;
-      } else if (isRemoteCommit && pendingAdmission !== undefined) {
-        validateRemoteAdmissionCommit(pendingAdmission, transferRequest!, actorId, control);
-        accepted = pendingAdmission.state === 'admitted' || pendingAdmission.state === 'committed';
-      } else if (commitAdmissionMissing) {
-        accepted = false;
       } else if (targetsEntrySpot) {
-        // Entry Spot return joins have no application admission callback. The
-        // actor-manager transaction is committed after the Core reply below.
-        // A formal transfer payload materializes the existing actor state at
-        // the Entry owner before that transaction is committed.
-        accepted =
-          actor !== undefined ||
-          (transferRequest !== undefined && this.options.actorTransferRuntime !== undefined);
+        accepted = actor !== undefined;
       } else if (
         !isRemoteAdmission &&
         control.canonicalActorJoin === undefined &&
         activation !== undefined &&
         callbackRequest !== undefined &&
-        (actor !== undefined || transferRequest !== undefined)
+        actor !== undefined
       ) {
         if (!actorJoinIsCurrent()) return;
         const request = callbackRequest;
-        const rawActorRef = transferRequest?.actorRef ?? control.currentActor ?? undefined;
-        if (rawActorRef === undefined) {
-          throw new ZLinkConfigurationException(`Actor '${actorId}' join record has no ActorRef.`);
-        }
-        const actorRef: ActorRef = {
-          actorId: rawActorRef.actorId,
-          objectGeneration:
-            'objectGeneration' in rawActorRef
-              ? rawActorRef.objectGeneration
-              : rawActorRef.generation,
-          meshName,
-          nodeRid: rawActorRef.nodeRid as unknown as RoutingId
-        };
         const response: ZLinkSpotActorJoinResult = await activation.serial.execute(async () =>
           activation.spot.onActorJoin(
-            actorRef.actorId,
+            actorId,
             wrapFrameworkPayloadMessage(
               request,
               this.options.messageSerializers,
-              transferRequest?.requestContentType ?? requestContentType
+              requestContentType
             )
           )
         );
@@ -2912,92 +2835,6 @@ export class DefaultZLinkSpotManager {
           response.reply === undefined
             ? undefined
             : encodeFrameworkPayloadMessage(response.reply, this.options.messageSerializers);
-        if (
-          accepted &&
-          transferRequest?.completionOperationId !== undefined &&
-          this.options.actorTransferRuntime !== undefined
-        ) {
-          deferredJoinCompletion = this.options.actorTransferRuntime.prepareDeferredJoinAccepted(
-            actorId,
-            transferRequest.completionOperationId,
-            actorRef,
-            reply?.data() ?? Buffer.alloc(0),
-            reply === undefined ? undefined : frameworkPayloadContentType(reply)
-          );
-          this.options.runtimeEventPublisher?.publish({
-            sourceName: 'zlink.framework.actor-handoff',
-            timestamp: new Date(),
-            marker: 'deferred_completion_staged',
-            actorId
-          });
-        }
-      }
-      if (
-        accepted &&
-        !isRemoteAdmission &&
-        actor === undefined &&
-        transferRequest !== undefined &&
-        this.options.actorTransferRuntime !== undefined
-      ) {
-        if (!actorJoinIsCurrent()) return;
-        const transferState = preparedTransferState;
-        preparedTransferState = undefined;
-        if (transferState === undefined) {
-          throw new Error('Remote actor transfer state was not prepared before admission.');
-        }
-        try {
-          const result = await this.options.actorTransferRuntime.materializeRoutedActor(
-            actorId,
-            transferRequest.actorType,
-            transferRequest.transferAdapterKey,
-            transferState,
-            transferRequest.actorEntryNodeRid,
-            transferRequest.remoteBoundSessionTarget
-          );
-          actor = result.actor;
-          materialized = true;
-          await this.options.actorTransferRuntime.commitRoutedActorAuthority(
-            actor,
-            toFrameworkRemoteAdmissionActorRef(
-              transferRequest.actorRef ?? control.currentActor!,
-              meshName
-            ),
-            transferRequest.transferId,
-            spotId,
-            control.currentSpotGeneration,
-            control.currentMembershipEpoch,
-            record.deadlineUnixMs === undefined
-              ? Date.now() + 5_000
-              : Number(record.deadlineUnixMs),
-            undefined
-          );
-        } finally {
-          transferState.close();
-        }
-        if (!actorJoinIsCurrent()) {
-          await this.options.actorTransferRuntime.rollbackRoutedActor(actor);
-          materialized = false;
-          return;
-        }
-      }
-      if (
-        accepted &&
-        actor !== undefined &&
-        transferRequest !== undefined &&
-        !isRemoteAdmission &&
-        !committedAdmissionReplay
-      ) {
-        this.formalRemoteTransfers.begin({
-          actor,
-          spotId,
-          transferId: transferRequest.transferId,
-          handoffBacklog: transferRequest.handoffBacklog,
-          deferredJoinCompletion,
-          sealedSession: transferRequest.remoteBoundSessionTarget
-        });
-        if (isRemoteCommit && admissionRecord !== undefined) {
-          this.formalRemoteActorAdmissions.markCommitted(transferRequest.transferId, actor);
-        }
       }
       const replyActorJoin = (): boolean => {
         if (!actorJoinIsCurrent()) return false;
@@ -3011,8 +2848,7 @@ export class DefaultZLinkSpotManager {
         );
         if (accepted && !isRemoteAdmission && joinReplyResult === SubmitResult.Ok) {
           // Core commits the target membership while it accepts this reply.
-          // From this call onward a later callback/transport failure is
-          // post-commit and must not roll the materialized Actor back.
+          // A later callback failure cannot send a second wire reply.
           replyState.targetCommitPublished = true;
         }
         requireMeshSpotReply(joinReplyResult);
@@ -3023,118 +2859,18 @@ export class DefaultZLinkSpotManager {
         return;
       }
       if (accepted && targetsEntrySpot && actor !== undefined) {
-        const entryActor = actor;
-        const pendingTransfer =
-          transferRequest === undefined ? undefined : this.formalRemoteTransfers.get(actorId);
-        if (committedAdmissionReplay) {
-          if (!replyActorJoin()) return;
-        } else if (pendingTransfer === undefined) {
-          if (!actorJoinIsCurrent()) return;
-          // The Core reply commits target membership. Entry lifecycle must
-          // therefore run after that commit, as it does on the native path.
-          if (!replyActorJoin()) return;
-          await this.options.dispatchEntryActorJoin?.(meshName, entryActor);
-        } else {
-          if (!replyActorJoin()) return;
-          const commitEntryTransfer = async (): Promise<void> => {
-            try {
-              try {
-                await this.options.dispatchEntryActorJoin?.(meshName, entryActor, []);
-              } finally {
-                this.formalRemoteTransfers.completeTargetLifecycle(
-                  entryActor.context.actorId,
-                  pendingTransfer.transferId
-                );
-              }
-              const sourceLeaveSubmitted = await pendingTransfer.sourceLeaveSubmitted;
-              if (!sourceLeaveSubmitted) {
-                throw new Error(
-                  `Actor '${entryActor.context.actorId}' source authority commit failed before leave submission.`
-                );
-              }
-              const handoffResults = await replayActorHandoffBacklog(
-                pendingTransfer.handoffBacklog,
-                async (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) => {
-                  if (this.options.dispatchEntryActorPacket === undefined) {
-                    throw new Error(
-                      'Entry Spot saved handoff replay requires its Actor packet runtime.'
-                    );
-                  }
-                  return await this.options.dispatchEntryActorPacket(
-                    'remote',
-                    entryActor.context.actorId,
-                    parts,
-                    returnResponse,
-                    remoteBoundSessionTarget,
-                    fallbackActorRef
-                  );
-                },
-                (index) =>
-                  this.options.runtimeEventPublisher?.publish({
-                    sourceName: 'zlink.framework.actor-handoff',
-                    timestamp: new Date(),
-                    marker: 'backlog_enqueued',
-                    actorId: entryActor.context.actorId,
-                    index
-                  })
-              );
-              const failedHandoff = handoffResults.find((result) => !result.ok);
-              if (failedHandoff !== undefined) {
-                throw new Error(
-                  `Actor '${entryActor.context.actorId}' saved Entry handoff packet ` +
-                    `${failedHandoff.index} failed: ${diagnosticTextOrAbsent(failedHandoff.error)}.`
-                );
-              }
-            } catch (error) {
-              const completion = pendingTransfer.deferredJoinCompletion;
-              if (completion !== undefined) {
-                await this.options.actorTransferRuntime?.deliverDeferredJoinCompletion(
-                  {
-                    ...completion,
-                    status: 'failed',
-                    kind: spotActorFailureKind(error)
-                  },
-                  entryActor,
-                  completion.actor,
-                  (operation) =>
-                    this.options.executeEntryActor!(meshName, entryActor.context.actorId, operation)
-                );
-              }
-              throw error;
-            }
-            const completion = pendingTransfer.deferredJoinCompletion;
-            if (completion !== undefined) {
-              await this.options.actorTransferRuntime?.deliverDeferredJoinCompletion(
-                completion,
-                entryActor,
-                completion.actor,
-                (operation) =>
-                  this.options.executeEntryActor!(meshName, entryActor.context.actorId, operation)
-              );
-            }
-            this.formalRemoteTransfers.delete(entryActor.context.actorId);
-          };
-          this.options.detachedTaskRunner.runDetached(
-            `actor Entry Spot transfer ${entryActor.context.actorId}`,
-            commitEntryTransfer
-          );
-        }
-      } else {
+        // Core commits membership when it accepts the reply.
         if (!replyActorJoin()) return;
+        await this.options.dispatchEntryActorJoin?.(meshName, actor);
+      } else {
+        replyActorJoin();
       }
     } catch (error) {
       if (control.canonicalActorJoin !== undefined) {
         this.formalRemoteActorAdmissions.fail(control.canonicalActorJoin.handoffId, error);
       }
-      if (!replyState.targetCommitPublished) {
-        this.formalRemoteTransfers.delete(actorId);
-      }
-      if (materialized && !replyState.targetCommitPublished) {
-        await this.options.actorTransferRuntime?.rollbackRoutedActor(actor!);
-      }
       throw error;
     } finally {
-      preparedTransferState?.close();
       ownedCallbackRequest?.close();
       reply?.close();
       applicationClaim?.close();
@@ -3149,28 +2885,9 @@ export class DefaultZLinkSpotManager {
     const spotId = owner.spotId as unknown as RoutingId | null;
     const activation = spotId === null ? undefined : this.activations.resolve(meshName, spotId);
     if (activation?.domain.kind === 'user') {
-      const transfer = { terminal: undefined as Promise<void> | undefined };
-      const operation = activation.serial.executeLifecycleOperation(async () => {
-        await this.dispatchMeshSpotControlCore(meshName, owner, record, (terminal) => {
-          transfer.terminal = terminal;
-        });
-        await transfer.terminal;
-      });
-      const control = record.kindData;
-      const actorId = control?.kind === 'actorControl' ? control.currentActor?.actorId : undefined;
-      if (
-        control?.kind === 'actorControl' &&
-        control.lifecycleKind === ActorLifecycleKind.Joined &&
-        actorId !== undefined &&
-        this.formalRemoteTransfers.get(actorId) !== undefined
-      ) {
-        this.options.detachedTaskRunner.runDetached(
-          `actor transfer target commit ${actorId}`,
-          async () => await operation
-        );
-        return;
-      }
-      await operation;
+      await activation.serial.executeLifecycleOperation(() =>
+        this.dispatchMeshSpotControlCore(meshName, owner, record)
+      );
       return;
     }
     await this.dispatchMeshSpotControlCore(meshName, owner, record);
@@ -3179,8 +2896,7 @@ export class DefaultZLinkSpotManager {
   private async dispatchMeshSpotControlCore(
     meshName: string,
     owner: ReadyRecord,
-    record: ReceiveRecord,
-    onDetachedTerminal?: (terminal: Promise<void>) => void
+    record: ReceiveRecord
   ): Promise<void> {
     const spotId = owner.spotId as unknown as RoutingId | null;
     const control = record.kindData;
@@ -3194,8 +2910,6 @@ export class DefaultZLinkSpotManager {
         ? control.previousActor
         : control.currentActor;
     const actorId = actorRef?.actorId;
-    const pendingTransfer =
-      actorId === undefined ? undefined : this.formalRemoteTransfers.get(actorId);
     const sourceActivation =
       actorId === undefined || spotId === null
         ? undefined
@@ -3205,8 +2919,7 @@ export class DefaultZLinkSpotManager {
     const actor =
       actorId === undefined
         ? undefined
-        : (pendingTransfer?.actor ??
-          sourceJoinedActor ??
+        : (sourceJoinedActor ??
           this.options.actorLifecycleResolver?.(actorId) ??
           this.options.actorResolver?.(actorId));
     const entrySpotId = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
@@ -3244,138 +2957,14 @@ export class DefaultZLinkSpotManager {
           );
         }
         this.options.actorTransferRuntime?.commitRoutedActor(actor, spotId, activation.spot);
-        const completeTargetLifecycle = async (): Promise<void> => {
-          await this.options.actorTransferRuntime?.claimRoutedActorLocation(
-            actor,
-            spotId,
-            meshName,
-            {
-              spotGeneration: control.currentSpotGeneration,
-              membershipEpoch: control.currentMembershipEpoch
-            }
-          );
-          // Make the Actor resolvable for lifecycle and saved-work dispatch,
-          // while formalRemoteTransfers continues to fence new ingress until
-          // the saved backlog has completed.
-          activation.commitActorJoin(actor);
-          await activation.spot.onJoinedActor(actor);
-        };
-        const completePublicJoin = async (): Promise<void> => {
-          const deferredJoinCompletion = pendingTransfer?.deferredJoinCompletion;
-          if (deferredJoinCompletion !== undefined) {
-            const currentRef =
-              this.options.actorTransferRuntime === undefined
-                ? null
-                : (control.currentActor as unknown as ActorRef | null);
-            if (currentRef === null) {
-              throw new Error(
-                `Actor '${actor.context.actorId}' has no target ref for deferred Join completion.`
-              );
-            }
-            await this.options.actorTransferRuntime?.deliverDeferredJoinCompletion(
-              deferredJoinCompletion,
-              actor,
-              currentRef,
-              (operation) =>
-                activation.executeActor(actor.context.actorId, async () => await operation())
-            );
-          }
-        };
-        const completeTargetReady = async (): Promise<void> => {
-          if (pendingTransfer !== undefined) {
-            const handoffResults = await replayActorHandoffBacklog(
-              pendingTransfer.handoffBacklog,
-              (parts, returnResponse, remoteBoundSessionTarget, _fallbackActorRef) =>
-                this.dispatchActorPacket(
-                  'remote',
-                  activation,
-                  actor.context.actorId,
-                  parts,
-                  returnResponse,
-                  remoteBoundSessionTarget,
-                  undefined
-                ),
-              (index) =>
-                this.options.runtimeEventPublisher?.publish({
-                  sourceName: 'zlink.framework.actor-handoff',
-                  timestamp: new Date(),
-                  marker: 'backlog_enqueued',
-                  actorId: actor.context.actorId,
-                  index
-                })
-            );
-            const failedHandoff = handoffResults.find((result) => !result.ok);
-            if (failedHandoff !== undefined) {
-              throw new Error(
-                `Actor '${actor.context.actorId}' saved handoff packet ` +
-                  `${failedHandoff.index} failed: ${diagnosticTextOrAbsent(failedHandoff.error)}.`
-              );
-            }
-            // Spec 15 §4.2 relocation temporary queue: arrivals parked at
-            // this target directly (not relayed through the source's
-            // ingress hold) migrate into the real Actor queue next, in the
-            // order they parked — after the relayed backlog above, before
-            // regular ingress opens.
-            this.migrateActorJoinPrewarm(activation, actor, pendingTransfer.transferId);
-            // This registry owns target lifecycle and saved backlog
-            // reconciliation only. Session route readiness is enforced by
-            // the Session binding aggregate after this boundary.
-            this.formalRemoteTransfers.delete(actor.context.actorId);
-          }
-          const sealedSession = pendingTransfer?.sealedSession;
-          const updateBoundSessionRoute = async (): Promise<void> => {
-            await this.options.actorTransferRuntime?.publishRoutedActorOwnership(
-              actor,
-              sealedSession
-            );
-            await this.options.actorTransferRuntime?.openRoutedActorSession(actor);
-          };
-          // Session routing is an independent post-Ready branch. The Session
-          // owner submits current-binding pushes while the route seal remains installed.
-          if (pendingTransfer !== undefined) {
-            this.options.detachedTaskRunner.runDetached(
-              `actor transfer Session route ${actor.context.actorId}`,
-              updateBoundSessionRoute
-            );
-          } else {
-            await updateBoundSessionRoute();
-          }
-        };
-        if (pendingTransfer !== undefined) {
-          const resume = async (): Promise<void> => {
-            try {
-              await activation.serial.post(completeTargetLifecycle);
-            } finally {
-              this.formalRemoteTransfers.completeTargetLifecycle(
-                actor.context.actorId,
-                pendingTransfer.transferId
-              );
-            }
-            const sourceLeaveSubmitted = await pendingTransfer.sourceLeaveSubmitted;
-            if (!sourceLeaveSubmitted) {
-              throw new Error(
-                `Actor '${actor.context.actorId}' source authority commit failed before leave submission.`
-              );
-            }
-            await completePublicJoin();
-            // Saved handlers enter the Spot owner on their own turns. Run
-            // them only after the lifecycle turn above has been released.
-            await completeTargetReady();
-          };
-          const terminal = resume();
-          if (onDetachedTerminal !== undefined) {
-            onDetachedTerminal(terminal);
-          } else {
-            this.options.detachedTaskRunner.runDetached(
-              `actor transfer target commit ${actor.context.actorId}`,
-              async () => await terminal
-            );
-          }
-          return;
-        }
-        await completeTargetLifecycle();
-        await completePublicJoin();
-        await completeTargetReady();
+        await this.options.actorTransferRuntime?.claimRoutedActorLocation(actor, spotId, meshName, {
+          spotGeneration: control.currentSpotGeneration,
+          membershipEpoch: control.currentMembershipEpoch
+        });
+        activation.commitActorJoin(actor);
+        await activation.spot.onJoinedActor(actor);
+        await this.options.actorTransferRuntime?.publishRoutedActorOwnership(actor, undefined);
+        await this.options.actorTransferRuntime?.openRoutedActorSession(actor);
         return;
       }
       if (control.lifecycleKind === ActorLifecycleKind.Left) {
@@ -3386,7 +2975,7 @@ export class DefaultZLinkSpotManager {
           // native Entry join is submitted. In that path the membership is
           // already committed away, so a later Core LEFT control must not
           // execute the same callback twice.
-          if (sourceJoinedActor === undefined && pendingTransfer === undefined) {
+          if (sourceJoinedActor === undefined) {
             return;
           }
           await activation.spot.onLeaveActor(actor);
@@ -3398,18 +2987,6 @@ export class DefaultZLinkSpotManager {
         await activation.spot.onDisconnectActor?.(actor);
       }
     });
-  }
-
-  async completeFormalSourceLeaveTerminal(
-    actorId: string,
-    transferId: string,
-    succeeded: boolean
-  ): Promise<boolean> {
-    return await this.formalRemoteTransfers.completeSourceLeaveTerminal(
-      actorId,
-      transferId,
-      succeeded
-    );
   }
 
   async finalizeActorJoinRelocation(
@@ -3832,27 +3409,16 @@ function reportActorJoinCallbackFailure(
   }
 }
 
-function spotActorFailureKind(error: unknown): ZLinkFrameworkErrorKind {
-  return error instanceof ZLinkFrameworkException
-    ? error.kind
-    : ZLinkFrameworkErrorKind.InternalFailure;
-}
-
 interface ZLinkFormalRemoteTransferRequest {
   readonly actorType: string;
   readonly actorId?: string;
-  readonly phase?: 'admission' | 'commit' | 'abort';
+  readonly phase: 'admission' | 'abort';
   readonly transferId: string;
-  readonly transferAdapterKey?: string;
-  readonly transferState?: string;
   readonly request: string;
   readonly requestContentType: string;
-  readonly actorEntryNodeRid?: RoutingId;
   readonly sourceSpotId?: RoutingId;
   readonly actorRef?: ActorRef;
-  readonly remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget;
   readonly expectedMembershipEpoch: bigint;
-  readonly handoffBacklog: readonly ZLinkActorHandoffPacket[];
   readonly completionOperationId?: {
     readonly high: bigint;
     readonly low: bigint;
@@ -3862,15 +3428,9 @@ interface ZLinkFormalRemoteTransferRequest {
 function decodeFormalRemoteTransferRequest(
   message: Message
 ): ZLinkFormalRemoteTransferRequest | undefined {
-  return decodeFormalRemoteTransferRequestBytes(message.data());
-}
-
-function decodeFormalRemoteTransferRequestBytes(
-  bytes: Uint8Array
-): ZLinkFormalRemoteTransferRequest | undefined {
   let payload: ZLinkRemoteActorJoinWirePayload;
   try {
-    payload = JSON.parse(Buffer.from(bytes).toString()) as ZLinkRemoteActorJoinWirePayload;
+    payload = JSON.parse(message.data().toString()) as ZLinkRemoteActorJoinWirePayload;
   } catch {
     return undefined;
   }
@@ -3878,17 +3438,7 @@ function decodeFormalRemoteTransferRequestBytes(
     payload.packetName !== REMOTE_ACTOR_JOIN_PACKET ||
     typeof payload.actorType !== 'string' ||
     typeof payload.transferId !== 'string' ||
-    !(
-      payload.phase === REMOTE_ACTOR_JOIN_ADMISSION ||
-      payload.phase === REMOTE_ACTOR_JOIN_ABORT ||
-      payload.phase === REMOTE_ACTOR_JOIN_COMMIT ||
-      payload.phase === undefined
-    ) ||
-    !(
-      payload.phase === REMOTE_ACTOR_JOIN_ADMISSION ||
-      payload.phase === REMOTE_ACTOR_JOIN_ABORT ||
-      typeof payload.transferState === 'string'
-    ) ||
+    (payload.phase !== REMOTE_ACTOR_JOIN_ADMISSION && payload.phase !== REMOTE_ACTOR_JOIN_ABORT) ||
     typeof payload.request !== 'string'
   ) {
     return undefined;
@@ -3896,48 +3446,20 @@ function decodeFormalRemoteTransferRequestBytes(
   return {
     actorType: payload.actorType,
     actorId: typeof payload.actorId === 'string' ? payload.actorId : undefined,
-    phase:
-      payload.phase === REMOTE_ACTOR_JOIN_ADMISSION ||
-      payload.phase === REMOTE_ACTOR_JOIN_COMMIT ||
-      payload.phase === REMOTE_ACTOR_JOIN_ABORT
-        ? payload.phase
-        : undefined,
+    phase: payload.phase,
     transferId: payload.transferId,
-    transferAdapterKey:
-      typeof payload.transferAdapterKey === 'string' ? payload.transferAdapterKey : undefined,
-    transferState: typeof payload.transferState === 'string' ? payload.transferState : undefined,
     request: payload.request,
     requestContentType:
       typeof payload.requestContentType === 'string'
         ? payload.requestContentType
         : 'application/json',
-    actorEntryNodeRid:
-      typeof payload.actorEntryNodeRid === 'string'
-        ? decodeRoutingId(payload.actorEntryNodeRid, payload.actorEntryNodeRidHex)
-        : undefined,
     sourceSpotId:
       typeof payload.sourceSpotId === 'string' ? (payload.sourceSpotId as RoutingId) : undefined,
     actorRef: decodeFormalRemoteActorRef(payload),
-    remoteBoundSessionTarget: decodeRemoteBoundSessionTarget(
-      payload.boundSessionRouterChannelId,
-      payload.boundSessionTargetNodeRid,
-      payload.boundSessionTargetNodeRidHex,
-      payload.boundSessionSpotId,
-      payload.boundSessionNodeRid,
-      payload.boundSessionNodeRidHex,
-      payload.boundSessionRid,
-      payload.boundSessionRidHex,
-      payload.boundSessionBindingGeneration,
-      payload.boundSessionPreviousAuthorityOwnerGeneration,
-      payload.boundSessionPreviousOwnerLeaseGeneration,
-      payload.boundSessionRelocationSealId,
-      payload.boundSessionServiceWireRelocation
-    ),
     expectedMembershipEpoch:
       typeof payload.expectedMembershipEpoch === 'string'
         ? BigInt(payload.expectedMembershipEpoch)
         : 0n,
-    handoffBacklog: decodeHandoffBacklog(payload.handoffBacklog),
     completionOperationId:
       typeof payload.completionOperationHigh === 'string' &&
       typeof payload.completionOperationLow === 'string'
@@ -3998,31 +3520,6 @@ function toFrameworkRemoteAdmissionActorRef(
     meshName,
     nodeRid: rawActorRef.nodeRid as RoutingId
   };
-}
-
-function validateRemoteAdmissionCommit(
-  admission: ZLinkFormalRemoteActorAdmissionRecord,
-  request: ZLinkFormalRemoteTransferRequest,
-  actorId: string,
-  control: { readonly currentSpotGeneration?: bigint }
-): void {
-  const expected = admission.admission;
-  const actorRef = request.actorRef;
-  if (
-    expected.actorId !== actorId ||
-    expected.actorType !== request.actorType ||
-    expected.expectedMembershipEpoch !== request.expectedMembershipEpoch ||
-    expected.requestFingerprint !== request.request ||
-    expected.targetSpotGeneration !== (control.currentSpotGeneration ?? 0n) ||
-    actorRef === undefined ||
-    actorRef.actorId !== expected.actorRef.actorId ||
-    !routingIdsEqual(actorRef.nodeRid, expected.actorRef.nodeRid) ||
-    actorRef.objectGeneration !== expected.actorRef.objectGeneration
-  ) {
-    throw new ZLinkConfigurationException(
-      `Remote Actor '${actorId}' commit does not match its target admission.`
-    );
-  }
 }
 
 function normalizeSpotCreateArgs<TRequest>(
