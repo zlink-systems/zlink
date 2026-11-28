@@ -910,7 +910,7 @@ unsettled at the stop deadline isn't treated as an expired owner lease. The unit
 expired-owner cleanup runs for it (such as failing its pending backlog at once), and its Store authority isn't changed. The
 unit's next owner lookup decides the outcome from the Store authority. A Join caller waiting on that unit gets
 `Unavailable` (the node is stopping, so the caller should retry). After the stop deadline, the Store isn't called or retried
-again for that unit. A `Draining` source starts `Preserve` for an accepted
+again for that unit. When the Join caller gets `Unavailable`, the runtime creates one diagnostic record carrying that unit and the reason (authority unsettled at the stop deadline). **The host releases its telemetry lease only after handing every diagnostic record of terminal results decided at the stop deadline to the diagnostic delivery worker**: the order is settle the terminal result, hand over its diagnostic record, then release the telemetry lease, and a forced stop doesn't release the lease before settlement cancellation (dropping a stopping host's records under [Observability §1](../06-observability/README.en.md) applies only to records created after the lease is released). A `Draining` source starts `Preserve` for an accepted
 relocation no later than the stop deadline minus the time of one management request (or at the Restore deadline if that's
 earlier). It may start earlier (for example, as soon as shutdown is requested).
 Callback execution isn't guaranteed on hardware failure or `SIGKILL`. It doesn't

@@ -45,8 +45,9 @@ public final class ZLinkSpotActorHandlerConcurrentActivationTest {
         }
         var pool = Executors.newFixedThreadPool(CREATORS);
         try (var runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             var go = new CountDownLatch(1);
             var ready = new CountDownLatch(CREATORS);
             List<Future<?>> creates = new ArrayList<>();
@@ -118,8 +119,9 @@ public final class ZLinkSpotActorHandlerConcurrentActivationTest {
                 "player", Player.class, PlayerFactory.class, f -> f.disableRelocation());
         objects.addSpotFactory("conditional", ConditionalSpot.class, f -> f.disableRelocation());
         try (var runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
+                ZLinkFrameworkRuntimeTestAccess.startHost(
                         options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             for (String spotId : List.of("first", "second")) {
                 runtime.spotManager()
                         .getOrCreate(spotId, "conditional")

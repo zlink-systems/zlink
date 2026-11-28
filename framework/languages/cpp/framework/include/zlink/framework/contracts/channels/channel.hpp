@@ -697,6 +697,8 @@ class route_send_call_t
 
 namespace detail
 {
+struct route_client_access_t;
+
 struct spot_activation_intent_t
 {
     bool instance = false;
@@ -865,23 +867,8 @@ class route_client_t
 
     template <typename TMessage> spot_send_call_t send_to_spot (spot_id_t target, TMessage message)
     {
-        auto state = _state;
-        auto message_value = std::make_shared<TMessage> (std::move (message));
-        auto intent = std::make_shared<detail::spot_activation_intent_t> ();
-        return spot_send_call_t (
-          state, detail::message_name<TMessage> (),
-          [state, target = std::move (target), intent,
-           message_value] (const std::string &packet_name,
-                           const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
-              return submit_spot_id_send_erased (
-                state, target, *intent, packet_name, std::type_index (typeid (TMessage)),
-                [message_value] (serializer_registry_t &serializers) {
-                    return serializers.template get<TMessage> ().serialize_with_content_type (
-                      *message_value);
-                },
-                metadata);
-          },
-          intent);
+        return send_to_spot_named (std::move (target), std::move (message),
+                                   detail::message_name<TMessage> ());
     }
 
     template <typename TRequest>
@@ -943,11 +930,45 @@ class route_client_t
     template <typename TRequest>
     spot_request_call_t request_to_spot (spot_id_t target, TRequest request)
     {
+        return request_to_spot_named (std::move (target), std::move (request),
+                                      detail::message_name<TRequest> ());
+    }
+
+  private:
+    friend struct detail::route_client_access_t;
+
+    template <typename TMessage>
+    spot_send_call_t
+    send_to_spot_named (spot_id_t target, TMessage message, std::string packet_name)
+    {
+        auto state = _state;
+        auto message_value = std::make_shared<TMessage> (std::move (message));
+        auto intent = std::make_shared<detail::spot_activation_intent_t> ();
+        return spot_send_call_t (
+          state, std::move (packet_name),
+          [state, target = std::move (target), intent,
+           message_value] (const std::string &packet_name,
+                           const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
+              return submit_spot_id_send_erased (
+                state, target, *intent, packet_name, std::type_index (typeid (TMessage)),
+                [message_value] (serializer_registry_t &serializers) {
+                    return serializers.template get<TMessage> ().serialize_with_content_type (
+                      *message_value);
+                },
+                metadata);
+          },
+          intent);
+    }
+
+    template <typename TRequest>
+    spot_request_call_t
+    request_to_spot_named (spot_id_t target, TRequest request, std::string packet_name)
+    {
         auto state = _state;
         auto request_value = std::make_shared<TRequest> (std::move (request));
         auto intent = std::make_shared<detail::spot_activation_intent_t> ();
         auto call = spot_request_call_t (
-          detail::message_name<TRequest> (), _serializers,
+          std::move (packet_name), _serializers,
           [state, target = std::move (target), intent,
            request_value] (const std::string &packet_name, std::chrono::milliseconds timeout,
                            const channel_request_call_t::metadata_map_t &metadata,
@@ -965,7 +986,6 @@ class route_client_t
         return call;
     }
 
-  private:
     friend class zlink_builder_t;
     static void admit_call (const std::shared_ptr<detail::route_client_state_t> &state);
     explicit route_client_t (std::shared_ptr<detail::route_client_state_t> state,

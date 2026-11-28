@@ -3,7 +3,6 @@ import {
   ActorTransferRole,
   type ActorTransferControlPayload
 } from '../foundation/service-runtime-contracts';
-import type { ServiceActorRef } from '../foundation/service-stateful-registry';
 import type { ActorRef, RoutingId } from '../../contracts';
 import type { ZLinkActorLocation } from '../../contracts/Locations/Rows';
 import type { ZLinkActorLocationStore } from '../locations/internal-store-contracts';
@@ -56,10 +55,9 @@ export class ZLinkActorTransferAuthorityRuntime {
         store,
         ownerId,
         meshName,
-        actorId,
         transferId,
-        control.actor,
-        control.membershipEpoch,
+        toFrameworkActorRef(control.actor, meshName),
+        control,
         signal
       );
       return;
@@ -82,18 +80,17 @@ export class ZLinkActorTransferAuthorityRuntime {
     store: ZLinkActorTransferAuthorityStore,
     ownerId: string,
     meshName: string,
-    actorId: string,
     transferId: string,
-    nativeTarget: ServiceActorRef,
-    membershipEpoch: bigint,
+    target: ActorRef,
+    control: ActorTransferControlPayload,
     signal?: AbortSignal
   ): Promise<void> {
+    const { actorId } = target;
     const location = await store.resolveActor({ meshName, actorId }, signal);
     if (location === undefined) {
       throw new Error(`Actor transfer '${transferId}' has no source location row.`);
     }
-    const target = toFrameworkActorRef(nativeTarget as never, meshName);
-    validateTarget(location, target, membershipEpoch, transferId);
+    validateTarget(location, target, control, transferId);
     const result = await store.prepareActorTransfer(
       {
         meshName,
@@ -188,16 +185,22 @@ export class ZLinkActorTransferAuthorityRuntime {
 function validateTarget(
   location: ZLinkActorLocation,
   target: ActorRef,
-  membershipEpoch: bigint,
+  control: ActorTransferControlPayload,
   transferId: string
 ): void {
+  const { sourceAuthorityOwnerGeneration } = control;
   if (
     target.actorId !== location.actorId ||
     target.objectGeneration !== location.actorRef.objectGeneration ||
-    membershipEpoch !== location.membershipEpoch
+    sourceAuthorityOwnerGeneration === undefined ||
+    sourceAuthorityOwnerGeneration <= 0n ||
+    sourceAuthorityOwnerGeneration !== location.authorityOwnerGeneration
   ) {
+    throw new Error(`Actor transfer '${transferId}' source Actor owner tenure is not current.`);
+  }
+  if (control.membershipEpoch !== location.membershipEpoch) {
     throw new Error(
-      `Actor transfer '${transferId}' does not match the source Actor generation and membership epoch.`
+      `Actor transfer '${transferId}' does not match the source Actor membership epoch.`
     );
   }
 }

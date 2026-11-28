@@ -92,7 +92,7 @@ pub(crate) fn connect_pair_and_confirm(
     let mut received = Received::empty();
     assert!(bound.recv(&mut received, RecvFlags::NONE).unwrap());
     assert_eq!(
-        received.single_part().unwrap().as_bytes(),
+        received.single_part_or_throw().unwrap().as_bytes(),
         b"connection-ready"
     );
 }
@@ -112,7 +112,7 @@ pub(crate) fn connect_dealer_router_and_confirm(
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
     assert_eq!(
-        received.single_part().unwrap().as_bytes(),
+        received.single_part_or_throw().unwrap().as_bytes(),
         b"connection-ready"
     );
 }
@@ -139,7 +139,9 @@ pub(crate) fn request_until_received(
             Instant::now() < deadline,
             "timed out waiting for a request-capable connection"
         );
-        let dealer = ctx.dealer_socket().expect("request dealer creation failed");
+        let dealer = ctx
+            .create_dealer_socket()
+            .expect("request dealer creation failed");
         dealer
             .connect(endpoint)
             .expect("request dealer connect failed");

@@ -36,6 +36,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -63,6 +64,7 @@ import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotCreateResult;
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -105,6 +107,7 @@ final class ZLinkSpotCloseConformanceTest {
             String spotId = "route-close-" + UUID.randomUUID();
             FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
             try (var source = startReady(routeCacheOptions(store, "source-" + spotId, !remote))) {
+                assertRouteCacheListenerBound(source);
                 source.actorManager()
                         .getOrCreate(ACTOR_ID, "player")
                         .submit()
@@ -115,6 +118,9 @@ final class ZLinkSpotCloseConformanceTest {
                                 ? startReady(routeCacheOptions(store, "owner-" + spotId, true))
                                 : null) {
                     var target = remote ? owner : source;
+                    if (remote) {
+                        assertRouteCacheListenerBound(target);
+                    }
                     var spot =
                             target.spotManager()
                                     .getOrCreate(spotId, SPOT_TYPE)
@@ -178,6 +184,7 @@ final class ZLinkSpotCloseConformanceTest {
             String spotId = "route-race-" + UUID.randomUUID();
             FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
             try (var host = startReady(routeCacheOptions(store, spotId, true))) {
+                assertRouteCacheListenerBound(host);
                 var spot =
                         host.spotManager()
                                 .getOrCreate(spotId, SPOT_TYPE)
@@ -259,7 +266,7 @@ final class ZLinkSpotCloseConformanceTest {
     }
 
     private static DefaultZLinkFrameworkOptions routeCacheOptions(
-            FaultStore store, String nodeId, boolean hostSpot) throws Exception {
+            FaultStore store, String nodeId, boolean hostSpot) {
         var options = new DefaultZLinkFrameworkOptions();
         options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.configureDispatch()
@@ -267,11 +274,7 @@ final class ZLinkSpotCloseConformanceTest {
         options.addLocationStore(store);
         options.addRelocationStore(new InMemoryRelocationStore());
         var node = options.addRouteMesh("close-mesh");
-        int port;
-        try (var socket = new java.net.ServerSocket(0)) {
-            port = socket.getLocalPort();
-        }
-        node.listen("tcp://127.0.0.1:" + port).setRoutingId(RoutingId.from(nodeId));
+        node.listen("tcp://127.0.0.1:0").setRoutingId(RoutingId.from(nodeId));
         var objects = node.objects().server();
         objects.addEntrySpot(FailureEntry.class);
         // A remote fixture must have one eligible Spot owner; GetOrCreate selects placement.
@@ -285,6 +288,12 @@ final class ZLinkSpotCloseConformanceTest {
                 FailureFactory.class,
                 factory -> factory.recreateOnRelocation());
         return options;
+    }
+
+    private static void assertRouteCacheListenerBound(ZLinkFrameworkRuntime host) {
+        String endpoint =
+                host.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "close-mesh").endpoint();
+        assertTrue(URI.create(endpoint).getPort() > 0, endpoint);
     }
 
     private static ZLinkActorJoinCompletion.Failed joinFailure(

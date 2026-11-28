@@ -14,8 +14,8 @@ fn main() {
     let ctx = Context::new().expect("context creation failed");
     let endpoint = sample_support::tcp_endpoint();
 
-    let router_socket = ctx.router_socket().expect("router socket failed");
-    let dealer_socket = ctx.dealer_socket().expect("dealer socket failed");
+    let router_socket = ctx.create_router_socket().expect("router socket failed");
+    let dealer_socket = ctx.create_dealer_socket().expect("dealer socket failed");
     let router_monitor = SocketMonitor::open(&router_socket).expect("router monitor open failed");
     let dealer_monitor = SocketMonitor::open(&dealer_socket).expect("dealer monitor open failed");
     let routing_id = RoutingId::from(b"request-reply-client");

@@ -15,11 +15,12 @@ func BenchmarkMultiSendTurnCoordinatorImmediate(b *testing.B) {
 		return testSendSubmission{result: zlink.SubmitOK}, nil
 	}
 	b.ReportAllocs()
-	b.ReportMetric(sockets, "msg/round")
+	const messagesPerRound = sockets * maxBurstPerSender
+	b.ReportMetric(messagesPerRound, "msg/round")
 	b.ResetTimer()
 	for round := 0; round < b.N; round++ {
-		if submitted, err := coordinator.submitRound(stopAt, submit); err != nil || submitted != sockets {
-			b.Fatalf("submitted = %d, want %d", submitted, sockets)
+		if submitted, err := coordinator.submitRound(stopAt, submit); err != nil || submitted != messagesPerRound {
+			b.Fatalf("submitted = %d, want %d", submitted, messagesPerRound)
 		}
 	}
 }

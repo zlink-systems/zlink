@@ -12,7 +12,8 @@ internal sealed class ZlinkStreamReceiveDispatcher(
     ZlinkStreamConnectorCallbacks callbacks,
     ZlinkStreamActors actors,
     Func<ZlinkStreamCloseReason, string?, CancellationToken, ValueTask> closeFromServer,
-    ZlinkStreamRequestClock? requestClock = null
+    ZlinkStreamRequestClock? requestClock = null,
+    ZlinkStreamAdmissionQueue? admissionQueue = null
 )
 {
     internal const string RetryAfterMetadataKey = "$zlink.admission.retryAfterMs";
@@ -32,6 +33,31 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             return;
         }
 
+        if (
+            header.Kind == ZlinkStreamMessageKind.Send
+            && ZlinkStreamAdmissionQueue.IsPush(header.Name)
+        )
+        {
+            if (admissionQueue is { HasWaiters: true })
+            {
+                var inbound = (requestClock ?? ZlinkStreamRequestClock.System).Now;
+                ReadOnlyMemory<byte> queuePayload;
+                try
+                {
+                    queuePayload = frameSender.DecompressIfNeeded(header, frame.Payload);
+                }
+                catch (ZlinkStreamException failure)
+                    when (failure.Error.Code == ZlinkStreamErrorCode.DecompressionFailed)
+                {
+                    queuePayload = default;
+                }
+                await admissionQueue
+                    .OnSendAsync(header, queuePayload, inbound)
+                    .ConfigureAwait(false);
+            }
+            return;
+        }
+
         var actor = header.ActorSlot is { } actorSlot ? actors.Resolve(actorSlot) : null;
 
         var receivedAt = header.Kind
@@ -46,10 +72,35 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             if (request is null)
                 return;
 
+            ReadOnlyMemory<byte> decoded;
             try
             {
-                var decoded = frameSender.DecompressIfNeeded(header, frame.Payload);
-                request.Complete(
+                decoded = frameSender.DecompressIfNeeded(header, frame.Payload);
+            }
+            catch (ZlinkStreamException failure)
+            {
+                await request
+                    .DispatchReplyAsync(
+                        new ZlinkStreamPendingCompletion(
+                            header,
+                            frame,
+                            failure.Error.Code == ZlinkStreamErrorCode.DecompressionFailed
+                                ? failure.Error
+                                : new ZlinkStreamError(
+                                    ZlinkStreamErrorCode.Disconnected,
+                                    "Connection ended before the reply completed."
+                                ),
+                            receivedAt
+                        )
+                    )
+                    .ConfigureAwait(false);
+                if (failure.Error.Code != ZlinkStreamErrorCode.DecompressionFailed)
+                    throw;
+                return;
+            }
+
+            await request
+                .DispatchReplyAsync(
                     new ZlinkStreamPendingCompletion(
                         header,
                         frame with
@@ -59,26 +110,8 @@ internal sealed class ZlinkStreamReceiveDispatcher(
                         null,
                         receivedAt
                     )
-                );
-            }
-            catch (ZlinkStreamException failure)
-            {
-                request.Complete(
-                    new ZlinkStreamPendingCompletion(
-                        header,
-                        frame,
-                        failure.Error.Code == ZlinkStreamErrorCode.DecompressionFailed
-                            ? failure.Error
-                            : new ZlinkStreamError(
-                                ZlinkStreamErrorCode.Disconnected,
-                                "Connection ended before the reply completed."
-                            ),
-                        receivedAt
-                    )
-                );
-                if (failure.Error.Code != ZlinkStreamErrorCode.DecompressionFailed)
-                    throw;
-            }
+                )
+                .ConfigureAwait(false);
             return;
         }
 
@@ -96,9 +129,11 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         {
             var request = pending.TakeReply(header);
             if (request is not null)
-                request.Complete(
-                    new ZlinkStreamPendingCompletion(header, frame, failure.Error, receivedAt)
-                );
+                await request
+                    .DispatchReplyAsync(
+                        new ZlinkStreamPendingCompletion(header, frame, failure.Error, receivedAt)
+                    )
+                    .ConfigureAwait(false);
             else
                 await callbacks
                     .PublishErrorAsync(failure.Error, cancellationToken)
@@ -114,30 +149,58 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             if (request is not null)
             {
                 int? retryAfterMs = null;
-                if (
-                    remoteCode == "unavailable"
-                    && header.Metadata.TryGet(RetryAfterMetadataKey, out var retryAfter)
-                )
+                var queueRequired = false;
+                if (remoteCode == "unavailable")
                 {
-                    if (
-                        int.TryParse(
-                            retryAfter,
-                            NumberStyles.None,
-                            CultureInfo.InvariantCulture,
-                            out var delay
+                    var hasQueue = header.Metadata.TryGet(
+                        ZlinkStreamAdmissionQueue.RequiredKey,
+                        out var required
+                    );
+                    var hasRetry = header.Metadata.TryGet(
+                        RetryAfterMetadataKey,
+                        out var retryAfter
+                    );
+                    if (hasQueue)
+                    {
+                        if (required == "1" && !hasRetry)
+                            queueRequired = true;
+                        else
+                            error = new ZlinkStreamError(
+                                ZlinkStreamErrorCode.FrameDecodeFailed,
+                                "Invalid authentication admission queue metadata."
+                            );
+                    }
+                    else if (hasRetry)
+                    {
+                        if (
+                            int.TryParse(
+                                retryAfter,
+                                NumberStyles.None,
+                                CultureInfo.InvariantCulture,
+                                out var delay
+                            )
+                            && retryAfter == delay.ToString(CultureInfo.InvariantCulture)
                         )
-                        && retryAfter == delay.ToString(CultureInfo.InvariantCulture)
-                    )
-                        retryAfterMs = delay;
-                    else
-                        error = new ZlinkStreamError(
-                            ZlinkStreamErrorCode.FrameDecodeFailed,
-                            "Invalid authentication admission retry delay."
-                        );
+                            retryAfterMs = delay;
+                        else
+                            error = new ZlinkStreamError(
+                                ZlinkStreamErrorCode.FrameDecodeFailed,
+                                "Invalid authentication admission retry delay."
+                            );
+                    }
                 }
-                request.Complete(
-                    new ZlinkStreamPendingCompletion(header, frame, error, receivedAt, retryAfterMs)
-                );
+                await request
+                    .DispatchReplyAsync(
+                        new ZlinkStreamPendingCompletion(
+                            header,
+                            frame,
+                            error,
+                            receivedAt,
+                            retryAfterMs,
+                            queueRequired
+                        )
+                    )
+                    .ConfigureAwait(false);
             }
             else
                 await callbacks.PublishErrorAsync(error, cancellationToken).ConfigureAwait(false);

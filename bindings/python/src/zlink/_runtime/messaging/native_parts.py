@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: MPL-2.0
-"""Materialize public payload parts into Core-owned message values.
+"""Project Core whole-message submission onto public payload ownership.
 
-All send, request, and reply paths use this module as the ownership boundary.
-The caller keeps ownership of input buffers and ``Message`` objects because
-the returned values are independent staging parts. A synchronous whole-message
-Core call consumes every staging part on success or ordinary failure.
+Core consumes the submitted native parts even on rejection. The submitted
+parts hold independent references. The binding consumes the caller's
+``Message`` on admission or when it retains staging for a WRITABLE wait.
 """
 
 from .message_materializer import Message, ReceivedMessage
 from ..._native.ffi import ZlinkMsg
+from ...contracts.sockets.codes import SubmitResult
 from ..handles.native_support import (
     _close_multipart,
     _clone_native_msg,
@@ -26,6 +26,13 @@ def _payload_parts(payload):
     if not parts:
         raise ValueError("payload must not be empty")
     return parts
+
+
+def _consume_submitted_messages(payload, result, *, retry_retained=False):
+    if result == SubmitResult.OK or retry_retained:
+        for part in _payload_parts(payload):
+            if isinstance(part, Message):
+                part.close()
 
 
 def _materialize_native_parts(payload):

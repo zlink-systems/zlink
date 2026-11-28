@@ -1877,7 +1877,22 @@ public final class ZLinkServiceM6BWireCodec {
             RoutingId sourceNodeRid,
             String sourceSpotId,
             int hop,
-            SpotRouteFence target) {}
+            SpotRouteFence target) {
+        public InstanceSpotMessage readyMessage(InstanceRouteFence route) {
+            return new InstanceSpotMessage(
+                    flags,
+                    route,
+                    true,
+                    sourceNodeGeneration,
+                    sourceNodeRid,
+                    sourceSpotId,
+                    false,
+                    0,
+                    0,
+                    null,
+                    true);
+        }
+    }
 
     public record InstanceSpotMessage(
             int flags,

@@ -20,14 +20,3 @@ func newXPubSocket(ctx *Context) (*XPubSocket, error) {
 	}
 	return &XPubSocket{xpubSubscribeSocket: &xpubSubscribeSocket{publishSocket: pub.publishSocket}}, nil
 }
-
-func (s *XPubSocket) Publish(topic string) PublishOp {
-	return newPublishBuilder(func(parts []sendBuilderPart, flags SendFlags) error {
-		return s.withCString(topic, func(cstr *C.char) error {
-			return submitMultipartFromBuilderParts(parts, func(native *C.zlink_msg_t, count C.size_t) error {
-				nativeResult15, nativeErr15 := C.zlink_publish(s.raw(), cstr, native, count, C.zlink_send_flags_t(flags))
-				return submitErrorFromCall(nativeResult15, nativeErr15)
-			})
-		})
-	})
-}

@@ -74,7 +74,11 @@ change.
 
 Relocation isn't object deletion and recreation, so `ObjectGeneration` is preserved. The
 order in which owner changed within the same object incarnation is distinguished by
-[`AuthorityOwnerGeneration`](../00-foundation/02-glossary.en.md#authority-owner-generation). Whether
+[`AuthorityOwnerGeneration`](../00-foundation/02-glossary.en.md#authority-owner-generation). **An Actor's membership epoch is ordered only within one owner tenure (the same `ObjectGeneration` and
+`AuthorityOwnerGeneration`).** Relocation doesn't carry the epoch, and the target counts it again from the initial
+value in the new owner tenure. Wherever an epoch is compared, the comparison first checks that both values belong to
+the same owner tenure; an epoch from another tenure isn't compared by magnitude and is rejected because that tenure
+isn't current. Whether
 several control messages belong to the same move is distinguished by a non-zero
 relocation identity the runtime creates. This identity consists of the `RelocationId`, a
 non-zero value unique per target preparation attempt within one `RelocationId` —

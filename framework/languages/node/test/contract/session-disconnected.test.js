@@ -113,7 +113,7 @@ for (const transport of ['mesh', 'no-bind']) {
           new ZLinkRuntimeTaskErrorSink(),
           new AbortController().signal
         ),
-        dispatchEntryActorPacket: (...args) => dispatch.dispatch(undefined, ...args)
+        dispatchEntryActorDelivery: (delivery) => dispatch.dispatchDelivery(undefined, delivery)
       });
       const parts = [
         new ZLinkBufferMessage(

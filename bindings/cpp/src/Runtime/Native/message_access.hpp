@@ -65,21 +65,6 @@ inline void adopt_native_message (message_t &message_, zlink_msg_t *src_)
       message_access_t::native (message_)) > 0;
 }
 
-inline void move_to_native (message_t &message_, zlink_msg_t *dest_)
-{
-    if (!dest_ || !message_.valid ())
-        return;
-    *dest_ = *message_access_t::native (message_);
-    message_access_t::valid (message_) = false;
-    message_access_t::has_payload (message_) = false;
-}
-
-inline void mark_sent (message_t &message_) noexcept
-{
-    message_access_t::valid (message_) = false;
-    message_access_t::has_payload (message_) = false;
-}
-
 inline bool has_payload (const message_t &message_) noexcept
 {
     return message_access_t::has_payload (message_);

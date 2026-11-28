@@ -264,6 +264,11 @@ public interface IZLinkStreamNodeBuilder
     IZLinkStreamNodeBuilder SetIdleTimeout(TimeSpan timeout);
     string? AuthenticationPacketName { get; set; }
     int MaxConcurrentAuthentications { get; set; }
+    bool AdmissionQueueEnabled { get; set; }
+    string? AdmissionQueueKey { get; set; }
+    string? AdmissionQueuePreviousKey { get; set; }
+    int? AdmissionGlobalLimit { get; set; }
+    string? AdmissionQueueMeshName { get; set; }
     TimeSpan AuthenticationRetryDelay { get; set; }
     IZLinkStreamSocketConfig ConfigureSocket();
     IZLinkStreamNodeBuilder EnableActorDispatch();

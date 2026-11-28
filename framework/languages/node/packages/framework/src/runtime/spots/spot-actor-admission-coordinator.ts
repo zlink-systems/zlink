@@ -13,7 +13,10 @@ import { routingIdsEqual } from '../routing-id';
 import type { ZLinkSpotActivationLifecycleOptions } from './spot-activation';
 import { ZLinkSpotActivation } from './spot-activation-state';
 import { ZLinkSpotActorJoinDispatch } from './spot-actor-join-dispatch';
-import type { ZLinkActorPacketExecution } from './spot-actor-packet-dispatch';
+import type {
+  ZLinkActorPacketDelivery,
+  ZLinkActorPacketExecution
+} from './spot-actor-packet-dispatch';
 import { ZLinkSpotActorPacketDispatch } from './spot-actor-packet-dispatch';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 
@@ -49,21 +52,34 @@ export class ZLinkSpotActorAdmissionCoordinator {
     messageFollowOrigin?: ZLinkMessageFollowOrigin,
     preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
   ): Promise<unknown> {
+    return this.dispatchActorDelivery(
+      activation,
+      {
+        origin,
+        actorId,
+        parts,
+        returnResponse,
+        remoteBoundSessionTarget,
+        fallbackActorRef,
+        requestTerminal,
+        messageFollowOrigin
+      },
+      preparation
+    );
+  }
+
+  dispatchActorDelivery(
+    activation: ZLinkSpotActivation,
+    delivery: ZLinkActorPacketDelivery,
+    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
+  ): Promise<unknown> {
     return dispatchActorPacketInMailbox<ZLinkSpotSerialTurnExecutor>(
-      (operation) => activation.executeActor(actorId, operation, undefined, operation, preparation),
+      (operation) =>
+        activation.executeActor(delivery.actorId, operation, undefined, operation, preparation),
       (serial) =>
         this.actorPacketDispatch(activation).admitDelivery(
           serial,
-          {
-            origin,
-            actorId,
-            parts,
-            returnResponse,
-            remoteBoundSessionTarget,
-            fallbackActorRef,
-            requestTerminal,
-            messageFollowOrigin
-          },
+          delivery,
           this.options.actorHandoffRuntime
         )
     );

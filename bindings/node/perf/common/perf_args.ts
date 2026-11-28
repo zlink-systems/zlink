@@ -56,9 +56,11 @@ function parseStringList(value, fallback) {
 }
 
 function parseCommonArgs(argv, defaults) {
+  const multi = defaults.clients !== undefined;
   const options = {
     pattern: defaults.pattern,
     duration: defaults.duration,
+    latencyDuration: undefined,
     msgSizes: defaults.msgSizes,
     resultsDir: defaults.resultsDir,
     resultsTag: '',
@@ -100,6 +102,18 @@ function parseCommonArgs(argv, defaults) {
     } else if (arg === '--duration') {
       options.duration = Number(argv[i + 1]);
       i += 1;
+    } else if ((multi && arg === '--latency-duration') || arg === '--monitor-hwm-bytes') {
+      const value = argv[++i];
+      if (value === undefined || value.startsWith('--')) {
+        throw new Error(`${arg} requires a value`);
+      }
+      if (arg === '--latency-duration') {
+        options.latencyDuration = value;
+      } else {
+        options.monitorHwm = value;
+      }
+    } else if (multi && arg.startsWith('--latency-duration=')) {
+      options.latencyDuration = arg.slice('--latency-duration='.length);
     } else if (arg === '--msg-size') {
       options.msgSizes = parseSizeList(argv[i + 1], defaults.msgSizes).slice(0, 1);
       options.msgSizesExplicit = true;
@@ -174,9 +188,6 @@ function parseCommonArgs(argv, defaults) {
       i += 1;
     } else if (arg === '--connect-ready-timeout-ms') {
       options.connectReadyTimeoutMs = Number(argv[i + 1]);
-      i += 1;
-    } else if (arg === '--monitor-hwm') {
-      options.monitorHwm = Number(argv[i + 1]);
       i += 1;
     } else if (arg === '--server-shutdown-timeout-ms') {
       options.serverShutdownTimeoutMs = Number(argv[i + 1]);

@@ -47,16 +47,7 @@ close_native_parts (zlink_msg_t *parts_, size_t part_count_, size_t start_index_
         (void) zlink_msg_close (&parts_[i]);
 }
 
-//  Moves a native frame into an already-valid @p part_ and re-establishes the
-//  binding-side payload-presence metadata.
-//
-//  `move_to_native()` and `message_t::init()` both clear `_has_payload`, so
-//  every helper that pushes a native payload back into a `message_t` must
-//  restore that flag; otherwise a message holding a real payload advertises
-//  itself as empty and the receive fast path (which branches on
-//  `has_payload()`) can destroy that payload on a failed receive. These are
-//  recovery/materialization paths, not the hot single-part path, so the extra
-//  `zlink_msg_size()` query is acceptable here.
+// Re-establish the binding's payload-presence metadata after adopting a frame.
 inline config_result_t adopt_native_part (message_t &part_, zlink_msg_t &native_)
 {
     detail::message_access_t::close_noexcept (part_);
@@ -67,87 +58,6 @@ inline config_result_t adopt_native_part (message_t &part_, zlink_msg_t &native_
     detail::message_access_t::valid (part_) = true;
     detail::refresh_payload_presence (part_);
     return result;
-}
-
-inline void restore_part_from_native (message_t &part_, zlink_msg_t &native_)
-{
-    const config_result_t result = adopt_native_part (part_, native_);
-    const int saved_errno = result != config_result_t::ok ? zlink_errno () : 0;
-    (void) zlink_msg_close (&native_);
-    detail::throw_if_failed<config_error_t> (result, saved_errno);
-}
-
-inline int move_parts_to_native (std::vector<message_t> &parts_, std::vector<zlink_msg_t> &native_)
-{
-    native_.clear ();
-    native_.resize (parts_.size ());
-
-    size_t moved = 0;
-    for (; moved < parts_.size (); ++moved) {
-        if (!parts_[moved].valid ()) {
-            errno = EINVAL;
-            break;
-        }
-        detail::move_to_native (parts_[moved], &native_[moved]);
-        if (parts_[moved].valid ())
-            break;
-    }
-
-    if (moved == parts_.size ())
-        return 0;
-
-    for (size_t i = 0; i < moved; ++i)
-        restore_part_from_native (parts_[i], native_[i]);
-
-    native_.clear ();
-    return -1;
-}
-
-inline void restore_parts_from_native (std::vector<message_t> &parts_,
-                                       std::vector<zlink_msg_t> &native_,
-                                       size_t start_index_ = 0)
-{
-    const size_t count = native_.size () < parts_.size () ? native_.size () : parts_.size ();
-    for (size_t i = start_index_; i < count; ++i)
-        restore_part_from_native (parts_[i], native_[i]);
-    native_.clear ();
-}
-
-inline int
-move_parts_to_native (std::vector<message_t> &parts_, zlink_msg_t *native_, size_t native_count_)
-{
-    if (native_count_ != parts_.size ()) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    size_t moved = 0;
-    for (; moved < parts_.size (); ++moved) {
-        if (!parts_[moved].valid ()) {
-            errno = EINVAL;
-            break;
-        }
-        detail::move_to_native (parts_[moved], &native_[moved]);
-        if (parts_[moved].valid ())
-            break;
-    }
-
-    if (moved == parts_.size ())
-        return 0;
-
-    for (size_t i = 0; i < moved; ++i)
-        restore_part_from_native (parts_[i], native_[i]);
-    return -1;
-}
-
-inline void restore_parts_from_native (std::vector<message_t> &parts_,
-                                       zlink_msg_t *native_,
-                                       size_t native_count_,
-                                       size_t start_index_ = 0)
-{
-    const size_t count = native_count_ < parts_.size () ? native_count_ : parts_.size ();
-    for (size_t i = start_index_; i < count; ++i)
-        restore_part_from_native (parts_[i], native_[i]);
 }
 
 inline int assign_parts_from_native (zlink_msg_t *parts_native_,
@@ -204,31 +114,20 @@ inline std::vector<message_t> take_parts_from_native (zlink_msg_t *parts_, size_
     return parts;
 }
 
-template <typename SubmitFn> inline int submit_one_message_part (message_t &part_, SubmitFn submit_)
+inline zlink_submit_result_t validate_submit_part (const message_t &part_) noexcept
 {
-    if (!part_.valid ()) {
-        errno = EINVAL;
-        return ZLINK_SUBMIT_INVALID_ARGUMENT;
-    }
-
-    zlink_msg_t native_part;
-    detail::move_to_native (part_, &native_part);
     if (part_.valid ())
-        return ZLINK_SUBMIT_INVALID_ARGUMENT;
-
-    const int rc = submit_ (&native_part, 1u);
-    if (rc != 0)
-        restore_part_from_native (part_, native_part);
-    return rc;
+        return ZLINK_SUBMIT_OK;
+    errno = EFAULT;
+    return ZLINK_SUBMIT_INVALID_HANDLE;
 }
 
 template <typename SubmitFn>
 inline int submit_borrowed_message_part (message_t &part_, SubmitFn submit_)
 {
-    if (!part_.valid ()) {
-        errno = EINVAL;
-        return ZLINK_SUBMIT_INVALID_ARGUMENT;
-    }
+    const auto validation = validate_submit_part (part_);
+    if (validation != ZLINK_SUBMIT_OK)
+        return validation;
 
     zlink_msg_t native_view;
     const int init_rc = zlink_msg_init (&native_view);
@@ -250,33 +149,6 @@ inline int submit_borrowed_message_part (message_t &part_, SubmitFn submit_)
     return rc;
 }
 
-template <typename BodyFn>
-inline int with_moved_native_parts (std::vector<message_t> &parts_, BodyFn body_)
-{
-    if (parts_.size () <= native_part_stack_capacity) {
-        std::array<zlink_msg_t, native_part_stack_capacity> native_parts;
-        if (detail::move_parts_to_native (parts_, native_parts.data (), parts_.size ()) != 0)
-            return -1;
-
-        return body_ (native_parts.data (), parts_.size ());
-    }
-
-    std::vector<zlink_msg_t> native_parts;
-    if (detail::move_parts_to_native (parts_, native_parts) != 0)
-        return -1;
-
-    return body_ (native_parts.data (), native_parts.size ());
-}
-
-template <typename SubmitFn>
-inline int submit_message_parts_close_on_failure (std::vector<message_t> &parts_, SubmitFn submit_)
-{
-    return detail::with_moved_native_parts (
-      parts_, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
-          return submit_ (native_parts_, part_count_);
-      });
-}
-
 //  Builds a borrowed, zero-copy native view over @p parts_ and runs @p body_.
 //
 //  Send/request/reply operations expose borrowed/read-only C++ messages while
@@ -292,11 +164,10 @@ inline int with_borrowed_native_parts (const std::vector<message_t> &parts_, Bod
     const size_t n = parts_.size ();
     if (n == 0)
         return body_ (nullptr, 0);
-    for (size_t i = 0; i < n; ++i) {
-        if (!parts_[i].valid ()) {
-            errno = EINVAL;
-            return ZLINK_SUBMIT_INVALID_ARGUMENT;
-        }
+    for (const message_t &part : parts_) {
+        const auto validation = validate_submit_part (part);
+        if (validation != ZLINK_SUBMIT_OK)
+            return validation;
     }
 
     auto run = [&] (zlink_msg_t *views_, size_t count_) -> int {
@@ -320,8 +191,10 @@ inline int with_borrowed_native_parts (const std::vector<message_t> &parts_, Bod
         }
 
         const int rc = body_ (views_, count_);
+        const int saved_errno = errno;
         for (size_t i = 0; i < count_; ++i)
             (void) zlink_msg_close (&views_[i]);
+        errno = saved_errno;
         return rc;
     };
 

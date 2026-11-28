@@ -5,7 +5,6 @@ import time
 import zlink
 
 from perf_multi_common import (
-    active_message_latency_ns,
     apply_multi_socket_options,
     benchmark_endpoint,
     benchmark_run_id,
@@ -20,6 +19,11 @@ from perf_multi_common import (
     received_has_stop_token,
     received_metric_payload,
     safe_poll,
+    resolve_multi_send_drain_timeout_ms,
+)
+
+from perf_multi_measurement import (
+    NS_PER_SECOND, SETTLE_SECONDS, latency_duration, record_receive, wait_ms,
 )
 
 
@@ -72,119 +76,59 @@ def main(argv=None):
                     start_event.wait()
                     if stop_event.is_set():
                         return
-                    active_deadline = time.perf_counter() + active_duration_s
-                    latency_sampler = LatencySampler()
-                    count = 0
-                    auto_hwm_printed = False
-                    stop_token_seen = False
+                    ctx.recalculate_auto_hwm()
                     recv_storage = zlink.create_received()
-                    recv_into = dealer.recv_into
-                    recv_flags = zlink.RecvFlags.DONT_WAIT
+                    drain_seconds = resolve_multi_send_drain_timeout_ms() / 1000
+                    sampler = LatencySampler()
 
-                    def drain_ready():
-                        # C receive_one_message + drain_non_blocking_messages:
-                        # every matched header counts; latency excludes
-                        # clock-skew (latency_ns_from_message returns None).
-                        nonlocal auto_hwm_printed, count, stop_token_seen
-                        while True:
-                            if not recv_into(recv_storage, flags=recv_flags):
-                                return
-                            with recv_storage:
-                                if not recv_storage.parts:
-                                    continue
-                                if received_has_stop_token(recv_storage):
-                                    stop_token_seen = True
-                                    continue
-                                data = received_metric_payload(
-                                    recv_storage, expected_size=args.msg_size
-                                )
-                                if not data:
-                                    continue
-                                active, latency = active_message_latency_ns(
-                                    data,
-                                    expected_msg_size=args.msg_size,
-                                    run_id=run_id,
-                                    active_deadline_ns=int(active_deadline * 1_000_000_000),
-                                )
-                                if not active:
-                                    continue
-                                count += 1
-                                if not auto_hwm_printed:
-                                    # Snapshot only after a valid application
-                                    # message proves that the pipe is attached.
-                                    print_multi_auto_hwm_detail(
-                                        dealer,
-                                        "endpoint",
-                                        args.transport,
-                                        args.msg_size,
-                                        "dealer",
-                                    )
-                                    auto_hwm_printed = True
-                                if latency is not None:
-                                    latency_sampler.add(latency)
+                    def receive(seconds, paced=False):
+                        start = time.monotonic()
+                        end = start + seconds
+                        deadline = int(end * NS_PER_SECOND)
+                        sample_start = int((start + SETTLE_SECONDS) * NS_PER_SECOND) if paced else None
+                        drain_end = end + drain_seconds
+                        remaining = args.clients
+                        count = 0
+                        while remaining and not stop_event.is_set():
+                            now = time.monotonic()
+                            if now >= drain_end:
+                                raise TimeoutError("multi dealer-dealer receive drain timed out")
+                            poll_ms = (
+                                dealer_dealer_active_poll_timeout_ms(remaining != args.clients, end, now=now)
+                                if now < end and not paced else wait_ms(now, drain_end)
+                            )
+                            if not safe_poll(poller, poll_events, poll_ms):
+                                continue
+                            while remaining and time.monotonic() < drain_end:
+                                if not dealer.recv_into(recv_storage, flags=zlink.RecvFlags.DONT_WAIT):
+                                    break
+                                observed = time.monotonic_ns()
+                                with recv_storage:
+                                    if received_has_stop_token(recv_storage):
+                                        remaining -= 1
+                                        continue
+                                    data = received_metric_payload(recv_storage, expected_size=args.msg_size)
+                                    if data:
+                                        count += record_receive(
+                                            data, args.msg_size, run_id, observed, deadline,
+                                            sampler if paced else None, sample_start=sample_start,
+                                        )
+                        return count
 
-                    while not stop_event.is_set():
-                        now = time.perf_counter()
-                        if now >= active_deadline:
-                            break
-                        # Match the C receiver: readiness is signal-driven
-                        # until a valid wire stop token is consumed. Only
-                        # then may the remaining active interval bound an
-                        # otherwise empty wait.
-                        poll_timeout_ms = dealer_dealer_active_poll_timeout_ms(
-                            stop_token_seen,
-                            active_deadline,
-                            now=now,
-                        )
-                        ready_count = safe_poll(
-                            poller, poll_events, poll_timeout_ms
-                        )
-                        if ready_count:
-                            for offset in range(ready_count):
-                                if poll_events.revents(offset) & int(
-                                    zlink.PollEventFlag.POLLIN
-                                ):
-                                    drain_ready()
-                        if time.perf_counter() >= active_deadline:
-                            break
-
-                    # C drain_phase_until_idle: bounded uncounted tail drain
-                    # so late in-flight messages do not skew the next case.
-                    idle_deadline = time.perf_counter() + 0.05
-                    tail_deadline = time.perf_counter() + active_duration_s
-                    while (
-                        not stop_event.is_set()
-                        and time.perf_counter() < tail_deadline
-                    ):
-                        if recv_into(recv_storage, flags=recv_flags):
-                            with recv_storage:
-                                pass
-                            idle_deadline = time.perf_counter() + 0.05
-                            continue
-                        if time.perf_counter() >= idle_deadline:
-                            break
-                        safe_poll(poller, poll_events, 50)
-
-                    if count <= 0:
-                        raise RuntimeError(
-                            "multi dealer-dealer server did not receive any active message"
-                        )
-                    if latency_sampler.count == 0:
-                        raise RuntimeError(
-                            "multi dealer-dealer server received active messages without latency samples"
-                        )
+                    count = receive(active_duration_s)
+                    if not count:
+                        raise RuntimeError("multi dealer-dealer received no active messages")
+                    print(f"PHASE_DRAINED,{args.msg_size},{count}", flush=True)
+                    paced = receive(SETTLE_SECONDS + latency_duration(args.duration), paced=True)
+                    print(f"PHASE_COMPLETE,{args.msg_size},{paced}", flush=True)
+                    if sampler.count == 0:
+                        raise RuntimeError("multi dealer-dealer received no paced messages")
+                    print_multi_auto_hwm_detail(dealer, "endpoint", args.transport, args.msg_size, "dealer")
                     metrics = result_metrics(
-                        count=count,
-                        msg_size=args.msg_size,
-                        elapsed_s=args.duration,
-                        latency_sampler=latency_sampler,
+                        count=count, msg_size=args.msg_size, elapsed_s=args.duration,
+                        latency_sampler=sampler,
                     )
-                    print_result_lines(
-                        "DEALER_DEALER",
-                        args.transport,
-                        args.msg_size,
-                        metrics,
-                    )
+                    print_result_lines("DEALER_DEALER", args.transport, args.msg_size, metrics)
 
 
 if __name__ == "__main__":

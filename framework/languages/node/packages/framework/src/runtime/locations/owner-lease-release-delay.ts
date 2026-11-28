@@ -2,10 +2,12 @@ import type { ZLinkLocationOwnerToken } from './internal-location-contracts';
 import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
 
 export class ZLinkOwnerLeaseReleaseDelayPendingError extends ZLinkFrameworkException {
-  constructor() {
+  constructor(previousOwnerObserved = true) {
     super(
       ZLinkFrameworkErrorKind.Unavailable,
-      'Fixed RID claim is waiting for the previous owner lease release delay.'
+      previousOwnerObserved
+        ? 'Fixed RID claim is waiting for the previous owner lease release delay.'
+        : 'MeshNode fixed RID claim is within its release wait'
     );
   }
 }
