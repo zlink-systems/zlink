@@ -2,18 +2,19 @@
 
 mod sample_support;
 
-use zlink::{Context, Message, RecvFlags, SocketMonitor, TopicMessage};
+use zlink::{Context, Message, RecvFlags, SocketMonitor, SubscriptionEvent, TopicMessage};
 
 fn main() {
     // --8<-- [start:doc]
     let ctx = Context::new().expect("context creation failed");
     let endpoint = sample_support::tcp_endpoint();
 
-    let pub_sock = ctx.pub_socket().expect("pub socket failed");
-    let sub_sock = ctx.sub_socket().expect("sub socket failed");
+    let pub_sock = ctx.create_xpub_socket().expect("xpub socket failed");
+    let sub_sock = ctx.create_sub_socket().expect("sub socket failed");
+    let topic = "prices";
 
     sub_sock
-        .set_subscription("prices")
+        .set_subscription(topic)
         .expect("set_subscription failed");
 
     let pub_mon = SocketMonitor::open(&pub_sock).expect("pub monitor open failed");
@@ -26,9 +27,23 @@ fn main() {
     drop(pub_mon);
     drop(sub_mon);
 
+    pub_sock
+        .common_options()
+        .set_receive_timeout(1_000)
+        .expect("set subscription event timeout failed");
+    let mut event = SubscriptionEvent::empty();
+    assert!(
+        pub_sock
+            .receive_subscription_event(&mut event, RecvFlags::NONE)
+            .expect("subscription event receive failed"),
+        "subscription event timed out"
+    );
+    assert!(event.is_subscribed());
+    assert_eq!(event.topic(), topic);
+
     let msg = Message::try_from(b"101.25").expect("message failed");
     pub_sock
-        .publish("prices")
+        .publish(topic)
         .message(msg)
         .submit()
         .expect("publish failed");
@@ -39,7 +54,7 @@ fn main() {
             .subscribe(&mut topic_msg, RecvFlags::NONE)
             .expect("subscribe recv failed")
     );
-    assert_eq!(topic_msg.topic(), "prices");
+    assert_eq!(topic_msg.topic(), topic);
     assert_eq!(topic_msg.parts()[0].as_str().unwrap(), "101.25");
     println!(
         "[pubsub/recv] publish: \"{}/101.25\" → subscribe: \"{}/{}\"",
