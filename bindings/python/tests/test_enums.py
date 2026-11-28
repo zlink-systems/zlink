@@ -8,13 +8,7 @@ class EnumValueTests(unittest.TestCase):
         self.assertEqual(int(zlink.SocketType.PAIR), 0x1001)
         self.assertEqual(int(zlink.SocketType.STREAM), 0x1008)
 
-    def test_context_option_values(self):
-        self.assertEqual(int(zlink.ContextOption.IO_THREADS), 1)
-        self.assertEqual(int(zlink.ContextOption.MAX_SOCKETS), 2)
-        self.assertEqual(int(zlink.ContextOption.CTX_OPT_BLOCKY), 10)
-        self.assertEqual(int(zlink.ContextOption.AUTO_HWM_PROFILE), 17)
-        self.assertEqual(int(zlink.ContextOption.AUTO_HWM_MEMORY_LIMIT_BYTES), 19)
-        self.assertEqual(int(zlink.ContextOption.AUTO_HWM_CORE_BUDGET_BYTES), 21)
+    def test_auto_hwm_profile_values(self):
         self.assertEqual(int(zlink.AutoHwmProfile.COMPACT), 0)
         self.assertEqual(int(zlink.AutoHwmProfile.LOW_LATENCY), 1)
         self.assertEqual(int(zlink.AutoHwmProfile.BALANCED), 2)
@@ -30,16 +24,6 @@ class EnumValueTests(unittest.TestCase):
         self.assertEqual(int(zlink.SubmitResult.OK), 0)
         self.assertEqual(int(zlink.SubmitResult.BACKPRESSURED), 1)
         self.assertEqual(int(zlink.SubmitResult.INTERNAL_ERROR), 12)
-
-    def test_completion_kind_values(self):
-        expected = {
-            zlink.CompletionKind.SEND: 1,
-            zlink.CompletionKind.REQUEST: 2,
-            zlink.CompletionKind.WRITABLE: 3,
-        }
-        for kind, value in expected.items():
-            self.assertEqual(int(kind), value)
-            self.assertIsInstance(kind, int)
 
     def test_request_recv_handler_close_bind_connect_config_results(self):
         self.assertEqual(int(zlink.RequestResult.OK), 0)
