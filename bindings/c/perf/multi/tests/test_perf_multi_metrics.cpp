@@ -261,21 +261,79 @@ void test_pubsub_latency_reference_result_lines ()
     assert (no_late_output.str ().empty ());
 }
 
-void test_pubsub_catch_up_rule_keeps_bound_and_hold ()
+void test_pubsub_catch_up_accepts_large_stable_backlog ()
 {
-    perf_multi_measurement::catch_up_tracker_t tracker (100.0);
-    assert (!tracker.observe (1000000000ULL, 0, 2));
-    assert (!tracker.observe (1100000000ULL, 10, 11));
-    assert (!tracker.observe (1599999999ULL, 59, 60));
-    assert (tracker.observe (1600000000ULL, 60, 61));
-    assert (tracker.in_flight_at_catch_up () == 1);
+    using namespace perf_multi_measurement;
+    catch_up_tracker_t tracker (100.0);
+    assert (!tracker.observe (0, {100}, 1100));
+    assert (!tracker.observe (catch_up_window_ns / 2, {125}, 1125));
+    assert (tracker.observe (catch_up_window_ns, {150}, 1150));
+    assert (tracker.in_flight_at_catch_up () == 1000);
+    assert (tracker.window_start_in_flight () == 1000);
+}
 
-    perf_multi_measurement::catch_up_tracker_t reset (100.0);
-    assert (!reset.observe (1000000000ULL, 0, 0));
-    assert (!reset.observe (1250000000ULL, 25, 27));
-    assert (!reset.observe (1750000000ULL, 50, 50));
-    assert (!reset.observe (2249999999ULL, 74, 74));
-    assert (reset.observe (2250000000ULL, 75, 75));
+void test_pubsub_catch_up_rejects_growing_backlog ()
+{
+    using namespace perf_multi_measurement;
+    catch_up_tracker_t tracker (100.0);
+    assert (!tracker.observe (0, {100}, 100));
+    assert (!tracker.observe (catch_up_window_ns / 2, {125}, 126));
+    assert (!tracker.observe (catch_up_window_ns, {150}, 151));
+}
+
+void test_pubsub_catch_up_rejects_receive_rate_below_target ()
+{
+    using namespace perf_multi_measurement;
+    catch_up_tracker_t tracker (100.0);
+    assert (!tracker.observe (0, {103}, 100));
+    assert (!tracker.observe (catch_up_window_ns, {150}, 150));
+    assert (tracker.observe (2 * catch_up_window_ns, {200}, 200));
+}
+
+// Large messages: 216/s gives about 108 scheduled sends per window. The
+// receive count is compared with the scheduled count of the same window,
+// not with rate * elapsed, which an integer count can miss by one message.
+void test_pubsub_catch_up_counts_scheduled_sends_in_window ()
+{
+    using namespace perf_multi_measurement;
+    catch_up_tracker_t tracker (216.0);
+    assert (!tracker.observe (0, {0, 0}, 1));
+    assert (tracker.observe (catch_up_window_ns + 300000, {108, 109}, 109));
+}
+
+// Each subscriber may be observed between two arrivals; one message short
+// is quantization, two messages short is a receive rate below target.
+void test_pubsub_catch_up_allows_one_message_per_subscriber_phase ()
+{
+    using namespace perf_multi_measurement;
+    catch_up_tracker_t short_by_one (216.0);
+    assert (!short_by_one.observe (0, {1, 2}, 2));
+    assert (short_by_one.observe (catch_up_window_ns, {110, 110}, 111));
+    catch_up_tracker_t short_by_two (216.0);
+    assert (!short_by_two.observe (0, {1, 3}, 3));
+    assert (!short_by_two.observe (catch_up_window_ns, {111, 111}, 113));
+}
+
+void test_pubsub_catch_up_restarts_on_backlog_growth ()
+{
+    using namespace perf_multi_measurement;
+    const uint64_t growth_ns = catch_up_window_ns / 2;
+    catch_up_tracker_t tracker (100.0);
+    assert (!tracker.observe (0, {100}, 100));
+    assert (!tracker.observe (growth_ns, {124}, 125));
+    assert (!tracker.observe (catch_up_window_ns, {150}, 150));
+    assert (tracker.observe (growth_ns + catch_up_window_ns, {175}, 175));
+    assert (tracker.in_flight_at_catch_up () == 0);
+    assert (tracker.window_start_in_flight () == 1);
+}
+
+void test_pubsub_catch_up_checks_each_subscriber_in_the_window ()
+{
+    using namespace perf_multi_measurement;
+    catch_up_tracker_t tracker (100.0);
+    assert (!tracker.observe (0, {100, 130}, 100));
+    assert (!tracker.observe (catch_up_window_ns, {161, 160}, 150));
+    assert (tracker.observe (2 * catch_up_window_ns, {211, 210}, 200));
 }
 
 void test_request_metrics_separate_active_and_latency ()
@@ -801,7 +859,13 @@ int main ()
     test_absolute_latency_schedule ();
     test_latency_send_timestamp_window ();
     test_pubsub_latency_reference_result_lines ();
-    test_pubsub_catch_up_rule_keeps_bound_and_hold ();
+    test_pubsub_catch_up_accepts_large_stable_backlog ();
+    test_pubsub_catch_up_rejects_growing_backlog ();
+    test_pubsub_catch_up_rejects_receive_rate_below_target ();
+    test_pubsub_catch_up_counts_scheduled_sends_in_window ();
+    test_pubsub_catch_up_allows_one_message_per_subscriber_phase ();
+    test_pubsub_catch_up_restarts_on_backlog_growth ();
+    test_pubsub_catch_up_checks_each_subscriber_in_the_window ();
     test_request_metrics_separate_active_and_latency ();
     connect_monitor_state_t ready_state;
     zlink_monitor_event_t ready_event = {};
