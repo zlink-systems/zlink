@@ -1,55 +1,16 @@
 #[path = "perf_common.rs"]
 mod common;
 
+use std::collections::HashSet;
 use std::io::{self, BufRead, Write};
 use std::time::{Duration, Instant};
 use zlink::{
     POLLIN, PollEvent, Poller, RecvFlags, RecvResult, SocketMonitor, SubSocket, TopicMessage,
 };
 
-const STOP_DRAIN_GRACE: Duration = Duration::from_millis(500);
-
-// Returns (processed_any, stop_seen). C perf_multi_pubsub_client.cpp
-// recv_one_pubsub_message(): the wire stop token (pubsub_recv_stop) ends the
-// recv phase.
-fn drain_subscriber(
-    socket: &SubSocket,
-    msg_size: usize,
-    latency_stats: &mut common::LatencyStats,
-    active_count: &mut u64,
-    active_deadline: Instant,
-) -> bool {
-    let mut stop_seen = false;
-    let mut topic_msg = TopicMessage::empty();
-    loop {
-        match socket.subscribe(&mut topic_msg, RecvFlags::DONT_WAIT) {
-            Ok(true) => {
-                let data = common::message_payload(topic_msg.parts());
-                if common::is_stop_token(data) {
-                    stop_seen = true;
-                    continue;
-                }
-                if !common::is_valid_active_message(data, msg_size) {
-                    continue;
-                }
-                let now = Instant::now();
-                // C: messages arriving after the active deadline are not counted.
-                if now >= active_deadline {
-                    continue;
-                }
-                *active_count += 1;
-                if let Some(elapsed_ns) = common::elapsed_since_sent_ns(data) {
-                    latency_stats.record_latency_sample_ns(elapsed_ns);
-                }
-            }
-            Ok(false) => break,
-            Err(err) if err.code == RecvResult::NoData => break,
-            Err(err) => panic!("recv failed: {err}"),
-        }
-    }
-    stop_seen
-}
-
+const DRAIN_LIMIT: Duration = Duration::from_secs(10);
+const DRAIN_QUIET: Duration = Duration::from_millis(50);
+const RECEIVE_POLL_MS: i64 = 10;
 fn main() {
     let args = common::MultiArgs::parse();
     let settings = common::MultiSettings::from_env();
@@ -59,7 +20,7 @@ fn main() {
     let mut monitors: Vec<SocketMonitor> = Vec::with_capacity(settings.clients);
 
     for _ in 0..settings.clients {
-        let sub = ctx.sub_socket().expect("sub");
+        let sub = ctx.create_sub_socket().expect("sub");
         // C parity: numeric HWM remains behind the manual-override gate.
         common::apply_multi_hwm(&sub, &settings);
         if matches!(args.transport.as_str(), "tls" | "wss") {
@@ -83,23 +44,26 @@ fn main() {
     println!("CLIENT_READY,{}", args.msg_size);
     io::stdout().flush().ok();
 
-    let stdin = io::stdin();
-    let mut start_seen = false;
-    for line in stdin.lock().lines() {
-        let line = line.unwrap_or_default();
-        if line.trim() == format!("START,{}", args.msg_size) {
-            start_seen = true;
-            break;
-        }
-    }
-    if !start_seen {
+    if !common::wait_for_start_stdin(args.msg_size) {
         return;
     }
     ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
-    // C perf_multi_pubsub_client.cpp run_recv_duration(): zlink_poller_wait(-1)
-    // signal-driven; the phase ends on the wire stop token (not a wall clock).
-    // No hot-loop sleep(1ms).
+    let msg_size = args.msg_size;
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            let line = line.expect("phase control read");
+            for phase in [common::PHASE_ACTIVE, common::PHASE_LATENCY] {
+                if line == format!("PHASE_DONE,{msg_size},{phase}") {
+                    if done_tx.send((phase, Instant::now())).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+
     let poller = Poller::new().expect("poller");
     for (index, socket) in sockets.iter().enumerate() {
         poller
@@ -108,50 +72,154 @@ fn main() {
     }
     let mut events = vec![PollEvent::default(); sockets.len().max(1)];
 
-    let active_deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
-    let mut latency_stats = common::LatencyStats::new();
-    let mut active_count: u64 = 0;
-    let mut phase_done = false;
+    let active_seconds = settings.duration_seconds;
+    let latency_seconds = common::latency_seconds(active_seconds);
+    let mut tracker = common::CatchUp::default();
+    let mut catch_up = None;
+    let mut paced_epoch = None;
+    let mut active_counts = vec![0u64; sockets.len()];
+    let mut paced_counts = vec![0u64; sockets.len()];
+    let mut sample_counts = vec![0u64; sockets.len()];
+    let mut latency = common::LatencyStats::new();
+    let mut reference = common::LatencyStats::new();
+    let mut inflight_floor = None;
+    let mut next_progress = 0;
+    let mut topic_msg = TopicMessage::empty();
 
-    while !phase_done {
-        let now = Instant::now();
-        let wait_ms = if now < active_deadline {
-            let remaining = active_deadline.saturating_duration_since(now);
-            remaining.as_millis().clamp(1, i64::MAX as u128) as i64
-        } else {
-            let stop_deadline = active_deadline + STOP_DRAIN_GRACE;
-            if now >= stop_deadline {
-                break;
+    let mut receive_phase = |phase,
+                             seconds,
+                             schedule: Option<&common::Schedule>,
+                             active_counts: &mut [u64]| {
+        let mut last_payload = Instant::now();
+        let deadline = common::now_ns() + seconds * common::SECOND_NS;
+        let drain_deadline = deadline + DRAIN_LIMIT.as_nanos() as u64;
+        let mut stopped = HashSet::with_capacity(sockets.len());
+        let mut done = None;
+        loop {
+            let now = common::now_ns();
+            assert!(now < drain_deadline, "pubsub receive drain timed out");
+            if let Ok((finished, when)) = done_rx.try_recv() {
+                assert_eq!(finished, phase);
+                done = Some(when);
             }
-            let remaining = stop_deadline.saturating_duration_since(now);
-            remaining.as_millis().clamp(1, i64::MAX as u128) as i64
-        };
-        match poller.wait(&mut events, wait_ms) {
-            Ok(event_count) => {
-                for event in &events[..event_count] {
-                    if event.revents & POLLIN == 0 || event.slot >= sockets.len() {
+            if let Some(done_at) = done {
+                if stopped.len() == sockets.len()
+                    || Instant::now().saturating_duration_since(last_payload.max(done_at))
+                        >= DRAIN_QUIET
+                {
+                    break;
+                }
+            }
+            let n = poller
+                .wait(&mut events, RECEIVE_POLL_MS)
+                .expect("poller wait");
+            for event in &events[..n] {
+                if event.revents & POLLIN == 0 || event.slot >= sockets.len() {
+                    continue;
+                }
+                let slot = event.slot;
+                for _ in 0..common::MAX_BURST_PER_SENDER {
+                    match sockets[slot].subscribe(&mut topic_msg, RecvFlags::DONT_WAIT) {
+                        Ok(true) => {}
+                        Ok(false) => break,
+                        Err(err) if err.code == RecvResult::NoData => break,
+                        Err(err) => panic!("recv failed: {err}"),
+                    }
+                    let now = common::now_ns();
+                    last_payload = Instant::now();
+                    let data = common::message_payload(topic_msg.parts());
+                    if common::is_phase_marker(data, msg_size, phase) {
+                        stopped.insert(slot);
                         continue;
                     }
-                    if drain_subscriber(
-                        &sockets[event.slot],
-                        args.msg_size,
-                        &mut latency_stats,
-                        &mut active_count,
-                        active_deadline,
-                    ) {
-                        phase_done = true;
+                    if !common::is_valid_message(data, msg_size) {
+                        continue;
+                    }
+                    match common::decode_phase(data) {
+                        common::PHASE_ACTIVE
+                            if schedule.is_none() && common::active_receive(now, deadline) =>
+                        {
+                            active_counts[slot] += 1;
+                        }
+                        received_phase @ (common::PHASE_WARMUP | common::PHASE_LATENCY)
+                            if schedule.is_some() =>
+                        {
+                            paced_counts[slot] += 1;
+                            let sent = common::decode_sent_ts_ns(data);
+                            if sent <= 0 || sent as u64 > now {
+                                continue;
+                            }
+                            let sent = sent as u64;
+                            paced_epoch.get_or_insert(sent);
+                            let ns = (now - sent) as f64;
+                            if catch_up.is_none() {
+                                reference.record_ns(ns);
+                            } else if received_phase == common::PHASE_LATENCY {
+                                latency.record_ns(ns);
+                                sample_counts[slot] += 1;
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
-            Err(err) => panic!("poller wait failed: {err}"),
+            if let (Some(schedule), Some(epoch), None) = (schedule, paced_epoch, catch_up) {
+                let now = common::now_ns();
+                let elapsed = now.saturating_sub(epoch);
+                let scheduled = schedule.scheduled(elapsed);
+                if now >= next_progress {
+                    let minimum = *paced_counts.iter().min().expect("subscribers");
+                    let floor = scheduled.saturating_sub(minimum);
+                    inflight_floor =
+                        Some(inflight_floor.map_or(floor, |prior: u64| prior.min(floor)));
+                    let seconds = elapsed as f64 / common::SECOND_NS as f64;
+                    println!(
+                        "PUBSUB_CATCHUP_PROGRESS,{msg_size},{},{floor},{minimum},{scheduled},{}",
+                        common::diagnostic_number(seconds, 6),
+                        common::diagnostic_number(schedule.rate, 6)
+                    );
+                    next_progress = now + common::SECOND_NS;
+                }
+                if elapsed <= latency_seconds * common::SECOND_NS
+                    && tracker.observe(now, &paced_counts, scheduled, schedule.rate)
+                {
+                    let seconds = elapsed as f64 / common::SECOND_NS as f64;
+                    catch_up = Some(seconds);
+                    println!("PHASE_CATCHUP,{msg_size}");
+                    println!(
+                        "PUBSUB_CATCHUP_DIAG,{msg_size},{},{},window_start_in_flight,{}",
+                        common::diagnostic_number(seconds, 6),
+                        tracker.in_flight,
+                        tracker.start_in_flight
+                    );
+                }
+            }
         }
-    }
-
-    let stats = latency_stats.finish();
-    let final_stats = common::StatsResult {
-        count: active_count,
-        ..stats
     };
+    receive_phase(
+        common::PHASE_ACTIVE,
+        active_seconds,
+        None,
+        &mut active_counts,
+    );
+    // The active rates are per subscriber. The publisher paces at the smallest.
+    // Finish the active callback before borrowing its counts.
+    let min_received = *active_counts.iter().min().expect("subscribers");
+    assert!(min_received > 0, "subscriber received no active messages");
+    println!("PHASE_DRAINED,{msg_size},{min_received}");
+    let schedule = common::Schedule::new(0, min_received, active_seconds);
+    receive_phase(
+        common::PHASE_LATENCY,
+        2 * latency_seconds,
+        Some(&schedule),
+        &mut active_counts,
+    );
+    println!(
+        "PHASE_COMPLETE,{msg_size},{}",
+        sample_counts.iter().min().unwrap()
+    );
+    let mut final_stats = latency.finish();
+    final_stats.count = active_counts.iter().sum();
     if let Some(socket) = sockets.first() {
         common::print_multi_auto_hwm_detail(
             socket,
@@ -161,16 +229,36 @@ fn main() {
             "sub",
         );
     }
-    common::print_result(
-        "PUBSUB",
-        &args.transport,
-        args.msg_size,
-        settings.duration_seconds,
-        &final_stats,
-    );
-    // PERF_POLICY.md:469-471 / D-2 - the C PUBSUB client emits CLIENT_DONE
-    // (bindings/c/perf/multi/src/perf_multi_pubsub_client.cpp:367).
-    println!("CLIENT_DONE,{}", args.msg_size);
-    // C returns normally from main; print_result already flushed stdout. Avoid
-    // std::process::exit so the flush is not raced.
+    if final_stats.latency_count > 0 {
+        println!(
+            "PUBSUB_LATENCY_DIAG,{msg_size},latency_p50_ms,{:.6}",
+            final_stats.p50_ns / 1e6
+        );
+        common::print_result(
+            "PUBSUB",
+            &args.transport,
+            msg_size,
+            active_seconds,
+            &final_stats,
+        );
+    } else {
+        let key = format!("RESULT,current,PUBSUB,{},{msg_size}", args.transport);
+        let phase = common::build_phase_result("PUBSUB", msg_size, active_seconds, &final_stats);
+        println!("{key},throughput,{:.3}", phase.throughput);
+        println!("{key},bandwidth,{:.3}", phase.bandwidth);
+        for metric in ["latency", "latency_p95", "latency_p99"] {
+            println!("{key},{metric},invalid:receiver_not_caught_up_by_deadline");
+        }
+        let key = format!("REFERENCE,current,PUBSUB,{},{msg_size}", args.transport);
+        let reference = reference.finish();
+        let floor = inflight_floor.unwrap_or(0);
+        println!("{key},latency_ref_p50,{:.6}", reference.p50_ns / 1e6);
+        println!("{key},latency_ref_p99,{:.6}", reference.p99_ns / 1e6);
+        println!("{key},inflight_floor,{floor}");
+        println!(
+            "{key},inflight_floor_ms,{:.6}",
+            floor as f64 / schedule.rate * 1_000.0
+        );
+    }
+    println!("CLIENT_DONE,{msg_size}");
 }

@@ -244,9 +244,14 @@ try (SubSocket sub = context.createSubSocket()) {
 | --- | --- |
 | `bind`/`connect`/`unbind`/`disconnect`/`disconnectRid` | same shape as `PairSocket` |
 | `setSubscription(String filter)` / `unsetSubscription(String filter)` | adds/removes a topic filter; subscriptions accumulate |
-| `subscriptionAt(int index)` | `Optional<SubscriptionEntry>` — the filter at that index, empty when out of range |
+| `subscriptionAt(int index)` | `Optional<SubscriptionEntry>` — Returns the filter and whether it is a pattern. Returns `Optional.empty()` if the index has no entry. |
 | `subscribe(TopicMessage result, RecvFlags flags)` | populates `result` with the next matching publish |
 | `options()` | returns `SubSocketOptions`: `topicsCount()` only, read-only — the only per-type option either socket has |
+
+`subscriptionAt` calls Core once with a buffer owned by the binding. An empty
+filter is a successful result. Only `BUFFER_TOO_SMALL` triggers a second call,
+with the length returned by Core. `NOT_FOUND` returns no entry. The binding
+throws `ZlinkConfigException` for other failure results. See the [common Subscription Query](../../spec/README.en.md#subscription-query).
 
 **`XSubSocket` has the identical member set** — every method independently redeclared with the
 same signatures; the only difference between the two types is what SUB/XSUB themselves mean at

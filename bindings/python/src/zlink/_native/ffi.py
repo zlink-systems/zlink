@@ -2,8 +2,28 @@
 
 import ctypes
 import os
+from enum import IntEnum
 
 from ._native_loader import load_native_library
+
+
+class ContextOption(IntEnum):
+    """Raw native context option codes used by the runtime."""
+    IO_THREADS = 1
+    MAX_SOCKETS = 2
+    SOCKET_LIMIT = 3
+    THREAD_PRIORITY = 22
+    THREAD_SCHED_POLICY = 4
+    MSG_T_SIZE = 6
+    THREAD_AFFINITY_CPU_ADD = 7
+    THREAD_AFFINITY_CPU_REMOVE = 8
+    THREAD_NAME_PREFIX = 9
+    CTX_OPT_BLOCKY = 10
+    AUTO_HWM_ENABLE = 12
+    AUTO_HWM_RECALC_DEBOUNCE_MS = 14
+    AUTO_HWM_PROFILE = 17
+    AUTO_HWM_MEMORY_LIMIT_BYTES = 19
+    AUTO_HWM_CORE_BUDGET_BYTES = 21
 
 
 class ZlinkMsg(ctypes.Union):
@@ -17,6 +37,10 @@ class ZlinkMsg(ctypes.Union):
 
 class ZlinkRoutingId(ctypes.Structure):
     _fields_ = [("size", ctypes.c_uint8), ("data", ctypes.c_uint8 * 255)]
+
+
+class ZlinkRouterRoute(ctypes.Structure):
+    _fields_ = [("rid", ZlinkRoutingId), ("route_generation", ctypes.c_uint64)]
 
 
 # Completion constants and layout mirror ``core/include/zlink/socket/api.h``.
@@ -202,7 +226,7 @@ ZLINK_DONTWAIT = 1
 
 
 class _Lib:
-    """Own the Core 0.17.0 raw symbol and layout declaration used by Python."""
+    """Declare the Core ABI symbols and layouts used by Python."""
 
     def __init__(self):
         self.lib = load_native_library(self._bind_loaded)
@@ -306,6 +330,12 @@ class _Lib:
             ("zlink_request", [ctypes.c_void_p, p_rid, p_msg, ctypes.c_size_t, ctypes.c_int, ctypes.c_uint32, ctypes.c_void_p, p_completion_id], ctypes.c_int),
             ("zlink_reply", [ctypes.c_void_p, p_rid, ctypes.c_uint64, p_msg, ctypes.c_size_t], ctypes.c_int),
             ("zlink_router_recv", [ctypes.c_void_p, p_rid_ptr, ctypes.POINTER(ctypes.c_uint64), p_msg, ctypes.c_size_t, p_size, ctypes.c_int], ctypes.c_int),
+            ("zlink_router_recv_route_generation", [ctypes.c_void_p], ctypes.c_uint64),
+            (
+                "zlink_router_routes_snapshot",
+                [ctypes.c_void_p, ctypes.POINTER(ZlinkRouterRoute), ctypes.c_size_t, p_size],
+                ctypes.c_int,
+            ),
             ("zlink_recv", [ctypes.c_void_p, p_rid_ptr, p_msg, ctypes.c_size_t, p_size, ctypes.c_int], ctypes.c_int),
             ("zlink_stream_recv_packet", [ctypes.c_void_p, p_rid_ptr, p_msg, p_msg, ctypes.c_int], ctypes.c_int),
             ("zlink_completion_recv", [ctypes.c_void_p, ctypes.POINTER(ZlinkCompletion), ctypes.c_int], ctypes.c_int),

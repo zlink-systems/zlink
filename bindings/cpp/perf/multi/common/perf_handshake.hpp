@@ -91,7 +91,8 @@ inline bool parse_size_endpoint_command_line (const std::string &line_,
 inline bool parse_size_count_command_line (const std::string &line_,
                                            const char *prefix_,
                                            size_t *size_out_,
-                                           size_t *count_out_)
+                                           size_t *count_out_,
+                                           bool allow_zero_ = false)
 {
     if (!prefix_ || !*prefix_ || !size_out_ || !count_out_)
         return false;
@@ -111,7 +112,7 @@ inline bool parse_size_count_command_line (const std::string &line_,
     }
 
     const unsigned long long parsed_count = std::strtoull (line_.c_str () + comma + 1, &end, 10);
-    if (!end || *end != '\0' || parsed_count == 0)
+    if (!end || *end != '\0' || (parsed_count == 0 && !allow_zero_))
         return false;
 
     *size_out_ = static_cast<size_t> (parsed_size);
@@ -202,6 +203,43 @@ inline bool wait_for_start_from_stdin (size_t msg_size_)
             return true;
     }
 
+    errno = ECANCELED;
+    return false;
+}
+
+inline bool
+wait_for_size_count_from_stdin (size_t msg_size_, const char *prefix_, size_t *count_out_)
+{
+    std::string line;
+    while (std::getline (std::cin, line)) {
+        if (line == "STOP" || line == "QUIT") {
+            errno = ECANCELED;
+            return false;
+        }
+        size_t size = 0;
+        size_t count = 0;
+        if (parse_size_count_command_line (line, prefix_, &size, &count) && size == msg_size_) {
+            *count_out_ = count;
+            return true;
+        }
+    }
+    errno = ECANCELED;
+    return false;
+}
+
+inline bool wait_for_phase_done_from_stdin (size_t msg_size_, int phase_)
+{
+    std::string line;
+    while (std::getline (std::cin, line)) {
+        if (line == "STOP" || line == "QUIT") {
+            errno = ECANCELED;
+            return false;
+        }
+        const std::string expected =
+          "PHASE_DONE," + std::to_string (msg_size_) + "," + std::to_string (phase_);
+        if (line == expected)
+            return true;
+    }
     errno = ECANCELED;
     return false;
 }

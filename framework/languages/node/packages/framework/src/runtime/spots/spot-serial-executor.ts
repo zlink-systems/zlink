@@ -5,6 +5,10 @@ import {
   ZLinkFrameworkException,
   ZLinkUserSpotExecutionMode
 } from '../../contracts';
+import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
 import { ZLinkActorSerialExecutor } from '../actors';
 import type {
   ZLinkActorHandoffDispatch,
@@ -188,12 +192,7 @@ export class ZLinkSpotSerialExecutor {
             try {
               return await operation();
             } catch (error) {
-              // A failed Join completion seals application work in this Actor's mailbox.
-              const sealed = new ActorJoinCompletionSealedError();
-              executor.scheduler.setExecutionPolicy(() => ({
-                executionDecision: () => 'lost',
-                executionFailure: () => sealed
-              }));
+              this.sealActorAfterFailedJoinCompletion(actorId, executor);
               return onFailure(error);
             }
           },
@@ -201,6 +200,17 @@ export class ZLinkSpotSerialExecutor {
         ),
       { lane: 'lifecycle' }
     );
+  }
+
+  sealActorAfterFailedJoinCompletion(
+    actorId: string,
+    executor = this.actorExecutor(actorId)
+  ): void {
+    const sealed = new ActorJoinCompletionSealedError();
+    executor.scheduler.setExecutionPolicy(() => ({
+      executionDecision: () => 'lost',
+      executionFailure: () => sealed
+    }));
   }
 
   /** Admits held packets through the same Actor FIFO as ordinary ingress. */
@@ -360,6 +370,11 @@ export class ZLinkSpotSerialExecutor {
   }
 
   private throwIfClosing(): void {
-    if (this.closing) throw new Error('The Spot serial executor is closed.');
+    if (this.closing) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RequestRejected,
+        'The Spot serial executor is closed.'
+      );
+    }
   }
 }

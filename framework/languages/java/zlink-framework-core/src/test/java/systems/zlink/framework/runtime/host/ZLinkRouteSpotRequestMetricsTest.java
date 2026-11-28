@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.host;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -25,8 +26,9 @@ final class ZLinkRouteSpotRequestMetricsTest {
 
         try (ZLinkRequestMetricProbe metrics = ZLinkRequestMetricProbe.install();
                 ZLinkFrameworkRuntime runtime =
-                        ZLinkFrameworkRuntimeTestAccess.start(
+                        ZLinkFrameworkRuntimeTestAccess.startHost(
                                 options, new ZLinkJavaBackendAdapterFactory())) {
+            assertTrue(runtime.isReady());
             assertThrows(
                     CompletionException.class,
                     () ->

@@ -2,22 +2,21 @@
 mod common;
 
 use std::io::{self, BufRead};
-use std::time::{Duration, Instant};
-use zlink::{Message, SubmitResult};
+use std::time::Duration;
+use zlink::Message;
 
 const TOPIC: &str = "bench";
-const STOP_TOKEN_BURST: usize = 64;
 
 fn main() {
     let args = common::MultiArgs::parse();
     let settings = common::MultiSettings::from_env();
 
     let ctx = common::perf_server_context();
-    let pub_sock = ctx.pub_socket().expect("pub");
+    let pub_sock = ctx.create_pub_socket().expect("pub");
     common::apply_multi_hwm(&pub_sock, &settings);
     pub_sock
         .common_options()
-        .set_send_timeout(settings.send_timeout_ms)
+        .set_send_timeout(common::timeout_ms(settings.send_timeout_ms))
         .expect("sndtimeo");
     if matches!(args.transport.as_str(), "tls" | "wss") {
         let tls = common::resolve_perf_tls_paths().expect("TLS certs not found");
@@ -36,37 +35,18 @@ fn main() {
     let endpoint = pub_sock.last_endpoint().expect("endpoint");
     common::print_ready(&endpoint);
 
-    let stdin = io::stdin();
-    let mut start_seen = false;
-    for line in stdin.lock().lines() {
-        let line = line.unwrap_or_default();
-        if line.trim() == format!("START,{}", args.msg_size) {
-            start_seen = true;
-            break;
-        }
-        if matches!(line.trim(), "STOP" | "QUIT") {
-            return;
-        }
-    }
-    if !start_seen {
+    if !common::wait_for_start_stdin(args.msg_size) {
         return;
     }
     ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
-    let deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
-    let payload_size = args.msg_size.max(common::HEADER_SIZE);
-    let mut seq: u64 = 1;
-    let mut auto_hwm_printed = false;
-
-    while Instant::now() < deadline {
-        let mut msg = Message::with_size(payload_size).expect("msg");
-        common::encode_header(
-            msg.data_mut(),
-            common::PHASE_ACTIVE,
-            args.msg_size as u32,
-            seq,
-        );
-        match if common::measurement_part_count() == 2 {
+    let active_seconds = settings.duration_seconds;
+    let latency_seconds = common::latency_seconds(active_seconds);
+    let msg_size = args.msg_size;
+    let payload_size = msg_size.max(common::HEADER_SIZE);
+    let mut seq = 0u64;
+    let publish = |msg| {
+        if common::measurement_part_count() == 2 {
             pub_sock
                 .publish(TOPIC)
                 .message(msg)
@@ -74,44 +54,102 @@ fn main() {
                 .submit()
         } else {
             pub_sock.publish(TOPIC).message(msg).submit()
-        } {
-            Ok(()) => {
-                seq += 1;
-                if !auto_hwm_printed {
-                    // Snapshot only after the first application message was
-                    // accepted on an attached subscriber pipe.
-                    common::print_multi_auto_hwm_detail(
-                        &pub_sock,
-                        "endpoint",
-                        &args.transport,
-                        args.msg_size,
-                        "pub",
-                    );
-                    auto_hwm_printed = true;
+        }
+        .expect("publish");
+    };
+    let mut send = |phase| {
+        seq += 1;
+        let mut msg = Message::with_size(payload_size).expect("message");
+        common::encode_header(msg.data_mut(), phase, msg_size as u32, seq);
+        publish(msg);
+    };
+    let stop = |phase| {
+        let mut marker = Message::with_size(common::HEADER_SIZE).expect("marker");
+        common::encode_header_at(marker.data_mut(), phase, msg_size as u32, 0, 0);
+        publish(marker);
+        println!("PHASE_DONE,{msg_size},{phase}");
+    };
+    let deadline = common::now_ns() + active_seconds * common::SECOND_NS;
+    let mut active_sends = 0;
+    while common::now_ns() < deadline {
+        send(common::PHASE_ACTIVE);
+        active_sends += u64::from(common::now_ns() < deadline);
+    }
+    common::print_multi_auto_hwm_detail(&pub_sock, "endpoint", &args.transport, msg_size, "pub");
+    stop(common::PHASE_ACTIVE);
+    let received = common::read_phase_count("PHASE_PACED", msg_size);
+    let (control_tx, control_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            let line = line.expect("phase control read");
+            if line == format!("PHASE_CATCHUP,{msg_size}") {
+                if control_tx.send((common::now_ns(), None)).is_err() {
+                    return;
+                }
+            } else if let Some(count) = line.strip_prefix(&format!("PHASE_COMPLETE,{msg_size},")) {
+                let _ = control_tx.send((
+                    common::now_ns(),
+                    Some(count.parse::<u64>().expect("phase count")),
+                ));
+                return;
+            } else if matches!(line.trim(), "STOP" | "QUIT") {
+                return;
+            }
+        }
+    });
+    let mut schedule = common::Schedule::new(common::now_ns(), received, active_seconds);
+    let catch_up_deadline = schedule.epoch + latency_seconds * common::SECOND_NS;
+    let mut end = catch_up_deadline + latency_seconds * common::SECOND_NS;
+    let mut catch_up = None;
+    loop {
+        if catch_up.is_none() {
+            if let Ok((when, None)) = control_rx.try_recv() {
+                if when <= catch_up_deadline {
+                    end = when + latency_seconds * common::SECOND_NS;
+                    catch_up = Some((when - schedule.epoch) as f64 / common::SECOND_NS as f64);
                 }
             }
-            Err(err) => panic!("publish failed: {err}"),
+        }
+        let now = common::now_ns();
+        if now >= end {
+            break;
+        }
+        if schedule.due(now) {
+            let due = schedule.reserve();
+            send(if catch_up.is_some() {
+                common::PHASE_LATENCY
+            } else {
+                common::PHASE_WARMUP
+            });
+            schedule.admit(due, common::now_ns());
+        } else {
+            let ms = common::wait_ms(now, end.min(schedule.next()));
+            if ms > 0 {
+                std::thread::sleep(Duration::from_millis(ms as u64));
+            }
         }
     }
-    // PERF_MULTI_TEST_POLICY § 1.3.1: signal phase end via wire-level stop
-    // token. Match the C runner by retrying until the token is actually
-    // accepted; otherwise subscribers can wait forever after large messages.
-    let mut accepted_stop_tokens = 0usize;
-    while accepted_stop_tokens < STOP_TOKEN_BURST {
-        let token = Message::try_from(common::STOP_TOKEN).expect("stop token");
-        match pub_sock.publish(TOPIC).message(token).submit() {
-            Ok(()) => {
-                accepted_stop_tokens += 1;
-            }
-            Err(err)
-                if matches!(
-                    err.code(),
-                    SubmitResult::Backpressured | SubmitResult::NotConnected
-                ) =>
-            {
-                continue;
-            }
-            Err(err) => panic!("stop token publish failed: {err}"),
+    stop(common::PHASE_LATENCY);
+    let paced_received = loop {
+        let (_, count) = control_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("phase completion");
+        if let Some(count) = count {
+            break count;
         }
+    };
+    schedule.print(
+        "PUBSUB",
+        msg_size,
+        (active_sends, received, active_seconds),
+        paced_received,
+        latency_seconds,
+        catch_up,
+    );
+    if schedule.late > 0 {
+        println!(
+            "REFERENCE,current,PUBSUB,{},{msg_size},sender_late,{}",
+            args.transport, schedule.late
+        );
     }
 }

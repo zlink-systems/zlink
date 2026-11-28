@@ -62,6 +62,7 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
         let completion;
         let received;
         let probeCalls = 0;
+        let sendCalls = 0;
         let resolvePush;
         const push = { promise: new Promise((resolve) => (resolvePush = resolve)) };
         push.resolve = (value) => resolvePush(value);
@@ -145,6 +146,11 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
             return { reached: true };
           }
         }
+        class SendProbe {
+          async handle() {
+            sendCalls += 1;
+          }
+        }
         class SessionFactory {
           async create(context) {
             return {
@@ -178,7 +184,14 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
           packetName: 'Probe'
         })(Probe);
 
-        async function start(role, sourceEndpoint) {
+        Injectable()(SendProbe);
+        n.zlinkSpotActorSendHandler({
+          actor: () => Player,
+          spot: () => Room,
+          packetName: 'SendProbe'
+        })(SendProbe);
+
+        async function start(role, sourceEndpoint, targetEndpoint) {
           const builder = n.zlinkFramework();
           builder.configureDispatch().messageFlow('normal');
           builder.configureLocations().ownerLeaseFencingMarginMs(1).ownerLeaseRenewIntervalMs(100);
@@ -200,6 +213,7 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
             .routingId(mesh + '-' + role);
           route.channel(mesh).server();
           if (sourceEndpoint) route.peerConnections().connect(mesh + '-source', sourceEndpoint);
+          if (targetEndpoint) route.peerConnections().connect(mesh + '-target', targetEndpoint);
           const objects = route.objects().server();
           objects.addEntrySpot(Entry, 'Player');
           objects.addActorFactory('Player', PlayerFactory, (factory) =>
@@ -221,7 +235,7 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
             providers: [
               ...providers,
               { provide: PlayerFactory, useValue: new PlayerFactory(role) },
-              ...(role === 'target' ? [Probe] : [])
+              ...(role === 'target' ? [Probe, SendProbe] : [])
             ]
           })(App);
           const app = await NestFactory.createApplicationContext(App, {
@@ -263,6 +277,19 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
             .inMesh(mesh)
             .submit();
           assert.equal(String(room.spot.nodeRid), mesh + '-target');
+
+          const targetDescriptor = await until(
+            async () =>
+              (await query.listMeshNodeDescriptors(mesh)).items.find(
+                (item) => String(item.rid) === mesh + '-target'
+              ),
+            'target descriptor unavailable'
+          );
+          const sender = await start('sender', descriptor.endpoint, targetDescriptor.endpoint);
+          await until(
+            () => sender.get(n.ZLINK_ROUTE_MESH_RUNTIME).snapshot(mesh).readyPeerCount === 2,
+            'sender did not admit both peers'
+          );
 
           function connectTo(app) {
             return connector.zlinkStreamConnectorFactory.create({
@@ -325,6 +352,49 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
           } else {
             assert.deepEqual(await probe.submit(), { reached: true });
             assert.equal(probeCalls, 1);
+          }
+
+          const remote = sender.get(n.ZLINK_ACTOR_CLIENT);
+          const started = performance.now();
+          let requestOutcome;
+          let requestError;
+          try {
+            requestOutcome = await remote
+              .requestToActor(actorId, {})
+              .packetName('Probe')
+              .timeout(5000)
+              .submit();
+          } catch (error) {
+            requestError = error;
+          }
+          const elapsedMs = Math.round(performance.now() - started);
+          const sent = await remote.sendToActor(actorId, {}).packetName('SendProbe').submit();
+          if (!callbackFails) await until(() => sendCalls === 1, 'remote send was not handled');
+          else await delay(250);
+          console.log(
+            JSON.stringify({
+              callbackFails,
+              elapsedMs,
+              requestOutcome,
+              kind: requestError?.kind,
+              message: requestError?.message,
+              sent,
+              probeCalls,
+              sendCalls
+            })
+          );
+          if (callbackFails) {
+            assert.equal(
+              requestError?.kind,
+              require('../../packages/framework/dist').ZLinkFrameworkErrorKind.Unavailable
+            );
+            assert.ok(elapsedMs < 4000, 'request approached its 5000 ms deadline');
+            assert.equal(probeCalls, 0);
+            assert.equal(sendCalls, 0);
+          } else {
+            assert.deepEqual(requestOutcome, { reached: true });
+            assert.equal(probeCalls, 2);
+            assert.equal(sendCalls, 1);
           }
         } finally {
           await client?.close();

@@ -21,9 +21,11 @@ func main() {
 	samplecommon.Must(err)
 	defer dealer.Close()
 
-	routerMon := samplecommon.OpenMonitor(router)
+	routerMon, err := zlink.OpenSocketMonitor(router, zlink.MonitorEventConnectionReady)
+	samplecommon.Must(err)
 	defer routerMon.Close()
-	dealerMon := samplecommon.OpenMonitor(dealer)
+	dealerMon, err := zlink.OpenSocketMonitor(dealer, zlink.MonitorEventConnectionReady)
+	samplecommon.Must(err)
 	defer dealerMon.Close()
 
 	endpoint := samplecommon.UniqueTCP("dealer-router-recv")

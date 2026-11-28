@@ -4217,26 +4217,44 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 header,
                                 payload);
         Instant receivedAt = Instant.now();
-        return actorSessions
-                .dispatchLocalSession(
+        CompletableFuture<Void> admission =
+                header.requestSequence().isEmpty() ? new CompletableFuture<>() : null;
+        CompletionStage<Optional<LocalActorReply>> dispatched =
+                actorSessions.dispatchLocalSession(
                         actorRef,
                         acceptedRecord,
                         header,
                         payload,
+                        admission,
                         spotId -> spotSurfaceFor(spotId) != null,
-                        local ->
-                                dispatchLocalSessionActor(
-                                                actorRef, header, payload, local, receivedAt)
-                                        .thenApply(
-                                                reply -> {
-                                                    // Register the reply before the Actor turn
-                                                    // releases its gate.
-                                                    // The relay observes transport completion
-                                                    // outside this turn.
-                                                    reply.ifPresent(submitReply);
-                                                    return Optional.empty();
-                                                }))
-                .thenAccept(reply -> reply.ifPresent(submitReply));
+                        local -> {
+                            var execution =
+                                    dispatchLocalSessionActor(
+                                            actorRef, header, payload, local, receivedAt);
+                            // Register the reply before the Actor turn releases its gate.
+                            return execution.thenApply(
+                                    reply -> {
+                                        reply.ifPresent(submitReply);
+                                        return Optional.empty();
+                                    });
+                        });
+        CompletionStage<Void> terminal =
+                dispatched
+                        .thenAccept(reply -> reply.ifPresent(submitReply))
+                        .whenComplete((ignored, failure) -> payload.close());
+        if (admission == null) {
+            return terminal;
+        }
+        // Routing failures and routes that bypass the local mailbox settle from their own terminal.
+        terminal.whenComplete(
+                (ignored, failure) -> {
+                    if (failure == null) {
+                        admission.complete(null);
+                    } else {
+                        admission.completeExceptionally(failure);
+                    }
+                });
+        return admission;
     }
 
     private CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
@@ -4250,6 +4268,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 acceptedRecord,
                 header,
                 payload,
+                null,
                 spotId -> spotSurfaceFor(spotId) != null,
                 local -> dispatchLocalSessionActor(actorRef, header, payload, local, receivedAt));
     }
@@ -5432,49 +5451,51 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             String contentType,
             Map<String, String> metadata,
             Instant receivedAt) {
-        return registration.kind() == ZLinkScannedHandlerKind.ACTOR_REQUEST
-                ? invokeLocalActorRequestHandler(
-                        registration,
-                        spotSurface,
-                        actor,
-                        payload,
-                        contentType,
-                        metadata,
-                        receivedAt)
-                : invokeLocalActorSendHandler(
-                                registration,
-                                spotSurface,
-                                actor,
-                                payload,
-                                contentType,
-                                metadata,
-                                receivedAt)
-                        .thenApply(ignored -> Optional.empty());
-    }
-
-    private CompletionStage<Void> invokeLocalActorSendHandler(
-            SpotActorPacketHandlerRegistration registration,
-            Object spotSurface,
-            ZLinkActor actor,
-            Message payload,
-            String contentType,
-            Map<String, String> metadata,
-            Instant receivedAt) {
-        return admitApplicationJob(
-                () ->
-                        spotHandlerInvoker.invokeActorSend(
-                                registration,
-                                spotSurface,
-                                actor,
-                                payload,
-                                contentType,
-                                metadata,
-                                receivedAt,
-                                handlerType ->
-                                        systems.zlink.framework.runtime.internal.handlers
-                                                .ZLinkActorHandlerInstances.instance(
-                                                actor, handlerType),
-                                "failed to invoke local session actor send handler"));
+        if (registration.kind() == ZLinkScannedHandlerKind.ACTOR_REQUEST) {
+            return invokeLocalActorRequestHandler(
+                    registration, spotSurface, actor, payload, contentType, metadata, receivedAt);
+        }
+        CompletionStage<Void> send =
+                ZLinkHandlerStages.fromStageSupplier(
+                        () ->
+                                invokeActorSendHandler(
+                                        registration,
+                                        spotSurface,
+                                        actor,
+                                        payload,
+                                        contentType,
+                                        metadata,
+                                        receivedAt));
+        if (dispatchErrors.errorsEnabled()) {
+            var flow = ZLinkFlowContext.current();
+            send =
+                    send.whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null && dispatchErrors.errorsEnabled()) {
+                                    ZLinkFlowContext.run(
+                                            flow,
+                                            () ->
+                                                    reportDispatchError(
+                                                            DispatchFailureReport.of(
+                                                                            ZLinkDispatchErrorSurface
+                                                                                    .SPOT_ACTOR,
+                                                                            ZLinkDispatchMessageKind
+                                                                                    .ACTOR_SEND,
+                                                                            ZLinkDispatchErrorReason
+                                                                                    .HANDLER_EXCEPTION,
+                                                                            ZLinkDispatchErrorAction
+                                                                                    .DROP)
+                                                                    .packetName(
+                                                                            registration
+                                                                                    .packetName())
+                                                                    .actorId(
+                                                                            actor.context()
+                                                                                    .actorId())
+                                                                    .error(failure)));
+                                }
+                            });
+        }
+        return send.thenApply(ignored -> Optional.empty());
     }
 
     private CompletionStage<Optional<LocalActorReply>> invokeLocalActorRequestHandler(

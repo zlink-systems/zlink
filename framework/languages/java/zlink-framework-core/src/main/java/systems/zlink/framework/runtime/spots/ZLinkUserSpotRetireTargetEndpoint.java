@@ -399,6 +399,75 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 requireStage(request).staged(), objectId, actor, frozenRecord);
     }
 
+    boolean hasTemporarySpotIngress(String spotId) {
+        return stages.values().stream()
+                .anyMatch(stage -> stage.staged().hasTemporarySpotIngress(spotId));
+    }
+
+    @Override
+    public boolean handleInstanceSpotFollow(
+            Supplier<CompletionStage<Optional<ZLinkInternalMeshNode.PeerAuthorityFence>>>
+                    sourceAuthority,
+            ZLinkServiceM6BWireCodec.InstanceSpotFollow follow,
+            byte[] metadata,
+            byte[] payload,
+            Consumer<Throwable> failure) {
+        var route = follow.target();
+        var ingress =
+                new IngressRoute(
+                        ZLinkPlacementObjectKind.INSTANCE_SPOT,
+                        route.spotId(),
+                        route.spotGeneration(),
+                        route.targetNodeRid(),
+                        route.targetNodeGeneration(),
+                        route.authorityOwnerGeneration(),
+                        route.ownerLeaseGeneration(),
+                        true);
+        for (TargetStage target : stages.values()) {
+            var participant =
+                    ingress.participant(target.request(), null, target.authority() != null);
+            if (participant == null) continue;
+            var confirmation = ingress.confirmation(participant);
+            // Resolve the original sender without waiting. The gate holds this queue position
+            // until both the sender and the committed target have been confirmed.
+            var source = sourceAuthority.get().toCompletableFuture();
+            if (!staging.acceptSpotIngress(
+                    target.staged(),
+                    ready ->
+                            ZLinkServiceFrozenRecordCodec.encodeInstanceSpot(
+                                    source.getNow(Optional.empty()).orElseThrow(),
+                                    follow.readyMessage(ready),
+                                    ready,
+                                    metadata,
+                                    payload),
+                    (long) metadata.length
+                            + payload.length
+                            + ZLinkServiceFrozenRecordCodec.ACCEPTED_RECORD_OVERHEAD_BYTES,
+                    null,
+                    failure,
+                    confirmation)) {
+                return false;
+            }
+            confirmIngress(
+                    ingress,
+                    follow.sourceNodeRid(),
+                    confirmation,
+                    failure,
+                    null,
+                    source.thenCompose(
+                            resolved ->
+                                    resolved.isPresent()
+                                            ? confirmTargetIngress(
+                                                    target.authority(),
+                                                    target.request(),
+                                                    participant,
+                                                    ingress)
+                                            : CompletableFuture.completedFuture(false)));
+            return true;
+        }
+        return false;
+    }
+
     @Override
     public boolean handleSpot(
             ZLinkInternalMeshNode.PeerAuthorityFence source,
@@ -619,35 +688,28 @@ final class ZLinkUserSpotRetireTargetEndpoint
             if (admitted != null) admitted.run();
             return;
         }
-        CompletionStage<Boolean> check;
-        try {
-            check =
-                    coordinator.confirmTargetIngress(
-                            authority,
-                            ZLinkAggregateFence.forRelocation(stage.fence().aggregateId()),
-                            new ZLinkLocationOwnerToken(
-                                    stage.targetOwnerId(), stage.targetOwnerLeaseGeneration()),
-                            new ZLinkLocationOwnerToken(
-                                    stage.sourceOwnerId(), stage.sourceOwnerLeaseGeneration()),
-                            new ZLinkMeshNodeDescriptorKey(stage.meshName(), stage.targetNodeRid()),
-                            stage.targetNodeGeneration(),
-                            stage.sourceNodeRid(),
-                            stage.sourceNodeGeneration(),
-                            new ZLinkAggregateRelocationCoordinator.ExpectedParticipant(
-                                    participant.authorityKey(),
-                                    participant.objectGeneration(),
-                                    participant.sourceAuthorityOwnerGeneration()),
-                            ingress.authorityGeneration(),
-                            OPEN);
-        } catch (RuntimeException rejected) {
-            check = CompletableFuture.failedFuture(rejected);
-        }
-        check.whenComplete(
-                (accepted, readFailure) -> {
-                    if (readFailure != null || !accepted) {
+        confirmIngress(
+                ingress,
+                source.sourceNodeRid(),
+                confirmation,
+                failure,
+                admitted,
+                confirmTargetIngress(authority, stage, participant, ingress));
+    }
+
+    private static void confirmIngress(
+            IngressRoute ingress,
+            RoutingId sourceNodeRid,
+            CompletableFuture<Boolean> confirmation,
+            Consumer<Throwable> failure,
+            Runnable admitted,
+            CompletionStage<Boolean> read) {
+        read.whenComplete(
+                (confirmed, readFailure) -> {
+                    if (readFailure != null || !Boolean.TRUE.equals(confirmed)) {
                         try {
                             if (failure != null)
-                                failure.accept(ingress.rejection(source, readFailure));
+                                failure.accept(ingress.rejection(sourceNodeRid, readFailure));
                         } finally {
                             confirmation.complete(false);
                         }
@@ -661,6 +723,34 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 });
     }
 
+    private CompletionStage<Boolean> confirmTargetIngress(
+            TargetIngressAuthority authority,
+            ZLinkSpotRetireControl.StageRequest stage,
+            ZLinkSpotRetireControl.ParticipantFence participant,
+            IngressRoute ingress) {
+        try {
+            return coordinator.confirmTargetIngress(
+                    authority,
+                    ZLinkAggregateFence.forRelocation(stage.fence().aggregateId()),
+                    new ZLinkLocationOwnerToken(
+                            stage.targetOwnerId(), stage.targetOwnerLeaseGeneration()),
+                    new ZLinkLocationOwnerToken(
+                            stage.sourceOwnerId(), stage.sourceOwnerLeaseGeneration()),
+                    new ZLinkMeshNodeDescriptorKey(stage.meshName(), stage.targetNodeRid()),
+                    stage.targetNodeGeneration(),
+                    stage.sourceNodeRid(),
+                    stage.sourceNodeGeneration(),
+                    new ZLinkAggregateRelocationCoordinator.ExpectedParticipant(
+                            participant.authorityKey(),
+                            participant.objectGeneration(),
+                            participant.sourceAuthorityOwnerGeneration()),
+                    ingress.authorityGeneration(),
+                    OPEN);
+        } catch (RuntimeException rejected) {
+            return CompletableFuture.failedFuture(rejected);
+        }
+    }
+
     private record IngressRoute(
             ZLinkPlacementObjectKind kind,
             String objectId,
@@ -669,7 +759,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             long nodeGeneration,
             long authorityGeneration,
             long ownerLeaseGeneration,
-            boolean directRequest) {
+            boolean acceptsCommittedIngress) {
         ZLinkSpotRetireControl.ParticipantFence participant(
                 ZLinkSpotRetireControl.StageRequest stage,
                 ZLinkInternalMeshNode.PeerAuthorityFence source,
@@ -678,15 +768,16 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     || stage.targetNodeGeneration() != nodeGeneration
                     || stage.targetOwnerLeaseGeneration() != ownerLeaseGeneration) return null;
             for (var member : stage.participants()) {
-                if ((member.objectKind() == ZLinkPlacementObjectKind.ACTOR.value())
-                                == (kind == ZLinkPlacementObjectKind.ACTOR)
+                if (matchesKind(member.objectKind())
                         && member.objectId().equals(objectId)
                         && member.objectGeneration() == objectGeneration
                         && (acceptDirect
-                                        && directRequest
+                                        && acceptsCommittedIngress
                                         && authorityGeneration
                                                 > member.sourceAuthorityOwnerGeneration()
-                                || authorityGeneration == member.sourceAuthorityOwnerGeneration()
+                                || source != null
+                                        && authorityGeneration
+                                                == member.sourceAuthorityOwnerGeneration()
                                         && stage.sourceNodeRid().equals(source.sourceNodeRid())
                                         && stage.sourceNodeGeneration()
                                                 == source.sourceNodeGeneration()
@@ -699,6 +790,12 @@ final class ZLinkUserSpotRetireTargetEndpoint
             return null;
         }
 
+        private boolean matchesKind(int objectKind) {
+            return kind == ZLinkPlacementObjectKind.USER_SPOT
+                    ? objectKind != ZLinkPlacementObjectKind.ACTOR.value()
+                    : objectKind == kind.value();
+        }
+
         CompletableFuture<Boolean> confirmation(
                 ZLinkSpotRetireControl.ParticipantFence participant) {
             return authorityGeneration == participant.sourceAuthorityOwnerGeneration()
@@ -706,8 +803,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     : new CompletableFuture<>();
         }
 
-        Throwable rejection(ZLinkInternalMeshNode.PeerAuthorityFence source, Throwable cause) {
-            boolean local = nodeRid.equals(source.sourceNodeRid());
+        Throwable rejection(RoutingId sourceNodeRid, Throwable cause) {
+            boolean local = nodeRid.equals(sourceNodeRid);
             var failureKind =
                     local
                             ? ZLinkFrameworkErrorKind.NOT_FOUND

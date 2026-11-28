@@ -17,8 +17,8 @@ fn main() {
     };
 
     let ctx = common::perf_context();
-    let receiver = ctx.router_socket().expect("receiver");
-    let sender = ctx.router_socket().expect("sender");
+    let receiver = ctx.create_router_socket().expect("receiver");
+    let sender = ctx.create_router_socket().expect("sender");
     // Match C perf: numeric socket HWM remains behind the manual-override gate.
     common::apply_single_hwm(&receiver);
     common::apply_single_hwm(&sender);

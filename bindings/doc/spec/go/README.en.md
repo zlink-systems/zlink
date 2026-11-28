@@ -197,11 +197,12 @@ failures return `*ConfigError`.
 
 `SubSocket` and `XSubSocket` provide `SetSubscription(filter string) error`,
 `UnsetSubscription(filter string) error`, and `SubscriptionAt(index int) (Subscription, bool, error)`. The query
-returns the filter and whether it is a pattern as `Subscription{Filter string; Pattern bool}`; the `bool` is `false` when the index has no entry. The binding calls `zlink_subscription_at` once with its buffer. An OK result, including an empty filter, ends the query; only a too-small-buffer result (`ENOBUFS`) is retried once with the length Core returned. An out-of-range index (`ENOENT`) is reported as no entry, not as an error; every other failure returns `*ConfigError`.
+returns the filter and whether it is a pattern as `Subscription{Filter string; Pattern bool}`; the `bool` is `false` when the index has no entry. The query rule is [the common Subscription Query](../README.en.md#subscription-query).
 `XPubSocket.ReceiveSubscriptionEvent(out *SubscriptionEvent, flags RecvFlags) (bool, error)` fills
 caller-provided storage.
 
-`CommonOptions()` returns `CommonSocketOptions` for PAIR, DEALER, ROUTER, PUB, SUB, XPUB, and XSUB.
+`CommonOptions() *CommonSocketOptions` is available on PAIR, DEALER, ROUTER, PUB, SUB, XPUB, XSUB, and STREAM.
+For common options that Core does not support on STREAM, `*ConfigError` carries the Core result code and errno.
 `PubOptions()` returns `PubSocketOptions` for PUB and XPUB. The other socket-specific options are methods
 on the socket, including ROUTER `SetMandatory`, `SetHandover`, `SetProbe`, and `SetConnectRoutingID`,
 DEALER `SetProbe`, STREAM `SetNotify` and `SetReceiveMode`, and SUB and XSUB `TopicsCount`.

@@ -93,7 +93,7 @@ raise `ConnectError`, and TLS configuration failures raise `ConfigError`.
 
 SUB and XSUB configure and remove filters with `set_subscription(topic)` and `unset_subscription(topic)`.
 `subscription_at(index)` returns the filter and whether it is a pattern, or `None` if the index has no
-entry. The binding calls `zlink_subscription_at` once with its buffer. An OK result, including an empty filter, ends the query; only a too-small-buffer result (`ENOBUFS`) is retried once with the length Core returned. An out-of-range index (`ENOENT`) is reported as no entry, not as an error; every other failure raises `ConfigError`. XPUB uses `receive_subscription_event_into(event: SubscriptionEvent, *, flags: int = 0) -> bool` to
+entry. The query rule is [the common Subscription Query](../README.en.md#subscription-query). XPUB uses `receive_subscription_event_into(event: SubscriptionEvent, *, flags: int = 0) -> bool` to
 fill storage created with `create_subscription_event()`.
 
 Every socket exposes the `options` property. Use `router_options`, `dealer_options`, and `stream_options`
@@ -215,6 +215,21 @@ diagnostic values for verifying the returned layout. The
 [common MonitorEvent contract](../README.en.md#monitorevent) defines the meaning and native layout of the
 `MonitorEvent` fields `event`, `value`, `routing_id`, `local_addr`, `remote_addr`, `connection_id`,
 `transport_lane`, `flags`.
+
+## Time units
+
+Socket and context options take Core option values as integer milliseconds. A request `timeout` takes
+seconds as a `float`, following Python convention. APIs whose names lack an `_ms` suffix are shown in **bold**.
+
+| API | Unit | Type | Note |
+|---|---|---|---|
+| `CommonSocketOptions.linger_ms`, `send_timeout_ms`, `receive_timeout_ms`, `connect_timeout_ms` | milliseconds | `int` | Core option value as is (`-1` means infinite, per Core) |
+| `CommonSocketOptions.reconnect_interval_ms`, `reconnect_interval_max_ms`, `submit_retry_timeout_ms` | milliseconds | `int` | Core option value as is |
+| `DealerSocketOptions.request_timeout_ms`, `RouterSocketOptions.request_timeout_ms` | milliseconds | `int` | Core option value as is |
+| **`ContextOptions.auto_hwm_recalc_debounce`** | milliseconds | `int` | Core `AUTO_HWM_RECALC_DEBOUNCE_MS` |
+| **`RequestOp.timeout(timeout)`** | seconds | `float` | `None` or `0` uses the socket's `request_timeout_ms` (Core `timeout_ms == 0`). A value beyond Core's `uint32` millisecond range raises `ValueError` |
+| `Poller.wait(events, timeout_ms)` | milliseconds | `int` | |
+| `Timer.start(interval_ns, repeat_count)` | nanoseconds | `int` | |
 
 ## Receive flow state
 

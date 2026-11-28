@@ -5,7 +5,7 @@ internal static class MultiPerfPatternRegistry
         {
             new MultiPerfPattern("DEALER_DEALER",
                 static options => PerfMultiDealerDealerServer.Run(options),
-                static options => PerfMultiDealerDealerClient.Run(options)
+                static options => Task.FromResult(PerfMultiDealerDealerClient.Run(options))
                     .GetAwaiter().GetResult()),
             new MultiPerfPattern("DEALER_ROUTER",
                 static options => PerfMultiDealerRouterServer.Run(options)

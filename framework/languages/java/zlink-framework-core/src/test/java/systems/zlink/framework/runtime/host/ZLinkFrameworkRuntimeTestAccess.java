@@ -309,6 +309,10 @@ public final class ZLinkFrameworkRuntimeTestAccess {
         return runtime.actors();
     }
 
+    public static ZLinkInternalMeshNode meshNode(ZLinkFrameworkRuntime runtime, String mesh) {
+        return runtime.meshNodes.nodesByName().get(mesh);
+    }
+
     public static ZLinkMeshDrainCoordinator meshDrains(ZLinkFrameworkRuntime runtime) {
         return runtime.meshDrains;
     }

@@ -415,6 +415,13 @@ void monitoring_runtime_t::publish_metric (metric_event_payload_t event) const
     instrument->record (event);
 }
 
+void monitoring_runtime_t::publish_unfinished_join_deliveries (std::size_t count,
+                                                               std::string deliveries) const
+{
+    log (log_level_t::error, "zlink.runtime.spot.join_drain_unfinished",
+         {{"pending_count", std::to_string (count)}, {"deliveries", std::move (deliveries)}});
+}
+
 void monitoring_runtime_t::publish_drain (drain_event_t event) const
 {
     log (log_level_t::info, "zlink.runtime.host.termination_changed",

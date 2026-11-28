@@ -5,6 +5,74 @@ const test = require('node:test');
 const zlink = require('@zlink-systems/zlink');
 const framework = require('../../packages/framework/dist/internal');
 
+for (const phase of [framework.ActorTransferPhase.Preparing, framework.ActorTransferPhase.Fenced]) {
+  test(`target transfer phase ${phase} checks source owner tenure before membership epoch`, async () => {
+    const store = new framework.ZLinkInMemoryLocationStore();
+    await liveUserSpotAuthority(store, 'game', 'room-a', 5n);
+    await store.updateActor(
+      { ...actorLocation('alice'), authorityOwnerGeneration: 9n, membershipEpoch: 1n },
+      framework.ZLinkLocationWriteIntent.NewClaim
+    );
+    const runtime = new framework.ZLinkActorTransferAuthorityRuntime({
+      store: () => store,
+      recoveryOwnerId: () => 'target-runtime',
+      recoveryLeaseTtlMs: 30_000
+    });
+    const control = {
+      ...transferControl('alice'),
+      phase,
+      role: framework.ActorTransferRole.Target,
+      sourceAuthorityOwnerGeneration: 8n,
+      membershipEpoch: 1n
+    };
+
+    await assert.rejects(
+      runtime.handle('game', control),
+      /source Actor owner tenure is not current/
+    );
+    await assert.rejects(
+      runtime.handle('game', { ...control, membershipEpoch: 4n }),
+      /source Actor owner tenure is not current/
+    );
+    await assert.rejects(
+      runtime.handle('game', { ...control, sourceAuthorityOwnerGeneration: undefined }),
+      /source Actor owner tenure is not current/
+    );
+    await assert.rejects(
+      runtime.handle('game', {
+        ...control,
+        sourceAuthorityOwnerGeneration: 9n,
+        membershipEpoch: 4n
+      }),
+      /membership epoch/
+    );
+    assert.equal(await store.resolveActorTransfer('game', 'alice'), undefined);
+
+    await store.updateActor(
+      { ...actorLocation('alice'), authorityOwnerGeneration: undefined, membershipEpoch: 4n },
+      framework.ZLinkLocationWriteIntent.Renew
+    );
+    await assert.rejects(
+      runtime.handle('game', {
+        ...control,
+        sourceAuthorityOwnerGeneration: 9n,
+        membershipEpoch: 4n
+      }),
+      /source Actor owner tenure is not current/
+    );
+    await store.updateActor(
+      { ...actorLocation('alice'), authorityOwnerGeneration: 9n, membershipEpoch: 4n },
+      framework.ZLinkLocationWriteIntent.Renew
+    );
+    await runtime.handle('game', {
+      ...control,
+      sourceAuthorityOwnerGeneration: 9n,
+      membershipEpoch: 4n
+    });
+    assert.equal((await store.resolveActorTransfer('game', 'alice')).state, 'prepared');
+  });
+}
+
 test('Core transfer-control phases drive durable prepare commit and activation', async () => {
   let nowMs = Date.UTC(2026, 6, 19, 0, 0, 0);
   const store = new framework.ZLinkInMemoryLocationStore(() => new Date(nowMs));
@@ -126,6 +194,7 @@ function actorLocation(actorId, leaseGeneration = 1n) {
     },
     ownerNodeRid: rid('source'),
     ownerNodeGeneration: 3n,
+    authorityOwnerGeneration: 9n,
     spotKind: framework.ZLinkSpotKind.User,
     spotId: 'room-a',
     spotGeneration: 5n,
@@ -147,6 +216,7 @@ function transferControl(actorId, low = 1n) {
       actorId,
       generation: 7n
     },
+    sourceAuthorityOwnerGeneration: 9n,
     membershipEpoch: 11n,
     finalSequence: 0n,
     resultCode: 0,

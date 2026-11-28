@@ -20,7 +20,6 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatch
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalAsyncSpotDispatchHandler;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceRouteFence;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceSpotFollow;
@@ -298,10 +297,9 @@ final class ZLinkJavaInstanceSpotFollowTest {
         }
 
         List<byte[]> followFrames(SpotRouteFence fence, int hop) {
-            var codec = new ZLinkServiceM6BWireCodec();
             try (var packet = Message.from("Packet");
                     var data = Message.from("payload")) {
-                return codec.encodeInstanceSpotFollow(
+                return ZLinkJavaRawMeshNodeTestAccess.instanceSpotFollowFrames(
                         new InstanceSpotFollow(
                                 0,
                                 caller.lifecycleGeneration(),
@@ -310,9 +308,7 @@ final class ZLinkJavaInstanceSpotFollowTest {
                                 hop - 1,
                                 oldFence()),
                         fence,
-                        new byte[0],
-                        ZLinkServiceM6AWireCodec.encodeFrameworkMultipartFrame(
-                                List.of(packet, data)));
+                        List.of(packet, data));
             }
         }
 
@@ -323,8 +319,7 @@ final class ZLinkJavaInstanceSpotFollowTest {
 
         void sendFrames(ZLinkJavaRawMeshNode sender, SpotRouteFence fence, List<byte[]> frames)
                 throws Exception {
-            sender.port
-                    .send(sender.router, fence.targetNodeRid(), frames)
+            ZLinkJavaRawMeshNodeTestAccess.sendFrames(sender, fence, frames)
                     .toCompletableFuture()
                     .get(2, TimeUnit.SECONDS);
         }

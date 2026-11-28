@@ -6,6 +6,8 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/locations/provider_relocation_repository.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
+#include "runtime/locations/sha256.hpp"
 #include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"

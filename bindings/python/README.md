@@ -1,7 +1,7 @@
 # Python Binding
 
-Python wrapper for the Core 0.17.0 raw messaging contract. The normative
-public surface is `bindings/doc/spec/python/README.ko.md`; repository policy
+Python binding for the Core raw messaging API. The [Core release
+metadata](../../VERSION) records the Core version. The public surface is `bindings/doc/spec/python/README.ko.md`; repository policy
 and the socket capability matrix live in `bindings/README.md`, and the native
 ABI comes from `core/include/zlink.h`.
 
@@ -11,43 +11,39 @@ facades, `Message.ref_count()`, `RoutingId`, `Received`, `ReplyToken`, and
 `DealerSocket`, `RouterSocket`, `StreamSocket`, `PubSocket`, `SubSocket`,
 `XPubSocket`, and `XSubSocket`.
 
+## Socket endpoints and TLS
+
+Use `bind(endpoint)` to open a local endpoint and `unbind(endpoint)` to close
+it. Configure TLS with `set_tls_server(cert, key, require_client_cert=False)`
+before binding or `set_tls_client(ca_cert, hostname, trust_system=False)` before
+connecting.
+
 ## Completion contract
 
-`SendOp.submit_sync()` uses Core's blocking `NONE` path. `SendOp.submit()` is
-awaitable and makes one Core `DONTWAIT` admission attempt. Immediate admission
-returns completion ID `0` and produces no SEND completion. On
-`BACKPRESSURED`/`EAGAIN`, Core retains only a nonzero wait token, the user
-context, and the target; the binding retains the exact packet and target needed
-for retry because Core does not retain the payload.
+`SendOp.submit()` and `RequestOp.submit()` make a nonblocking submission and
+return a `SendSubmission` or `RequestSubmission`. Read the initial result
+from `submission.result` and use `await submission.admitted` to wait for
+admission. An immediately admitted send already has a completed admission
+stage. For a request, use `await submission.reply` to get the caller-owned
+reply parts. The reply timeout starts after admission.
 
-The socket-local owner blocks a daemon worker on Core `POLLCOMPLETION`, drains
-the completion queue through `NO_DATA`, and resubmits the same packet only for a
-`CompletionKind.WRITABLE` record with the same token, context, and routing ID.
-WRITABLE grants permission to retry; it is not successful SEND notification.
-The awaitable completes only when a retry is admitted. A wake FD transfers
-ownership to a public poller and stops lifecycle waits; the worker uses no
-fixed sleep, timer, or zero-time polling.
+Register the socket with a public poller for `PollEventFlag.POLLCOMPLETION`
+before submitting an asynchronous request or a send that may need to wait for
+admission. Keep calling `Poller.wait()` while those stages are pending. A matching
+`WRITABLE` record allows the binding to retry a backpressured submission. A
+`REQUEST` record resolves the admitted request. Cancelling an awaitable detaches
+the caller's wait. The binding continues to process completions and closes
+late reply parts. See the [async request sample](samples/request_reply_async_sample.py).
 
-`RequestOp.submit_sync()` keeps Core's blocking `NONE` path. The awaitable
-terminal uses the same DONTWAIT wait-token machine as SEND: it snapshots the
-request only after `BACKPRESSURED`/`EAGAIN`, retries only for its matching
-WRITABLE token, and starts reply-timeout handling only after admission. It then
-completes from its `CompletionKind.REQUEST` record and preserves `timeout()`.
-Cancelling an awaitable detaches only the caller wait: the socket-local owner
-continues the required retry or completion cleanup and closes late completion
-payloads.
+Use `SendOp.submit_sync()` for blocking send admission or
+`RequestOp.submit_sync()` to block until the request resolves. Without a
+registered completion poller, the blocking request drains its own completion
+on the calling thread.
 
 ROUTER request receive supplies an opaque, owner-bound `ReplyToken`. Only the
 originating router accepts it, and `ReplyOp.submit()` has no flags. PUB/XPUB
 publication remains separate as synchronous `PublishOp`; only that operation
 retains `SendFlags`. Receive no-data is selected with `RecvFlags.DONT_WAIT`.
-
-A public poller driving pending operations registers both
-`PollEventFlag.POLLOUT` and `PollEventFlag.POLLCOMPLETION`. The latter transfers
-completion draining to that poller while registered; callers keep polling until
-their SEND and REQUEST awaitables settle. A REQUEST record may settle an
-admitted request, while a WRITABLE record only advances the matching SEND or
-pre-admission REQUEST retry.
 
 The raw ABI options `ZLINK_OPT_PENDING_MAX_MSGS` and
 `ZLINK_OPT_PENDING_MAX_BYTES` keep their values and storage for ABI
@@ -79,8 +75,8 @@ Utility facades include `Stopwatch` and `AtomicCounter`.
 The wheel loads its packaged native runtime. Source builds require an explicit
 Core prefix or the local Core environment exported by
 `bindings/tools/local_core_runtime.sh`; the loader does not search arbitrary
-system or repository build paths. Supported packaged targets are Linux x86_64
-and Windows x86_64.
+system or repository build paths. [The package build](setup.py) supports Linux
+x86_64 and Windows x86_64.
 
 ## Verification
 

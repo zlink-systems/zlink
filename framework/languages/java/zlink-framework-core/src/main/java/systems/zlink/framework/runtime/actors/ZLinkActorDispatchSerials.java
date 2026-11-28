@@ -399,16 +399,18 @@ final class ZLinkActorDispatchSerials {
             QueuedTurn turn,
             byte[] acceptedJournalRecord,
             Supplier<CompletionStage<Void>> operation) {
-        return enqueue(turn, acceptedJournalRecord, operation, () -> {});
+        return enqueue(turn, acceptedJournalRecord, operation, () -> {}, null);
     }
 
     CompletionStage<Void> enqueue(
             QueuedTurn turn,
             byte[] acceptedJournalRecord,
             Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease) {
+            Runnable relocationRelease,
+            CompletableFuture<Void> submitAdmission) {
         Supplier<CompletionStage<Void>> turnOperation = () -> runTurn(turn, operation);
-        CompletableFuture<Void> admission = new CompletableFuture<>();
+        CompletableFuture<Void> admission =
+                submitAdmission == null ? new CompletableFuture<>() : submitAdmission;
         return enqueueAfterAdmission(
                 admission,
                 accepted ->

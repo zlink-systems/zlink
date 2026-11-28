@@ -817,7 +817,7 @@ Fanout publisher의 endpoint, identity와 실행 세대를 Store에 게시한 �
 lease 만료로 다루지 않는다. 그 unit은 relocation 실패로 기록하고, expired-owner 정리(대기 backlog 즉시 실패 등)를 하지
 않으며 Store authority도 바꾸지 않는다. 그 unit의 다음 owner 조회가 Store authority로 결과를 판정한다. 그 unit을 기다리던 Join caller는
 `Unavailable`을 받는다(정지하는 node라 caller가 다시 시도할 일이다). Stop deadline 뒤에는 그 unit을 위해 Store를 다시
-호출하거나 재시도하지 않는다.
+호출하거나 재시도하지 않는다. Join caller에 `Unavailable`을 줄 때 runtime은 그 unit과 사유(stop deadline에 authority 미정)를 담은 진단 레코드를 하나 만든다. **Host는 stop deadline에서 정한 terminal 결과의 진단 레코드를 진단 전달 worker에 모두 넘긴 뒤에 telemetry lease를 놓는다** — 순서는 terminal 결과 확정 → 그 진단 레코드 넘김 → telemetry lease 해제이며, 강제 종료가 settlement 취소보다 먼저 lease를 놓지 않는다([Observability §1](../06-observability/README.ko.md#1-무엇을-관찰할-수-있는가)의 종료 host 레코드 폐기는 lease를 놓은 뒤 만든 레코드에만 적용된다).
 `Draining` 중인 source는 수락한 relocation의 `Preserve`를 늦어도 stop deadline에서 management 요청 한 번의 시간을
 뺀 시점에 시작한다(Restore deadline이 더 이르면 그때). 그보다 일찍 시작해도 된다(예: 종료 요청을 받은 즉시). Hardware failure와 `SIGKILL`에서는 callback을 보장하지
 않는다. 종료 중이던 relocation이나 cleanup을 다른 runtime이 자동으로 이어받는 동작을

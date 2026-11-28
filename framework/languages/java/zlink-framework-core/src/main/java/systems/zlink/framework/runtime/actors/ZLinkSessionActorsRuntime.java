@@ -121,6 +121,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
 
     @FunctionalInterface
     public interface LocalActorDispatcher {
+        /** A dispatcher that returns a stage takes ownership of the payload. */
         CompletionStage<Void> dispatch(
                 ZLinkBackendActorRef actor,
                 RoutingId sourceNodeRid,

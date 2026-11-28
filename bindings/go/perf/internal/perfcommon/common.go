@@ -31,11 +31,14 @@ type Stats struct {
 }
 
 type Result struct {
-	Throughput   float64
-	Bandwidth    float64
-	LatencyNs    float64
-	LatencyP95Ns float64
-	LatencyP99Ns float64
+	Count          uint64
+	LatencyP50Ns   float64
+	LatencyInvalid string
+	Throughput     float64
+	Bandwidth      float64
+	LatencyNs      float64
+	LatencyP95Ns   float64
+	LatencyP99Ns   float64
 	// Valid is false when no valid messages / latency samples were
 	// recorded. perf_single_one_way.hpp run_active_phase returns false
 	// when received==0 or latency count==0; that is a FAIL (no RESULT
@@ -143,6 +146,8 @@ func (s *Stats) Snapshot(duration time.Duration, msgSize int) Result {
 		latencyP99 = percentile(s.latNs, 99)
 	}
 	return Result{
+		Count:        count,
+		LatencyP50Ns: percentile(s.latNs, 50),
 		Throughput:   float64(count) / duration.Seconds(),
 		Bandwidth:    float64(count*uint64(msgSize)) / duration.Seconds() / 1_000_000.0,
 		LatencyNs:    latencyMean,
@@ -161,6 +166,12 @@ func PrintFail(pattern, transport string, msgSize int) {
 func PrintResult(pattern, transport string, msgSize int, result Result) {
 	fmt.Printf("RESULT,current,%s,%s,%d,throughput,%.3f\n", pattern, transport, msgSize, result.Throughput)
 	fmt.Printf("RESULT,current,%s,%s,%d,bandwidth,%.3f\n", pattern, transport, msgSize, result.Bandwidth)
+	if result.LatencyInvalid != "" {
+		for _, metric := range []string{"latency", "latency_p95", "latency_p99"} {
+			fmt.Printf("RESULT,current,%s,%s,%d,%s,invalid:%s\n", pattern, transport, msgSize, metric, result.LatencyInvalid)
+		}
+		return
+	}
 	fmt.Printf("RESULT,current,%s,%s,%d,latency,%.6f\n", pattern, transport, msgSize, result.LatencyNs/1_000_000.0)
 	fmt.Printf("RESULT,current,%s,%s,%d,latency_p95,%.6f\n", pattern, transport, msgSize, result.LatencyP95Ns/1_000_000.0)
 	fmt.Printf("RESULT,current,%s,%s,%d,latency_p99,%.6f\n", pattern, transport, msgSize, result.LatencyP99Ns/1_000_000.0)

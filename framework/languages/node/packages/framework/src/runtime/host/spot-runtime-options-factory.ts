@@ -105,34 +105,14 @@ export class ZLinkSpotRuntimeOptionsFactory {
             ?.notifyPrimaryEntrySpotActorLeft(actor, signal, actorRef, membershipEpoch) ??
           Promise.resolve()
       },
-      dispatchEntryActorPacket: (
-        origin,
-        actorId,
-        parts,
-        returnResponse,
-        remoteBoundSessionTarget,
-        fallbackActorRef,
-        requestTerminal,
-        messageFollowOrigin,
-        preparation
-      ) => {
+      dispatchEntryActorDelivery: (delivery, preparation) => {
         const runtime = this.options.spotNodeRuntime();
         if (runtime === undefined) {
           throw new ZLinkConfigurationException(
             'Entry Spot actor packet dispatch requires the MeshNode runtime.'
           );
         }
-        return runtime.dispatchEntryActorPacket(
-          origin,
-          actorId,
-          parts,
-          returnResponse,
-          remoteBoundSessionTarget,
-          fallbackActorRef,
-          requestTerminal,
-          messageFollowOrigin,
-          preparation
-        );
+        return runtime.dispatchEntryActorDelivery(delivery, preparation);
       },
       dispatchEntryActorJoin: async (meshName, actor, handoffBacklog, onCallbackFailure) => {
         const runtime = this.options.spotNodeRuntime();
@@ -161,6 +141,8 @@ export class ZLinkSpotRuntimeOptionsFactory {
         }
         return runtime.executeEntryActor(meshName, actorId, operation, onFailure);
       },
+      entryActorSerialExecutor: (meshName) =>
+        this.options.spotNodeRuntime()?.entryActivations.get(meshName)?.spotSerialExecutor,
       channelClient: new DefaultZLinkChannelClient(
         this.options.registration,
         this.options.channelTransport,

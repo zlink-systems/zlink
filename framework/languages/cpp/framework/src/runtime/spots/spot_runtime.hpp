@@ -420,8 +420,19 @@ class spot_node_builder_state_t
     std::set<std::pair<std::uint64_t, std::uint64_t>> committed_join_locations;
     std::set<std::pair<std::uint64_t, std::uint64_t>> delivered_join_completions;
     std::set<std::pair<std::uint64_t, std::uint64_t>> delivering_join_completions;
+    struct join_delivery_work_t
+    {
+        explicit join_delivery_work_t (std::pair<std::uint64_t, std::uint64_t> id) : operation (id)
+        {
+        }
+
+        const std::pair<std::uint64_t, std::uint64_t> operation;
+        task_completion_source_t<void> terminal;
+        // Observation only. The task terminal owns all drain decisions.
+        std::atomic<const char *> waiting{"actor_callback"};
+    };
     // The node lane owns each delivery through its native ready and claim cleanup.
-    std::set<std::shared_ptr<task_completion_source_t<void>>> pending_join_delivery_work;
+    std::set<std::shared_ptr<join_delivery_work_t>> pending_join_delivery_work;
 #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
     std::function<void ()> join_delivery_drain_wait_probe;
 #endif
@@ -2045,7 +2056,7 @@ class spot_node_runtime_t
       const spot_id_t &spot_id,
       std::string packet_name,
       std::string content_type,
-      std::vector<std::uint8_t> payload,
+      zlink::message_t payload,
       std::map<std::string, std::string> metadata,
       bool request,
       std::string correlation_id,

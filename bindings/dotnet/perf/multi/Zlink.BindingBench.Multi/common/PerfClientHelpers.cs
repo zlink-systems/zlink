@@ -189,6 +189,21 @@ internal static partial class PerfRunner
 
     internal sealed class RunnerControlState : IDisposable
     {
+        private sealed class PhaseSignal
+        {
+            internal readonly ManualResetEventSlim Ready = new(false);
+            internal long Count;
+            internal ulong ReceiptNs;
+        }
+
+        private readonly Dictionary<string, PhaseSignal> _phases = new()
+        {
+            ["PHASE_PACED"] = new PhaseSignal(),
+            ["PHASE_COMPLETE"] = new PhaseSignal(),
+            ["PHASE_CATCHUP"] = new PhaseSignal(),
+            ["PHASE_DONE,1"] = new PhaseSignal(),
+            ["PHASE_DONE,3"] = new PhaseSignal(),
+        };
         private readonly int _msgSize;
         private readonly ManualResetEventSlim _startSignal = new(false);
         private readonly ManualResetEventSlim _controlConnectedSignal = new(false);
@@ -233,6 +248,29 @@ internal static partial class PerfRunner
             return _startSignal.IsSet && !StopRequested;
         }
 
+        internal bool WaitForPhase(string phase, int timeoutMs,
+            out long count)
+        {
+            count = 0;
+            if (!_phases.TryGetValue(phase, out PhaseSignal? signal))
+                return false;
+            signal.Ready.Wait(Math.Max(1, timeoutMs));
+            if (!signal.Ready.IsSet || StopRequested)
+                return false;
+            count = Interlocked.Read(ref signal.Count);
+            return true;
+        }
+
+        internal bool TryGetPhase(string phase, out ulong receiptNs)
+        {
+            receiptNs = 0;
+            if (!_phases.TryGetValue(phase, out PhaseSignal? signal)
+                || !signal.Ready.IsSet)
+                return false;
+            receiptNs = Volatile.Read(ref signal.ReceiptNs);
+            return true;
+        }
+
         internal bool WaitForControlConnected(int timeoutMs)
         {
             if (_controlConnectedSignal.IsSet)
@@ -248,6 +286,8 @@ internal static partial class PerfRunner
             Volatile.Write(ref _stopRequested, 1);
             TrySet(_startSignal);
             TrySet(_controlConnectedSignal);
+            foreach (PhaseSignal signal in _phases.Values)
+                TrySet(signal.Ready);
         }
 
         private void ReadLoop()
@@ -260,6 +300,8 @@ internal static partial class PerfRunner
                     Volatile.Write(ref _stopRequested, 1);
                     TrySet(_startSignal);
                     TrySet(_controlConnectedSignal);
+                    foreach (PhaseSignal signal in _phases.Values)
+                        TrySet(signal.Ready);
                     return;
                 }
 
@@ -325,6 +367,8 @@ internal static partial class PerfRunner
                 Volatile.Write(ref _stopRequested, 1);
                 TrySet(_startSignal);
                 TrySet(_controlConnectedSignal);
+                foreach (PhaseSignal signal in _phases.Values)
+                    TrySet(signal.Ready);
                 return false;
             }
 
@@ -353,6 +397,28 @@ internal static partial class PerfRunner
                     Console.Error.WriteLine($"control_debug:start:{command}");
                 Volatile.Write(ref _startRequested, 1);
                 TrySet(_startSignal);
+            }
+
+            string[] fields = command.Split(',');
+            if (fields.Length >= 2
+                && int.TryParse(fields[1], out int phaseSize)
+                && phaseSize == _msgSize)
+            {
+                string key = fields[0] == "PHASE_DONE" && fields.Length == 3
+                    ? $"PHASE_DONE,{fields[2]}" : fields[0];
+                if (_phases.TryGetValue(key, out PhaseSignal? signal)
+                    && (fields.Length == 2
+                        || (fields.Length == 3
+                            && long.TryParse(fields[2], out _))))
+                {
+                    if (fields.Length == 3
+                        && key != "PHASE_DONE,1"
+                        && key != "PHASE_DONE,3")
+                        Interlocked.Exchange(ref signal.Count,
+                            long.Parse(fields[2]));
+                    Volatile.Write(ref signal.ReceiptNs, PerfShared.EpochNs());
+                    TrySet(signal.Ready);
+                }
             }
 
             return true;

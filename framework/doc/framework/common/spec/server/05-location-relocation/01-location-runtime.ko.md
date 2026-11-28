@@ -780,6 +780,10 @@ Fixed RID 재claim의 무효 관찰 뒤 대기와 유효 lease의 `Conflict` 처
 그 밖의 claim 결과 `Conflict`와 `GenerationExhausted`는 startup 오류다. Caller가 startup을
 cancellation하면 startup은 취소로 끝나며 이 규칙으로 성공이 되지 않는다. 이미 시작한 claim은
 §10대로 같은 key를 다시 읽어 확인하고, 확인된 lease는 정상 해제하며 heartbeat를 시작하지 않는다.
+이 확인과 해제는 startup의 renew timeout에 묶이지 않는다. Host의 Stop deadline이 유일한 기한이며,
+그 안에서 시작한 claim 요청의 결과를 끝까지 받고, 결과를 받지 못하면 §10대로 다시 읽고, 자기 lease로
+확인되면 해제한다. Stop deadline이 먼저 끝나면 Store를 더 부르지 않고 lease는 TTL 만료에 맡기며,
+진단 레코드 한 건(`location.startup_claim_cleanup_abandoned`)을 남긴다.
 
 ### 5.1 짧은 장애의 보존과 재참여
 
@@ -1578,7 +1582,9 @@ authority `payload`가 될 application 정의 opaque bytes이고, membership 변
 `targetOwner`)와 Restore 요청(command 40)이 소유하고, commit은 그 값으로 target 쪽 변경을 만든다.
 
 **Membership 변경 bytes는 opaque이며 다른 runtime은 내용을 해석하지 않고 SHA-256만 비교한다.** Membership 변경이
-없는 participant의 본문은 UTF-8 `[]`(2 bytes)다. 빈 본문은 쓰지 않는다.
+없는 participant의 본문은 UTF-8 `[]`(2 bytes)다. 빈 본문은 쓰지 않는다. 논리 Spot ID와 generation이 그대로인
+`SpotWide` host 이동에서 이미 그 Spot에 속한 Actor의 membership은 바뀌지 않으므로 그 본문은 `[]`다 —
+기존 membership을 다시 직렬화하지 않는다.
 
 **본문 공통 규칙.** Aggregate 기록, 목록 root와 page의 본문은 UTF-8 JSON object이며
 [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)(JSON Canonicalization Scheme, JCS)로
@@ -2049,6 +2055,8 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   [MeshNode §3.3](../03-spot-actor/03-mesh-node.ko.md#33-fixed-rid)을 따른다.
 - Startup을 cancellation하면 결과는 취소이며, 이미 commit된 claim은 해제되고 heartbeat가
   시작되지 않는다.
+- 취소 뒤 startup의 renew timeout보다 늦게 commit된 claim도 Stop deadline 안이면 읽어서 해제한다.
+  Stop deadline이 지나면 Store 호출 없이 TTL에 맡기고 진단 레코드 한 건을 남긴다.
 
 **Descriptor와 위치 조회**
 

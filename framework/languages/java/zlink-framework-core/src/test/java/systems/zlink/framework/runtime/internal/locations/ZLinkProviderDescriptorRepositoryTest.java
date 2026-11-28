@@ -161,17 +161,21 @@ class ZLinkProviderDescriptorRepositoryTest {
                                         .toCompletableFuture()
                                         .get())
                         .token();
-        assertThrows(
-                ExecutionException.class,
-                () ->
-                        descriptors
-                                .updateMeshNode(
-                                        descriptor(expiredOwner, 1),
-                                        systems.zlink.framework.runtime.internal.locations
-                                                .ZLinkDescriptorWriteIntent.FixedRidNewClaim
-                                                .FIXED_RID_NEW_CLAIM)
-                                .toCompletableFuture()
-                                .get());
+        var initialWait =
+                assertThrows(
+                        ExecutionException.class,
+                        () ->
+                                descriptors
+                                        .updateMeshNode(
+                                                descriptor(expiredOwner, 1),
+                                                systems.zlink.framework.runtime.internal.locations
+                                                        .ZLinkDescriptorWriteIntent.FixedRidNewClaim
+                                                        .FIXED_RID_NEW_CLAIM)
+                                        .toCompletableFuture()
+                                        .get());
+        assertEquals(
+                "MeshNode fixed RID claim is within its release wait",
+                initialWait.getCause().getMessage());
         monotonicNanos.addAndGet(3);
         assertEquals(
                 ZLinkLocationWriteStatus.STORED,

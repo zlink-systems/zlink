@@ -642,7 +642,8 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
                 List<systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn>
                         dispatches,
                 String laneId,
-                byte[] record,
+                java.util.function.Supplier<byte[]> record,
+                long recordSizeHint,
                 java.util.function.Supplier<CompletionStage<Void>> turn,
                 CompletableFuture<Void> admission) {
             return CompletableFuture.completedFuture(null);

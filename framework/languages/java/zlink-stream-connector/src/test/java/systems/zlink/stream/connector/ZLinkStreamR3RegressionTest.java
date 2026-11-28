@@ -196,7 +196,7 @@ final class ZLinkStreamR3RegressionTest {
         var release = new CompletableFuture<Void>();
         try {
             scheduler.execute(release::join);
-            var requests = new ZLinkStreamPendingRequests(scheduler, time::get, () -> 0);
+            var requests = ZLinkStreamPendingRequestsTest.pendingRequests(scheduler, time::get);
             var pending = enqueueRequest(requests, chain, 9L, Duration.ofNanos(1), writes);
             var callback = pending.whenComplete((reply, error) -> first.complete(null));
             time.set(1);

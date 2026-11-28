@@ -46,10 +46,6 @@ def _publish_stop_token(publisher):
     raise RuntimeError("pubsub stop token backpressure retry exhausted")
 
 
-def _public_one_way_metrics(sender, receiver, *, msg_size, duration_s, run_id):
-    return None
-
-
 def main(argv=None):
     args = parse_single_args(argv or sys.argv[1:], pattern="pubsub")
     payload = new_payload(args.msg_size)
@@ -105,40 +101,32 @@ def main(argv=None):
                     time.sleep(wait_seconds)
 
                 active_end = time.perf_counter() + args.duration
-                metrics = _public_one_way_metrics(
-                    publisher,
-                    subscriber,
-                    msg_size=args.msg_size,
-                    duration_s=args.duration,
-                    run_id=run_id,
+                sender = threading.Thread(
+                    target=send_loop, args=(publisher, active_end), daemon=True
                 )
-                if metrics is None:
-                    sender = threading.Thread(
-                        target=send_loop, args=(publisher, active_end), daemon=True
-                    )
-                    sender.start()
-                    # C perf_pubsub.cpp run_active_phase receiver.
-                    received = run_one_way_subscriber_public_subscribe(
-                        subscriber,
-                        topic=TOPIC,
-                        msg_size=args.msg_size,
-                        run_id=run_id,
-                        active_end=active_end,
-                        received=received,
-                        latency_sampler=latency_sampler,
-                    )
+                sender.start()
+                # C perf_pubsub.cpp run_active_phase receiver.
+                received = run_one_way_subscriber_public_subscribe(
+                    subscriber,
+                    topic=TOPIC,
+                    msg_size=args.msg_size,
+                    run_id=run_id,
+                    active_end=active_end,
+                    received=received,
+                    latency_sampler=latency_sampler,
+                )
 
-                    sender.join()
-                    if received == 0:
-                        raise RuntimeError(
-                            "pubsub benchmark did not receive any active message"
-                        )
-                    metrics = result_metrics(
-                        count=received,
-                        msg_size=args.msg_size,
-                        elapsed_s=args.duration,
-                        latency_sampler=latency_sampler,
+                sender.join()
+                if received == 0:
+                    raise RuntimeError(
+                        "pubsub benchmark did not receive any active message"
                     )
+                metrics = result_metrics(
+                    count=received,
+                    msg_size=args.msg_size,
+                    elapsed_s=args.duration,
+                    latency_sampler=latency_sampler,
+                )
                 print_result_lines("PUBSUB", args.transport, args.msg_size, metrics)
 
 

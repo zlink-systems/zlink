@@ -334,7 +334,7 @@ export class ZLinkInMemoryLocationStore
         intent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim &&
         !this.ownerLeaseReleaseDelay.allows(releaseDelayScope, undefined)
       ) {
-        throw new ZLinkOwnerLeaseReleaseDelayPendingError();
+        throw new ZLinkOwnerLeaseReleaseDelayPendingError(false);
       }
       if (
         intent !== ZLinkLocationWriteIntent.NewClaim &&

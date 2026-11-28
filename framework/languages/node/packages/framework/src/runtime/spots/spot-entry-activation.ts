@@ -72,7 +72,6 @@ import {
 } from '../actors/actor-handoff';
 import type {
   ZLinkEntryActorRuntime,
-  ZLinkSpotActorTransferRuntime,
   ZLinkSpotActorHandoffRuntime,
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
@@ -103,7 +102,6 @@ interface ZLinkEntrySpotActivationOptions {
   readonly workerRuntime?: ZLinkWorkerRuntime;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
   readonly entryActorRuntime?: ZLinkEntryActorRuntime;
-  readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
   readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
@@ -443,18 +441,7 @@ export class ZLinkEntrySpotActivation {
       actors: {
         resolveActor: (actorId) => this.options.entryActorRuntime?.resolveActor(actorId),
         getTarget: () => this.entrySpot,
-        defaultAccept: true,
-        transfer:
-          this.options.actorTransferRuntime === undefined
-            ? { kind: 'disabled' }
-            : {
-                kind: 'enabled',
-                runtime: this.options.actorTransferRuntime
-              },
-        commitTransferredActor: async (actor, backlog) => {
-          await this.commitEntryActorTransaction(actor);
-          return await this.replayActorBacklog(actor, backlog);
-        }
+        defaultAccept: true
       },
       packets: {
         handle: (delivery) => this.dispatchActorPacket(delivery),
@@ -477,17 +464,6 @@ export class ZLinkEntrySpotActivation {
     this.actorDispatch = dispatch;
   }
 
-  private async commitEntryActorTransaction(actor: ZLinkActor): Promise<void> {
-    const notifyJoined = () =>
-      this.serial.execute(() => notifyEntryActorJoined(this.entrySpot, actor));
-    const runtime = this.options.entryActorRuntime;
-    if (runtime === undefined) {
-      await notifyJoined();
-      return;
-    }
-    await runtime.commitActorTransaction(actor, notifyJoined);
-  }
-
   notifyLeaveActor(
     actor: ZLinkActor,
     signal?: AbortSignal,
@@ -505,14 +481,15 @@ export class ZLinkEntrySpotActivation {
 
   async dispatchActorPacket(
     delivery: ZLinkActorPacketDelivery,
-    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
+    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation,
+    workOptions?: import('../execution/serial-execution-queue').ZLinkSerialWorkOptions
   ): Promise<unknown> {
     return dispatchActorPacketInMailbox(
       (operation) =>
         this.spotSerialExecutor.executeActor(
           delivery.actorId,
           operation,
-          undefined,
+          workOptions,
           undefined,
           preparation
         ),

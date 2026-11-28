@@ -161,6 +161,10 @@ public final class ZLinkSpotRuntimeTestAccess {
                 .terminal();
     }
 
+    public static boolean hasTemporarySpotIngress(Object ingressHandler, String spotId) {
+        return ((ZLinkUserSpotRetireTargetEndpoint) ingressHandler).hasTemporarySpotIngress(spotId);
+    }
+
     public static Object aggregateCoordinator(Object ingressHandler) {
         return ((ZLinkUserSpotRetireTargetEndpoint) ingressHandler).coordinator;
     }

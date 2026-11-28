@@ -7,12 +7,7 @@ export const ZLINK_REMOTE_ACTOR_JOIN_PACKET = '__zlink.actor.join_spot.request';
 export const ZLINK_REMOTE_ACTOR_SOURCE_LEAVE_TERMINAL = '__zlink.actor.source_leave.terminal';
 export const REMOTE_ACTOR_JOIN_PACKET = ZLINK_REMOTE_ACTOR_JOIN_PACKET;
 export const REMOTE_ACTOR_JOIN_ADMISSION = 'admission';
-export const REMOTE_ACTOR_JOIN_COMMIT = 'commit';
 export const REMOTE_ACTOR_JOIN_ABORT = 'abort';
-export type ZLinkRemoteActorJoinPhase =
-  | typeof REMOTE_ACTOR_JOIN_ADMISSION
-  | typeof REMOTE_ACTOR_JOIN_COMMIT
-  | typeof REMOTE_ACTOR_JOIN_ABORT;
 
 export interface ZLinkRemoteActorSourceLeaveTerminal {
   readonly packetName: typeof ZLINK_REMOTE_ACTOR_SOURCE_LEAVE_TERMINAL;
@@ -71,31 +66,16 @@ export interface ZLinkRemoteActorJoinWirePayload {
   readonly expectedAuthorityOwnerGeneration?: unknown;
   readonly expectedOwnerLeaseGeneration?: unknown;
   readonly expectedMembershipEpoch?: unknown;
-  readonly actorEntryNodeRid?: unknown;
-  readonly actorEntryNodeRidHex?: unknown;
   readonly actorCreateRequest?: unknown;
   readonly phase?: unknown;
   readonly transferId?: unknown;
-  readonly transferAdapterKey?: unknown;
-  readonly transferState?: unknown;
   readonly sourceSpotId?: unknown;
   readonly routerChannelId?: unknown;
   readonly boundSessionRouterChannelId?: unknown;
   readonly boundSessionTargetNodeRid?: unknown;
-  readonly boundSessionTargetNodeRidHex?: unknown;
   readonly boundSessionSpotId?: unknown;
-  readonly boundSessionNodeRid?: unknown;
-  readonly boundSessionNodeRidHex?: unknown;
-  readonly boundSessionRid?: unknown;
-  readonly boundSessionRidHex?: unknown;
-  readonly boundSessionBindingGeneration?: unknown;
-  readonly boundSessionPreviousAuthorityOwnerGeneration?: unknown;
-  readonly boundSessionPreviousOwnerLeaseGeneration?: unknown;
-  readonly boundSessionRelocationSealId?: unknown;
-  readonly boundSessionServiceWireRelocation?: unknown;
   readonly request?: unknown;
   readonly requestContentType?: unknown;
-  readonly handoffBacklog?: unknown;
   readonly completionOperationHigh?: unknown;
   readonly completionOperationLow?: unknown;
 }

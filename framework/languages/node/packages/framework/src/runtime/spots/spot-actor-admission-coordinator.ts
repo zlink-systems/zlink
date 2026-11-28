@@ -5,18 +5,18 @@ import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
 import type { ZLinkBackendSpot } from '../backend/contracts';
 import {
-  type ZLinkActorHandoffPacket,
   type ZLinkActorHandoffPrefixAdmission,
   type ZLinkActorHandoffPrefixRecord,
-  type ZLinkActorHandoffResult,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
-import { replayActorHandoffBacklog } from '../actors/actor-handoff';
 import { routingIdsEqual } from '../routing-id';
 import type { ZLinkSpotActivationLifecycleOptions } from './spot-activation';
 import { ZLinkSpotActivation } from './spot-activation-state';
 import { ZLinkSpotActorJoinDispatch } from './spot-actor-join-dispatch';
-import type { ZLinkActorPacketExecution } from './spot-actor-packet-dispatch';
+import type {
+  ZLinkActorPacketDelivery,
+  ZLinkActorPacketExecution
+} from './spot-actor-packet-dispatch';
 import { ZLinkSpotActorPacketDispatch } from './spot-actor-packet-dispatch';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 
@@ -26,7 +26,6 @@ type AdmissionOptions = Pick<
   | 'admission'
   | 'actorResolver'
   | 'actorIngressMembership'
-  | 'actorTransferRuntime'
   | 'boundSessionRuntime'
   | 'detachedTaskRunner'
   | 'dispatchErrors'
@@ -35,7 +34,6 @@ type AdmissionOptions = Pick<
   | 'nativeSpotNodeProvider'
   | 'createTopicMessage'
   | 'providerResolver'
-  | 'runtimeEventPublisher'
   | 'routeToActorJoinPrewarm'
 >;
 
@@ -54,21 +52,34 @@ export class ZLinkSpotActorAdmissionCoordinator {
     messageFollowOrigin?: ZLinkMessageFollowOrigin,
     preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
   ): Promise<unknown> {
+    return this.dispatchActorDelivery(
+      activation,
+      {
+        origin,
+        actorId,
+        parts,
+        returnResponse,
+        remoteBoundSessionTarget,
+        fallbackActorRef,
+        requestTerminal,
+        messageFollowOrigin
+      },
+      preparation
+    );
+  }
+
+  dispatchActorDelivery(
+    activation: ZLinkSpotActivation,
+    delivery: ZLinkActorPacketDelivery,
+    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
+  ): Promise<unknown> {
     return dispatchActorPacketInMailbox<ZLinkSpotSerialTurnExecutor>(
-      (operation) => activation.executeActor(actorId, operation, undefined, operation, preparation),
+      (operation) =>
+        activation.executeActor(delivery.actorId, operation, undefined, operation, preparation),
       (serial) =>
         this.actorPacketDispatch(activation).admitDelivery(
           serial,
-          {
-            origin,
-            actorId,
-            parts,
-            returnResponse,
-            remoteBoundSessionTarget,
-            fallbackActorRef,
-            requestTerminal,
-            messageFollowOrigin
-          },
+          delivery,
           this.options.actorHandoffRuntime
         )
     );
@@ -90,16 +101,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
         resolveActor: (actorId) => this.resolveLifecycleActor(activation, actorId),
         getTarget: () => activation.spot,
         defaultAccept: false,
-        transfer:
-          this.options.actorTransferRuntime === undefined
-            ? { kind: 'disabled' }
-            : {
-                kind: 'enabled',
-                runtime: this.options.actorTransferRuntime
-              },
-        commitActorDeparture: (actorId) => activation.commitActorDeparture(actorId),
-        commitTransferredActor: (actor, backlog, sealedSession) =>
-          this.commitTransferredActorTransaction(activation, actor, backlog, sealedSession)
+        commitActorDeparture: (actorId) => activation.commitActorDeparture(actorId)
       },
       packets: {
         handle: (delivery) =>
@@ -256,71 +258,6 @@ export class ZLinkSpotActorAdmissionCoordinator {
     return this.options.actorResolver === undefined
       ? activation.resolveJoinedActor(actorId)
       : this.options.actorResolver(actorId);
-  }
-
-  async commitTransferredActorTransaction(
-    activation: ZLinkSpotActivation,
-    actor: ZLinkActor,
-    backlog: readonly ZLinkActorHandoffPacket[],
-    sealedSession: ZLinkRemoteBoundSessionTarget | undefined
-  ): Promise<readonly ZLinkActorHandoffResult[]> {
-    const transfer = this.options.actorTransferRuntime;
-    let routeSwitchStarted = false;
-    try {
-      transfer?.commitRoutedActor(actor, activation.spotId, activation.spot);
-      activation.commitActorJoin(actor);
-      activation.beginActorTransfer(actor.context.actorId);
-      await activation.serial.execute(() => activation.spot.onJoinedActor(actor));
-      const results =
-        backlog.length === 0 ? [] : await this.replayActorBacklog(activation, actor, backlog);
-      await transfer?.claimRoutedActorLocation(actor, activation.spotId, activation.meshName);
-      routeSwitchStarted = true;
-      await transfer?.publishRoutedActorOwnership(actor, sealedSession);
-      await transfer?.openRoutedActorSession(actor);
-      activation.cancelActorTransfer(actor.context.actorId);
-      return results;
-    } catch (error) {
-      if (routeSwitchStarted) throw error;
-      activation.commitActorDeparture(actor.context.actorId);
-      transfer?.clearRoutedActor(actor);
-      try {
-        await transfer?.rollbackRoutedActor(actor);
-      } catch (rollbackError) {
-        throw new AggregateError(
-          [error, rollbackError],
-          'Actor admission and rollback both failed.'
-        );
-      }
-      throw error;
-    }
-  }
-
-  private async replayActorBacklog(
-    activation: ZLinkSpotActivation,
-    actor: ZLinkActor,
-    backlog: readonly ZLinkActorHandoffPacket[]
-  ): Promise<readonly ZLinkActorHandoffResult[]> {
-    return await replayActorHandoffBacklog(
-      backlog,
-      (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
-        this.dispatchActorPacketDirect(
-          'remote',
-          activation,
-          actor.context.actorId,
-          parts,
-          returnResponse,
-          remoteBoundSessionTarget,
-          fallbackActorRef
-        ),
-      (index) =>
-        this.options.runtimeEventPublisher?.publish({
-          sourceName: 'zlink.framework.actor-handoff',
-          timestamp: new Date(),
-          marker: 'backlog_enqueued',
-          actorId: actor.context.actorId,
-          index
-        })
-    );
   }
 }
 

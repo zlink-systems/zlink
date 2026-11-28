@@ -26,6 +26,9 @@ use zlink::{
 // Wire-level stop token used by sender threads to signal phase end to a
 // receiver waiting on a poller. PERF_SINGLE_TEST_POLICY § 1.4 mandates this
 // pattern instead of `AtomicBool sender_done` + short polling.
+// Progress completions once every this many submissions while submitting continuously
+// (C bindings/c/perf/single/common/perf_single_reqrep.hpp:431).
+const REQREP_PROGRESS_EVERY: usize = 64;
 const DEFAULT_TIMEOUT_MS: u64 = 200;
 
 pub const STOP_TOKEN: &[u8] = b"__zlink_perf_stop__";
@@ -174,7 +177,7 @@ fn wait_for_send_progress() {
         let mut events = [zlink::PollEvent::default()];
         match poller.wait(&mut events, -1) {
             Ok(_) => true,
-            Err(error) if error.native_errno() == libc::EINTR => true,
+            Err(error) if error.internal_errno() == libc::EINTR => true,
             Err(error) => panic!("sender poller wait: {error}"),
         }
     });
@@ -362,7 +365,7 @@ pub fn emit_unsupported(pattern: &str, transport: &str, reason: &str) {
 
 pub fn is_transport_unsupported_error(err: &ZlinkError) -> bool {
     matches!(
-        err.native_errno(),
+        err.internal_errno(),
         libc::EPERM | libc::EACCES | libc::ENOTSUP
     )
 }
@@ -376,7 +379,7 @@ where
         emit_unsupported(
             pattern,
             transport,
-            &format!("{stage}_errno_{}", err.native_errno()),
+            &format!("{stage}_errno_{}", err.internal_errno()),
         );
         return true;
     }
@@ -728,7 +731,8 @@ fn record_reqrep_completion(
     outcome: Result<Vec<Message>, ZlinkError>,
     expected_size: usize,
     stats: &mut LatencyStats,
-    count_active: bool,
+    completed_at_ns: u64,
+    active_deadline_ns: u64,
 ) -> Result<(), String> {
     let parts = match outcome {
         Ok(parts) => parts,
@@ -742,21 +746,41 @@ fn record_reqrep_completion(
         return Err("request reply returned a non-empty measurement tail".to_string());
     }
     let payload = parts[0].as_bytes();
-    if count_active && is_valid_active_message(payload, expected_size) {
-        // PERF_SINGLE_TEST_POLICY.md 1.1.4: request-reply latency is the whole
-        // round trip, from the request submission stamp to this reply
-        // completion. The C reference records the same interval undivided
-        // (bindings/c/perf/single/common/perf_single_reqrep.hpp
-        // request_completion_callback).
-        let latency_ns = (now_ns() as i64)
-            .saturating_sub(decode_sent_ts_ns(payload))
-            .max(0) as u64;
-        stats.record_ns(latency_ns);
+    if completed_at_ns < active_deadline_ns && is_valid_active_message(payload, expected_size) {
+        // Single REQREP records the full round trip at completion.
+        if let Some(latency_ns) = completed_at_ns.checked_sub(decode_sent_ts_ns(payload) as u64) {
+            stats.record_ns(latency_ns);
+        }
     }
     Ok(())
 }
 
-pub type RequestTask = Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>;
+#[cfg(test)]
+#[test]
+fn reqrep_completion_counts_only_before_active_deadline() {
+    let mut stats = LatencyStats::with_sample_cap(0);
+    let mut payload = Message::with_size(64).expect("measurement message");
+    encode_header(payload.data_mut(), PHASE_ACTIVE, 64, 1);
+    let sent_at_ns = decode_sent_ts_ns(payload.as_bytes()) as u64;
+    let deadline_ns = sent_at_ns + 100;
+    let mut parts = vec![payload];
+    if measurement_part_count() == 2 {
+        parts.push(Message::try_from(&[] as &[u8]).expect("empty measurement tail"));
+    }
+    for completed_at_ns in [deadline_ns, deadline_ns + 1, deadline_ns - 1] {
+        let reply = parts
+            .iter()
+            .map(|part| Message::try_from(part.as_bytes()).expect("reply part"))
+            .collect();
+        record_reqrep_completion(Ok(reply), 64, &mut stats, completed_at_ns, deadline_ns)
+            .expect("completion");
+    }
+    let result = stats.finish();
+    assert_eq!(result.count, 1);
+    assert_eq!(result.mean_ns, 99.0);
+}
+
+type RequestTask = Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>;
 
 /// Poll every un-settled request once and aggregate the ones that finished.
 fn drain_reqrep_completions(
@@ -764,14 +788,21 @@ fn drain_reqrep_completions(
     task_context: &mut TaskContext<'_>,
     stats: &mut LatencyStats,
     expected_size: usize,
-    count_active: bool,
+    active_deadline_ns: u64,
 ) -> Result<bool, String> {
     let mut progressed = false;
     let mut index = 0;
     while index < requests.len() {
         match requests[index].as_mut().poll(task_context) {
             Poll::Ready(outcome) => {
-                record_reqrep_completion(outcome, expected_size, stats, count_active)?;
+                let completed_at_ns = now_ns();
+                record_reqrep_completion(
+                    outcome,
+                    expected_size,
+                    stats,
+                    completed_at_ns,
+                    active_deadline_ns,
+                )?;
                 drop(requests.swap_remove(index));
                 progressed = true;
             }
@@ -790,17 +821,21 @@ pub fn run_reqrep<S>(
 where
     S: FnMut(Message, Duration) -> Result<zlink::RequestSubmission, ZlinkError>,
 {
-    let request_timeout = Duration::from_millis(env_or_u64("PERF_SINGLE_REQREP_TIMEOUT_MS", DEFAULT_TIMEOUT_MS));
+    let request_timeout = Duration::from_millis(env_or_u64(
+        "PERF_SINGLE_REQREP_TIMEOUT_MS",
+        DEFAULT_TIMEOUT_MS,
+    ));
     let drain_timeout = Duration::from_millis(env_or_u64(
         "PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS",
         (request_timeout.as_millis().saturating_mul(4).max(1_000)) as u64,
     ));
     let payload_size = config.size.max(HEADER_SIZE);
-    let active_deadline = Instant::now() + Duration::from_secs(config.duration_seconds.max(1));
+    let active_ns = config.duration_seconds.max(1).saturating_mul(1_000_000_000);
+    let active_deadline_ns = now_ns().saturating_add(active_ns);
     let mut stats = LatencyStats::new();
     let mut sequence = 1u64;
     let mut requests: Vec<RequestTask> = Vec::new();
-    let mut admission: Option<Pin<Box<dyn Future<Output = Result<(), SubmitError>> + Send>>> = None;
+    let mut admission: Option<zlink::RequestSubmission> = None;
     let poller = zlink::Poller::new().map_err(|error| error.to_string())?;
     poller
         .add_socket(socket, zlink::POLLCOMPLETION, 0)
@@ -808,11 +843,12 @@ where
     let mut events = [zlink::PollEvent::default()];
     let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
     let mut task_context = TaskContext::from_waker(&waker);
+    let mut submitted_since_progress = 0usize;
 
-    while Instant::now() < active_deadline {
+    while now_ns() < active_deadline_ns {
         let mut progressed = false;
         if admission.is_none() {
-            while Instant::now() < active_deadline {
+            while now_ns() < active_deadline_ns {
                 let mut payload =
                     Message::with_size(payload_size).map_err(|error| error.to_string())?;
                 encode_header(
@@ -824,21 +860,39 @@ where
                 sequence = sequence.wrapping_add(1);
                 let submission =
                     submit(payload, request_timeout).map_err(|error| error.to_string())?;
-                let result = submission.result;
-                requests.push(submission.reply);
                 progressed = true;
-                if result == SubmitResult::Backpressured {
-                    admission = Some(submission.admitted);
+                if submission.result == SubmitResult::Backpressured {
+                    admission = Some(submission);
                     break;
+                }
+                requests.push(submission.reply);
+                submitted_since_progress += 1;
+                if submitted_since_progress == REQREP_PROGRESS_EVERY {
+                    submitted_since_progress = 0;
+                    if poller
+                        .wait(&mut events, 0)
+                        .map_err(|error| error.to_string())?
+                        != 0
+                    {
+                        drain_reqrep_completions(
+                            &mut requests,
+                            &mut task_context,
+                            &mut stats,
+                            config.size,
+                            active_deadline_ns,
+                        )?;
+                    }
                 }
             }
         }
 
-        if let Some(stage) = admission.as_mut() {
-            if let Poll::Ready(result) = stage.as_mut().poll(&mut task_context) {
-                result.map_err(|error| error.to_string())?;
-                admission = None;
-                progressed = true;
+        if let Some(retained) = admission.as_mut() {
+            if now_ns() < active_deadline_ns {
+                if let Poll::Ready(result) = retained.admitted.as_mut().poll(&mut task_context) {
+                    result.map_err(|error| error.to_string())?;
+                    requests.push(admission.take().expect("polled admission").reply);
+                    progressed = true;
+                }
             }
         }
         progressed |= drain_reqrep_completions(
@@ -846,14 +900,13 @@ where
             &mut task_context,
             &mut stats,
             config.size,
-            true,
+            active_deadline_ns,
         )?;
         if !progressed && (admission.is_some() || !requests.is_empty()) {
             poller
                 .wait(
                     &mut events,
-                    active_deadline
-                        .saturating_duration_since(Instant::now())
+                    Duration::from_nanos(active_deadline_ns.saturating_sub(now_ns()))
                         .as_millis()
                         .max(1)
                         .min(i64::MAX as u128) as i64,
@@ -862,24 +915,18 @@ where
         }
     }
 
+    // Dropping retained admission cancels the unaccepted request.
+    drop(admission);
     let drain_deadline = Instant::now() + drain_timeout;
-    while (admission.is_some() || !requests.is_empty()) && Instant::now() < drain_deadline {
-        let mut progressed = false;
-        if let Some(stage) = admission.as_mut() {
-            if let Poll::Ready(result) = stage.as_mut().poll(&mut task_context) {
-                result.map_err(|error| error.to_string())?;
-                admission = None;
-                progressed = true;
-            }
-        }
-        progressed |= drain_reqrep_completions(
+    while !requests.is_empty() && Instant::now() < drain_deadline {
+        let progressed = drain_reqrep_completions(
             &mut requests,
             &mut task_context,
             &mut stats,
             config.size,
-            false,
+            active_deadline_ns,
         )?;
-        if admission.is_some() || !requests.is_empty() {
+        if !requests.is_empty() {
             let remaining = drain_deadline.saturating_duration_since(Instant::now());
             let wait_ms = if progressed {
                 0
@@ -891,7 +938,7 @@ where
                 .map_err(|error| error.to_string())?;
         }
     }
-    if admission.is_some() || !requests.is_empty() {
+    if !requests.is_empty() {
         return Err("request completion drain timed out".to_string());
     }
 
@@ -1096,14 +1143,17 @@ pub fn resolve_single_idle_drain_ms() -> u64 {
     env_or_u64("PERF_SINGLE_RCVTIMEO_MS", DEFAULT_TIMEOUT_MS)
 }
 
-pub fn resolve_single_send_timeout() -> i32 {
-    env_or_u64("PERF_SINGLE_SNDTIMEO_MS", DEFAULT_TIMEOUT_MS)
-        .try_into().expect("PERF_SINGLE_SNDTIMEO_MS exceeds Core milliseconds")
+pub fn resolve_single_send_timeout() -> Option<std::time::Duration> {
+    let ms = env_or_u64("PERF_SINGLE_SNDTIMEO_MS", DEFAULT_TIMEOUT_MS);
+    let _: i32 = ms
+        .try_into()
+        .expect("PERF_SINGLE_SNDTIMEO_MS exceeds Core milliseconds");
+    Some(std::time::Duration::from_millis(ms))
 }
 
 pub fn is_single_send_retry_error(err: &SubmitError) -> bool {
     matches!(
-        err.native_errno(),
+        err.internal_errno(),
         libc::EAGAIN | libc::EINTR | libc::ETIMEDOUT
     )
 }

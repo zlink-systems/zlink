@@ -69,6 +69,7 @@ MSG_SIZES="${PERF_MSG_SIZES:-${SIZES:-64,256,1024,4096,65536,131072}}"
 CLIENTS="${PERF_MULTI_CLIENTS:-${PERF_CLIENTS:-${CCU:-100}}}"
 RUNS=1
 DURATION="${PERF_MULTI_DURATION_SECONDS:-${PERF_DURATION_SECONDS:-${DUR:-5}}}"
+unset LATENCY_DURATION
 PART_COUNT="${PERF_PART_COUNT:-2}"
 RESULTS_TAG="${PERF_RESULTS_TAG:-}"
 BUILD_DIR=""
@@ -95,7 +96,13 @@ RUN_COOLDOWN_MS="${PERF_MULTI_RUN_COOLDOWN_MS:-${PERF_RUN_COOLDOWN_MS:-3000}}"
 SERVER_READY_TIMEOUT_MS="${PERF_MULTI_SERVER_READY_TIMEOUT_MS:-${PERF_SERVER_READY_TIMEOUT_MS:-10000}}"
 SERVER_SHUTDOWN_TIMEOUT_MS="${PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS:-${PERF_SERVER_SHUTDOWN_TIMEOUT_MS:-5000}}"
 SERVER_BIND_PORT="${PERF_MULTI_SERVER_BIND_PORT:-${PERF_SERVER_BIND_PORT:-0}}"
-MONITOR_HWM="${PERF_MULTI_MONITOR_HWM:-${PERF_MONITOR_HWM:-4096000}}"
+for legacy_monitor_env in PERF_MULTI_MONITOR_HWM PERF_MONITOR_HWM; do
+  if [[ -v "${legacy_monitor_env}" ]]; then
+    echo "Error: ${legacy_monitor_env} is obsolete. Use ${legacy_monitor_env}_BYTES." >&2
+    exit 1
+  fi
+done
+MONITOR_HWM_BYTES="${PERF_MULTI_MONITOR_HWM_BYTES:-${PERF_MONITOR_HWM_BYTES:-4096000}}"
 CONNECT_CONCURRENCY="${PERF_MULTI_CONNECT_CONCURRENCY:-${PERF_CONNECT_CONCURRENCY:-}}"
 DEFAULT_CLIENTS="${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
 STREAM_DEFAULT_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
@@ -129,6 +136,7 @@ Options:
   --clients N            Client count.
   --runs N               Iterations per pattern/transport/size.
   --duration N           Active duration seconds.
+  --latency-duration N   Latency seconds (positive integer; default: --duration).
   --part-count N         Application frame count per measured message (1 or 2; default: 2).
   --run-cooldown-ms N    Cooldown between repeated runs.
   --build-dir PATH       Build directory override.
@@ -156,7 +164,8 @@ Options:
   --server-ready-timeout-ms N   Server ready timeout.
   --server-shutdown-timeout-ms N Server shutdown timeout.
   --server-bind-port N    Fixed bind port (0=auto).
-  --monitor-hwm N         Monitor socket HWM.
+  --monitor-hwm-bytes BYTES
+                         Override PERF_MULTI_MONITOR_HWM_BYTES (default: 4096000).
   --auto-hwm-profile NAME Auto-HWM profile: compact, low_latency, balanced, throughput (default: balanced).
   --results-dir PATH     Results root override.
   --results-tag NAME     Optional report suffix tag.
@@ -176,6 +185,19 @@ while [[ $# -gt 0 ]]; do
     --clients) CLIENTS="${2:-}"; explicit_clients=1; shift ;;
     --runs) RUNS="${2:-}"; shift ;;
     --duration) DURATION="${2:-}"; shift ;;
+    --latency-duration|--monitor-hwm-bytes)
+      if [[ $# -lt 2 || "$2" == --* ]]; then
+        echo "Error: $1 requires a value." >&2
+        exit 1
+      fi
+      if [[ "$1" == "--latency-duration" ]]; then
+        LATENCY_DURATION="$2"
+      else
+        MONITOR_HWM_BYTES="$2"
+      fi
+      shift
+      ;;
+    --latency-duration=*) LATENCY_DURATION="${1#*=}" ;;
     --part-count) PART_COUNT="${2:-}"; shift ;;
     --run-cooldown-ms) RUN_COOLDOWN_MS="${2:-}"; shift ;;
     --build-dir) BUILD_DIR="${2:-}"; shift ;;
@@ -202,7 +224,6 @@ while [[ $# -gt 0 ]]; do
     --server-ready-timeout-ms) SERVER_READY_TIMEOUT_MS="${2:-}"; shift ;;
     --server-shutdown-timeout-ms) SERVER_SHUTDOWN_TIMEOUT_MS="${2:-}"; shift ;;
     --server-bind-port) SERVER_BIND_PORT="${2:-}"; shift ;;
-    --monitor-hwm) MONITOR_HWM="${2:-}"; shift ;;
     --results-dir) RESULTS_ROOT="${2:-}"; shift ;;
     --results-tag) RESULTS_TAG="${2:-}"; shift ;;
     --core-version) shift ;;
@@ -212,6 +233,19 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+LATENCY_DURATION="${LATENCY_DURATION-${PERF_MULTI_LATENCY_DURATION_SECONDS:-${DURATION}}}"
+if [[ ! "${LATENCY_DURATION}" =~ ^[0-9]+$ || ! "${LATENCY_DURATION}" =~ [1-9] ]]; then
+  echo "Error: --latency-duration must be a positive integer." >&2
+  exit 1
+fi
+export PERF_MULTI_LATENCY_DURATION_SECONDS="${LATENCY_DURATION}"
+
+if [[ ! "${MONITOR_HWM_BYTES}" =~ ^[0-9]+$ ]]; then
+  echo "Error: --monitor-hwm-bytes must be a non-negative integer." >&2
+  exit 1
+fi
+export PERF_MULTI_MONITOR_HWM_BYTES="${MONITOR_HWM_BYTES}"
 
 if [[ "${PART_COUNT}" != "1" && "${PART_COUNT}" != "2" ]]; then
   echo "--part-count must be 1 or 2." >&2
@@ -229,7 +263,7 @@ if ! [[ "${CLIENTS}" =~ ^[0-9]+$ ]] || [[ "${CLIENTS}" -lt 1 ]]; then
   exit 1
 fi
 
-for numeric_opt in COMMON_IO_THREADS SERVER_IO_THREADS CLIENT_IO_THREADS SEND_HWM RECV_HWM MONITOR_HWM CONNECT_CONCURRENCY; do
+for numeric_opt in COMMON_IO_THREADS SERVER_IO_THREADS CLIENT_IO_THREADS SEND_HWM RECV_HWM CONNECT_CONCURRENCY; do
   value="${!numeric_opt}"
   if [[ -n "${value}" ]] && { ! [[ "${value}" =~ ^[0-9]+$ ]] || [[ "${value}" -lt 1 ]]; }; then
     echo "${numeric_opt,,} must be >= 1" >&2
@@ -1005,7 +1039,7 @@ build_multi_role_cmd() {
     --duration "${DURATION}" --control-port 0 \
     --io-threads "${io_threads}" \
     --sndtimeo "${SNDTIMEO_MS}" --rcvtimeo "${RCVTIMEO_MS}" \
-    --monitor-hwm "${MONITOR_HWM}" --connect-ready-timeout-ms "${CONNECT_READY_TIMEOUT_MS}" \
+    --connect-ready-timeout-ms "${CONNECT_READY_TIMEOUT_MS}" \
     --connect-concurrency "${concurrency}")
   append_multi_socket_args "${target_name}"
 }
@@ -1068,7 +1102,7 @@ run_stream_case() {
 
   local stream_client_rc=0
   if [[ -z "${stream_failure_reason}" ]]; then
-    if wait_for_pid_or_kill "${client_pid}" "$(( (DURATION + 20) * 1000 ))" \
+    if wait_for_pid_or_kill "${client_pid}" "$(( (DURATION + 2 * 10#${LATENCY_DURATION} + 20) * 1000 ))" \
         "stream client"; then
       :
     else
@@ -1450,7 +1484,7 @@ ZLINK_PERF_REPO_DIR="${REPO_DIR}" python3 - "${ROOT_DIR}/report_common.py" "${tm
   "${display_server_io_threads}" "${display_client_io_threads}" \
   "${display_hwm}" "${display_send_hwm}" "${display_recv_hwm}" "${display_sndbuf}" "${display_rcvbuf}" \
   "${CTX_AUTO_HWM_ENABLE}" "${CTX_AUTO_HWM_PROFILE}" "${SNDTIMEO_MS}" "${RCVTIMEO_MS}" \
-  "${CONNECT_CONCURRENCY}" "${CONNECT_READY_TIMEOUT_MS}" "${MONITOR_HWM}" \
+  "${CONNECT_CONCURRENCY}" "${CONNECT_READY_TIMEOUT_MS}" "${MONITOR_HWM_BYTES}" \
   "${SERVER_READY_TIMEOUT_MS}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "${SERVER_BIND_PORT}" \
   "${TRANSPORT_TRANSITION_MS}" "${PATTERN_TRANSITION_MS}" "${LAT_TIMEOUT_MS}" \
   "${STREAM_NON_TCP_CLIENTS_MAX}" "${DISABLE_RESOURCE_METRICS}" "${TIMEOUT_SECONDS}" \
