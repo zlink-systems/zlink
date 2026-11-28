@@ -244,15 +244,16 @@ if (sub.subscribe (msg) == 0) { /* ... */ }
 | --- | --- | --- |
 | `explicit sub_socket_t(context_t&)` | — | constructs the socket, bound to that context |
 | `set_subscription(const std::string&)` / `unset_subscription(const std::string&)` | — | adds/removes a topic filter; subscriptions accumulate; returns `void`, not `[[nodiscard]] int` like the base |
-| `subscription_at(size_t, std::string&, bool* = nullptr)` | — | writes the filter at that index into the output parameters |
-| `subscription_at(size_t)` | — | value-returning overload, returns `subscription_filter_t` |
+| `subscription_at(size_t, std::string&, bool* = nullptr)` | — | returns `bool`. On success, writes the entry to the output parameters and returns `true`. If absent, returns `false` |
+| `subscription_at(size_t)` | — | returns `std::optional<subscription_filter_t>`, or `std::nullopt` if the entry is absent |
 | `subscribe(topic_message_t&, recv_flags_t)` | `recv_flags_t::none` | populates the envelope with the next matching publish; returns `int`, not the base's throwing value-return form |
 | `subscribe_part(std::optional<routing_id_t>& source_rid_out_, std::string& topic_out_, message_t& part_out_, bool& has_more_out_, recv_flags_t)` | `recv_flags_t::none` | pull-based single-part subscribe receive |
 | `options()` | — | returns `sub_socket_options_t` |
 
-`xsub_socket_t` has the identical member set to `sub_socket_t` — every method is separately
-re-declared rather than inherited unchanged, but no member's behavior differs between the two
-beyond what SUB/XSUB themselves mean.
+SUB and XSUB inherit both query overloads from `subscriber_socket_t`. The binding supplies
+its own buffer and returns an empty filter as a successful entry. If Core returns
+`ZLINK_CONFIG_BUFFER_TOO_SMALL`, the binding retries once with the length Core returned.
+`ZLINK_CONFIG_NOT_FOUND` indicates an absent entry. Other failures raise `config_error_t`.
 
 **Completion result.** `subscribe`/`subscribe_part` return `int` (same convention as `recv`
 above).

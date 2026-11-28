@@ -246,10 +246,15 @@ if (sub.Subscribe(msg)) { /* ... */ }
 | Member | 기본값 | 의미 |
 | --- | --- | --- |
 | `SetSubscription(string)` / `UnsetSubscription(string)` | — | topic filter를 추가/제거; 구독은 누적된다 |
-| `SubscriptionAt(int index)` | `SubscriptionEntry?` | 해당 index의 filter, 범위 밖이면 `null` |
+| `SubscriptionAt(int index)` | `SubscriptionEntry?` | 해당 index의 filter와 pattern 여부, 항목이 없으면 `null` |
 | `Subscribe(TopicMessage result, RecvFlags flags)` | `RecvFlags.None` | 다음 매칭 publish로 `result`를 채움 |
 | `Options.TopicsCount`(`int`) | 읽기 전용 | 활성 구독 filter 개수 |
 | `SetRoutingId(RoutingId)` / `GetRoutingId()` | — | 이 socket 자신의 routing id를 지정/읽음; `ISubSocket`만 |
+
+`SubscriptionAt`은 바인딩의 버퍼로 조회하며, 빈 filter도 성공한 항목으로 반환한다.
+Core가 `ZLINK_CONFIG_BUFFER_TOO_SMALL`을 반환하면 Core가 알려 준 길이로 한 번 더 조회한다.
+`ZLINK_CONFIG_NOT_FOUND`는 `null`로 반환하고 나머지 Core 실패에는
+`ZlinkConfigException`을 던진다. 음수 index는 `ArgumentOutOfRangeException`을 던진다.
 
 **`IXSubSocket`은 `ISubscriberSocket` 외에 추가하는 것이 없다** — `SetRoutingId`/
 `GetRoutingId`도, 고유 member도 없다; 모든 operation이 공유 표면이다(자신의
