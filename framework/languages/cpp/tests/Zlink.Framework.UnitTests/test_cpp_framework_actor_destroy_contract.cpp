@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <atomic>
+#include <thread>
 
 namespace zlink::framework::test::actor_maintenance_join
 {
@@ -351,6 +352,8 @@ TEST_F (ActorDestroyContract, RemoteDestroyReleasesClosingAfterOwnerLeaseEnds)
 
     const auto removed = pending.result_for (wait_budget);
     ASSERT_TRUE (removed && *removed && removed->value ());
+    // TEMP #5870 diagnosis: let the owner's 10 ms renew observe the deleted lease first.
+    std::this_thread::sleep_for (50ms);
     const auto authority = services->get_required<fw::location_repository_t> ()
                              .read_authority (fw::runtime::actor_authority_key (actor_id))
                              .result_for (wait_budget);
