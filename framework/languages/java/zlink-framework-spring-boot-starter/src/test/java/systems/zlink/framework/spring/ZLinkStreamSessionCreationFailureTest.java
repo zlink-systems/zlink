@@ -61,8 +61,8 @@ final class ZLinkStreamSessionCreationFailureTest {
                             assertEquals(
                                     ZLinkStreamCloseReason.TRANSPORT_ERROR,
                                     fixture.connectFailedPeer()),
-                    fixture::assertCreationDiagnostic,
                     fixture::assertHealthyPeers,
+                    fixture::assertCreationDiagnostic,
                     () -> assertFalse(fixture.failedFlow.isDone()),
                     () -> assertEquals(3, fixture.probe.attempts.get()));
         }
@@ -92,7 +92,6 @@ final class ZLinkStreamSessionCreationFailureTest {
                             assertEquals(
                                     ZLinkStreamCloseReason.TRANSPORT_ERROR,
                                     await(fixture.disconnected)),
-                    fixture::assertCreationDiagnostic,
                     () -> {
                         String flow = await(fixture.failedFlow);
                         assertAll(
@@ -110,7 +109,8 @@ final class ZLinkStreamSessionCreationFailureTest {
                                                 flow),
                                 () -> assertTrue(flow.contains(FAILURE), flow));
                     },
-                    fixture::assertHealthyPeers);
+                    fixture::assertHealthyPeers,
+                    fixture::assertCreationDiagnostic);
             fixture.probe.releaseMonitor.complete(null);
             fixture.probe.awaitConnected(2);
             assertEquals("held", await(fixture.held.request(PACKET, "held").submit(String.class)));
@@ -284,6 +284,7 @@ final class ZLinkStreamSessionCreationFailureTest {
             await(later.connect().submit());
             if (!probe.holdMonitor) probe.awaitConnected(3);
             assertEquals("later", await(later.request(LATER_PACKET, "later").submit(String.class)));
+            // The reply trace follows the creation diagnostic on the shared delivery worker.
             await(laterFlow);
             if (probe.holdMonitor) probe.awaitConnected(4);
         }

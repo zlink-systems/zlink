@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.configuration.ZLinkMetadataPolicyRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
@@ -495,6 +496,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         this.actors = actors;
         this.meshNodes = Map.copyOf(meshNodes);
         this.handlerFactory = handlerFactory;
+        if (!registration.streamNodes().isEmpty()) ZLinkTelemetryOwner.prepare();
         this.handlerExecutor =
                 ZLinkFlowContext.propagating(
                         Objects.requireNonNull(registration.handlerExecutor(), "handlerExecutor"));
@@ -672,11 +674,16 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                     .toList();
                         });
         if (matches == null) {
-            LOGGER.warning(
-                    "late_session_route_update actor="
-                            + command.actor().actorId()
-                            + " relocation="
-                            + command.relocation());
+            ZLinkTelemetryOwner.log(
+                    ZLinkTelemetryOwner.hostOf(flow),
+                    LOGGER,
+                    Level.WARNING,
+                    () ->
+                            "late_session_route_update actor="
+                                    + command.actor().actorId()
+                                    + " relocation="
+                                    + command.relocation(),
+                    null);
             return CompletableFuture.completedFuture(null);
         }
         if (matches.size() != 1) {
@@ -1213,9 +1220,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         try {
             state.stream().disconnectPeer(state.routingId());
         } catch (RuntimeException failure) {
-            LOGGER.log(
+            ZLinkTelemetryOwner.log(
+                    ZLinkTelemetryOwner.hostOf(flow),
+                    LOGGER,
                     Level.FINE,
-                    "bound Session replacement transport disconnect failed: " + state.routingId(),
+                    () ->
+                            "bound Session replacement transport disconnect failed: "
+                                    + state.routingId(),
                     failure);
         }
     }
@@ -1290,9 +1301,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     }
                 } catch (RuntimeException | Error failure) {
                     if (!isClosed()) {
-                        LOGGER.log(
+                        ZLinkTelemetryOwner.log(
+                                ZLinkTelemetryOwner.hostOf(flow),
+                                LOGGER,
                                 Level.WARNING,
-                                "STREAM receive loop failed: " + streamNode.name(),
+                                () -> "STREAM receive loop failed: " + streamNode.name(),
                                 failure);
                         return;
                     }
@@ -1433,8 +1446,14 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             batch.record(messageBytes);
             RoutingId routingId = received.routingId().orElse(null);
             if (routingId == null) {
-                LOGGER.warning(
-                        "STREAM packet did not provide a source routing id: " + streamNode.name());
+                ZLinkTelemetryOwner.log(
+                        ZLinkTelemetryOwner.hostOf(flow),
+                        LOGGER,
+                        Level.WARNING,
+                        () ->
+                                "STREAM packet did not provide a source routing id: "
+                                        + streamNode.name(),
+                        null);
                 return false;
             }
             if (isClosed()) {
@@ -1471,23 +1490,29 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 sendSessionClosing(
                         stream, routingId, ZLinkSessionClosingControl.PROTOCOL_ERROR, reason);
             } catch (RuntimeException sendFailure) {
-                LOGGER.log(
+                ZLinkTelemetryOwner.log(
+                        ZLinkTelemetryOwner.hostOf(flow),
+                        LOGGER,
                         Level.FINE,
-                        "STREAM protocol-error notification send failed: "
-                                + streamNode.name()
-                                + ":"
-                                + routingId,
+                        () ->
+                                "STREAM protocol-error notification send failed: "
+                                        + streamNode.name()
+                                        + ":"
+                                        + routingId,
                         sendFailure);
             }
             try {
                 stream.disconnectPeer(routingId);
             } catch (RuntimeException disconnectFailure) {
-                LOGGER.log(
+                ZLinkTelemetryOwner.log(
+                        ZLinkTelemetryOwner.hostOf(flow),
+                        LOGGER,
                         Level.FINE,
-                        "STREAM protocol-error disconnect failed: "
-                                + streamNode.name()
-                                + ":"
-                                + routingId,
+                        () ->
+                                "STREAM protocol-error disconnect failed: "
+                                        + streamNode.name()
+                                        + ":"
+                                        + routingId,
                         disconnectFailure);
             }
             if (session != null) {
@@ -1502,23 +1527,29 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                                     ZLinkStreamSessionError.TRANSPORT_ERROR,
                                                     reason)));
                 } catch (RuntimeException enqueueFailure) {
-                    LOGGER.log(
+                    ZLinkTelemetryOwner.log(
+                            ZLinkTelemetryOwner.hostOf(flow),
+                            LOGGER,
                             Level.FINE,
-                            "STREAM protocol-error session cleanup failed: "
-                                    + streamNode.name()
-                                    + ":"
-                                    + routingId,
+                            () ->
+                                    "STREAM protocol-error session cleanup failed: "
+                                            + streamNode.name()
+                                            + ":"
+                                            + routingId,
                             enqueueFailure);
                 }
             }
-            LOGGER.log(
+            ZLinkTelemetryOwner.log(
+                    ZLinkTelemetryOwner.hostOf(flow),
+                    LOGGER,
                     Level.WARNING,
-                    "STREAM peer isolated after "
-                            + reason
-                            + ": "
-                            + streamNode.name()
-                            + ":"
-                            + routingId,
+                    () ->
+                            "STREAM peer isolated after "
+                                    + reason
+                                    + ": "
+                                    + streamNode.name()
+                                    + ":"
+                                    + routingId,
                     failure);
         }
 
@@ -1806,16 +1837,19 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         throw new IllegalArgumentException("unknown STREAM control packet: " + packetName);
     }
 
-    private static void logIgnoredControl(String name, int payloadLength, RoutingId routingId) {
-        if (LOGGER.isLoggable(Level.FINE)) {
-            LOGGER.fine(
-                    "Ignored STREAM control name="
-                            + name
-                            + " payloadBytes="
-                            + payloadLength
-                            + " peerSessionRid="
-                            + routingId);
-        }
+    private void logIgnoredControl(String name, int payloadLength, RoutingId routingId) {
+        ZLinkTelemetryOwner.log(
+                ZLinkTelemetryOwner.hostOf(flow),
+                LOGGER,
+                Level.FINE,
+                () ->
+                        "Ignored STREAM control name="
+                                + name
+                                + " payloadBytes="
+                                + payloadLength
+                                + " peerSessionRid="
+                                + routingId,
+                null);
     }
 
     private SessionState sealSessionAdmission(
@@ -2041,9 +2075,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 .whenComplete(
                         (ignored, reportFailure) -> {
                             if (reportFailure != null) {
-                                LOGGER.log(
+                                ZLinkTelemetryOwner.log(
+                                        ZLinkTelemetryOwner.hostOf(flow),
+                                        LOGGER,
                                         Level.FINE,
-                                        "STREAM session creation reporting failed",
+                                        () -> "STREAM session creation reporting failed",
                                         reportFailure);
                             }
                         })
@@ -2060,9 +2096,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             try {
                                 stream.disconnectPeer(routingId);
                             } catch (RuntimeException disconnectFailure) {
-                                LOGGER.log(
+                                ZLinkTelemetryOwner.log(
+                                        ZLinkTelemetryOwner.hostOf(flow),
+                                        LOGGER,
                                         Level.FINE,
-                                        "STREAM session creation disconnect failed: " + routingId,
+                                        () ->
+                                                "STREAM session creation disconnect failed: "
+                                                        + routingId,
                                         disconnectFailure);
                                 return;
                             }
@@ -2085,17 +2125,20 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkStreamHeader packet,
             Throwable failure) {
         Throwable applicationFailure = ZLinkHandlerActivator.constructionCause(failure);
-        LOGGER.log(
+        ZLinkTelemetryOwner.log(
+                ZLinkTelemetryOwner.hostOf(flow),
+                LOGGER,
                 Level.SEVERE,
-                SESSION_CREATION_FAILED
-                        + " node="
-                        + streamNode.name()
-                        + " type="
-                        + streamNode.sessionType().getName()
-                        + " peer="
-                        + routingId
-                        + " exception="
-                        + applicationFailure,
+                () ->
+                        SESSION_CREATION_FAILED
+                                + " node="
+                                + streamNode.name()
+                                + " type="
+                                + streamNode.sessionType().getName()
+                                + " peer="
+                                + routingId
+                                + " exception="
+                                + applicationFailure,
                 failure);
 
         if (packet == null) return CompletableFuture.completedFuture(null);
@@ -2421,13 +2464,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 .thenApply(ignored -> null);
     }
 
-    private static CompletionStage<Void> sendSessionClosing(
+    private CompletionStage<Void> sendSessionClosing(
             ZLinkBackendStreamSocket stream, RoutingId routingId) {
         return sendSessionClosing(
                 stream, routingId, ZLinkSessionClosingControl.SERVER_DRAIN, "server drain");
     }
 
-    private static CompletionStage<Void> sendSessionClosing(
+    private CompletionStage<Void> sendSessionClosing(
             ZLinkBackendStreamSocket stream, RoutingId routingId, int reason, String diagnostic) {
         return sendStreamFrameAsync(
                 stream,
@@ -2501,7 +2544,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         disconnectSession(state, () -> disconnectSessionStage(state));
     }
 
-    private static void sendHeartbeatPing(SessionState state) {
+    private void sendHeartbeatPing(SessionState state) {
         sendStreamFrameAsync(
                 state.stream(),
                 state.routingId(),
@@ -2510,7 +2553,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 "STREAM heartbeat ping failed during transport teardown: ");
     }
 
-    private static CompletionStage<Void> sendStreamFrameAsync(
+    private CompletionStage<Void> sendStreamFrameAsync(
             ZLinkBackendStreamSocket stream,
             RoutingId routingId,
             ZLinkStreamHeader header,
@@ -2524,14 +2567,24 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             : stream.sendAsync(routingId, header, List.of(payload));
         } catch (RuntimeException failure) {
             payload.close();
-            LOGGER.log(Level.FINE, failureMessage + routingId, failure);
+            ZLinkTelemetryOwner.log(
+                    ZLinkTelemetryOwner.hostOf(flow),
+                    LOGGER,
+                    Level.FINE,
+                    () -> failureMessage + routingId,
+                    failure);
             return CompletableFuture.completedFuture(null);
         }
         return submission.handle(
                 (ignored, failure) -> {
                     payload.close();
                     if (failure != null) {
-                        LOGGER.log(Level.FINE, failureMessage + routingId, failure);
+                        ZLinkTelemetryOwner.log(
+                                ZLinkTelemetryOwner.hostOf(flow),
+                                LOGGER,
+                                Level.FINE,
+                                () -> failureMessage + routingId,
+                                failure);
                     }
                     return null;
                 });

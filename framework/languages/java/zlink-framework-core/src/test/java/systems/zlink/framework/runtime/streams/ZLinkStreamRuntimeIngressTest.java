@@ -44,6 +44,7 @@ import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorBindOperation;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorUnbindOperation;
@@ -981,6 +982,68 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(
                 List.of("error:DISCONNECTED", "disconnected"),
                 session.transportClosed.get(5, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void missingRoutingIdWarningDoesNotDelayTheNextRead() throws Exception {
+        var logger = Logger.getLogger(ZLinkStreamRuntime.class.getName());
+        var firstRead = new AtomicLong();
+        var reader = new AtomicReference<Thread>();
+        var nextRead = new CompletableFuture<Long>();
+        var warningThread = new CompletableFuture<Thread>();
+        var warningFinished = new AtomicLong();
+        FakeStream stream =
+                new FakeStream() {
+                    @Override
+                    public ZLinkBackendStreamReceived recv() {
+                        var packet = super.recv();
+                        if (packet != null && packet.routingId().isEmpty()) {
+                            reader.set(Thread.currentThread());
+                            firstRead.set(System.nanoTime());
+                        } else if (packet != null && reader.get() == Thread.currentThread()) {
+                            nextRead.complete(System.nanoTime());
+                        }
+                        return packet;
+                    }
+                };
+        var handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        if (!record.getMessage().startsWith("STREAM packet did not provide"))
+                            return;
+                        long end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500);
+                        long remaining;
+                        while ((remaining = end - System.nanoTime()) > 0) {
+                            java.util.concurrent.locks.LockSupport.parkNanos(remaining);
+                        }
+                        warningFinished.set(System.nanoTime());
+                        warningThread.complete(Thread.currentThread());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        stream.enqueueEmptyParts(null);
+        stream.enqueue(PEER_A, frame("packet", "{}"));
+        logger.addHandler(handler);
+        try (var runtime = start(stream, 0)) {
+            long receivedAt = nextRead.get(5, TimeUnit.SECONDS);
+            long elapsed = receivedAt - firstRead.get();
+            System.err.println("Missing routing ID reader gap: " + elapsed / 1_000_000.0 + " ms");
+            // The original zero-delay control took 8.629 ms. Allow 250 ms for read and
+            // scheduling variability, while keeping the bound below the 500 ms sink delay.
+            assertTrue(elapsed < TimeUnit.MILLISECONDS.toNanos(250), "reader gap ns=" + elapsed);
+            assertEquals(
+                    "zlink-process-telemetry", warningThread.get(5, TimeUnit.SECONDS).getName());
+            assertTrue(
+                    receivedAt < warningFinished.get(), "warning completed before the next read");
+        } finally {
+            logger.removeHandler(handler);
+        }
     }
 
     @Test
@@ -1975,6 +2038,7 @@ final class ZLinkStreamRuntimeIngressTest {
             assertTrue(stream.heartbeatPongAsyncAttempted.await(5, TimeUnit.SECONDS));
             assertEquals(1001, stream.successfulReceives.get());
 
+            ZLinkTelemetryTestFence.awaitIdle();
             assertEquals(List.of(), runtimeLines);
             assertEquals(List.of(), flowLines);
             assertEquals(List.of(0), stream.heartbeatPongPayloadLengths);
@@ -2028,6 +2092,7 @@ final class ZLinkStreamRuntimeIngressTest {
             assertEquals(PEER_A, stream.disconnectedPeer.getNow(null));
             assertEquals(1, stream.sessionClosingSends.get());
             assertEquals(List.of(0), stream.heartbeatPongPayloadLengths);
+            ZLinkTelemetryTestFence.awaitIdle();
             assertTrue(
                     lines.contains(
                             "Ignored STREAM control name=$zlink.future.control payloadBytes=3"
@@ -2617,15 +2682,44 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(
                 ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                 ((ZLinkFrameworkException) changed.getCause()).kind());
-        //  A late command 44 for the bindingAbsent record is a Warning only.
-        fixture.runtime()
-                .handleSessionRelocationRoute(
-                        actorRef.nodeRid(),
-                        new ZLinkServiceM6BWireCodec()
-                                .encodeSessionRelocationRoute(sessionAbort(seal)))
-                .toCompletableFuture()
-                .get(5, TimeUnit.SECONDS);
-        assertEquals(1, disconnectCallbacks.get(), "relocation never repeats the callback");
+        var logger = Logger.getLogger(ZLinkStreamRuntime.class.getName());
+        var warning = new CompletableFuture<LogRecord>();
+        var handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        if (record.getMessage().startsWith("late_session_route_update ")) {
+                            warning.complete(record);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(handler);
+        try {
+            fixture.runtime()
+                    .handleSessionRelocationRoute(
+                            actorRef.nodeRid(),
+                            new ZLinkServiceM6BWireCodec()
+                                    .encodeSessionRelocationRoute(sessionAbort(seal)))
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            assertEquals(1, disconnectCallbacks.get(), "relocation never repeats the callback");
+            var record = warning.get(5, TimeUnit.SECONDS);
+            assertEquals(java.util.logging.Level.WARNING, record.getLevel());
+            assertEquals(
+                    "late_session_route_update actor="
+                            + actorRef.actorId()
+                            + " relocation="
+                            + relocation,
+                    record.getMessage());
+        } finally {
+            logger.removeHandler(handler);
+        }
     }
 
     @Test
@@ -3238,7 +3332,7 @@ final class ZLinkStreamRuntimeIngressTest {
                     @Override
                     public void close() {}
                 };
-        systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
+        ZLinkTelemetryTestFence.awaitIdle();
         logger.addHandler(handler);
         try {
             available.set(false);
@@ -3266,7 +3360,7 @@ final class ZLinkStreamRuntimeIngressTest {
                                     .handleSessionRelocationSeal(actorRef.nodeRid(), new byte[0])
                                     .toCompletableFuture()
                                     .join());
-            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
+            ZLinkTelemetryTestFence.awaitIdle();
             var drops =
                     lines.stream()
                             .filter(line -> line.contains("reason=location_unavailable"))
@@ -3287,7 +3381,7 @@ final class ZLinkStreamRuntimeIngressTest {
             assertTrue(decodeErrors.get(0).contains("reason=invalid_frame"));
             assertTrue(decodeErrors.get(0).contains("action=drop"));
         } finally {
-            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
+            ZLinkTelemetryTestFence.awaitIdle();
             logger.removeHandler(handler);
         }
     }
@@ -3962,7 +4056,7 @@ final class ZLinkStreamRuntimeIngressTest {
             Message body = Message.from(new byte[0]);
             received.add(
                     new ZLinkBackendStreamReceived(
-                            Optional.of(routingId),
+                            Optional.ofNullable(routingId),
                             header,
                             body,
                             () -> {

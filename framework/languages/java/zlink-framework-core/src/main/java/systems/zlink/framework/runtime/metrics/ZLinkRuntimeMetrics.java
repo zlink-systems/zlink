@@ -509,6 +509,8 @@ public final class ZLinkRuntimeMetrics {
 
     private static final Map<String, String> MESSAGE_FLOW_OVERFLOW_TAGS =
             Map.of(Tag.SOURCE.wire(), "message_flow");
+    private static final Map<String, String> DIAGNOSTIC_OVERFLOW_TAGS =
+            Map.of(Tag.SOURCE.wire(), "diagnostic");
 
     private static final Sink NOOP = new Sink() {};
     private static volatile Sink sink = NOOP;
@@ -724,11 +726,11 @@ public final class ZLinkRuntimeMetrics {
     }
 
     /** The process telemetry owner supplies the failure policy for this existing instrument. */
-    public static void emitMessageFlowOverflow(long delta) {
+    public static void emitTelemetryOverflow(long delta, boolean messageFlow) {
         sink.add(
                 Metric.OBSERVABILITY_EVENTS_OVERFLOW.metricName(),
                 delta,
-                MESSAGE_FLOW_OVERFLOW_TAGS);
+                messageFlow ? MESSAGE_FLOW_OVERFLOW_TAGS : DIAGNOSTIC_OVERFLOW_TAGS);
     }
 
     public static void record(String name, Duration duration, Map<String, String> tags) {

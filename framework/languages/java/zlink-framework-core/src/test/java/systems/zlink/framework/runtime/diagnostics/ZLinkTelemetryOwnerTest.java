@@ -11,11 +11,13 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutc
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowResult;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -24,15 +26,22 @@ import java.util.logging.*;
 
 class ZLinkTelemetryOwnerTest {
     static final class Provider extends Handler implements AutoCloseable {
-        final Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
-        final boolean parents = logger.getUseParentHandlers();
-        final Level level = logger.getLevel();
+        final Logger logger;
+        final boolean parents;
+        final Level level;
         final CountDownLatch entered = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
         final List<LogRecord> records = new ArrayList<>();
         boolean first = true;
 
         Provider() {
+            this(Logger.getLogger(ZLinkMessageFlowTracer.class.getName()));
+        }
+
+        Provider(Logger logger) {
+            this.logger = logger;
+            parents = logger.getUseParentHandlers();
+            level = logger.getLevel();
             ZLinkTelemetryTestFence.awaitIdle();
             logger.setUseParentHandlers(false);
             logger.setLevel(Level.ALL);
@@ -182,6 +191,92 @@ class ZLinkTelemetryOwnerTest {
     }
 
     @Test
+    void julAndMessageFlowShareCapacityAndOverflowReporting() throws Exception {
+        var logger = Logger.getLogger(ZLinkTelemetryOwnerTest.class.getName());
+        try (var provider = new Provider(logger);
+                var host = ZLinkTelemetryOwner.openHost()) {
+            var totalsBySource = new ConcurrentHashMap<Map<String, String>, Long>();
+            try (var ignored =
+                    ZLinkRuntimeMetrics.install(
+                            new ZLinkRuntimeMetrics.Sink() {
+                                @Override
+                                public void add(String name, long delta, Map<String, String> tags) {
+                                    if (name.equals(
+                                            ZLinkRuntimeMetrics.Metric.OBSERVABILITY_EVENTS_OVERFLOW
+                                                    .metricName())) {
+                                        totalsBySource.merge(tags, delta, Long::sum);
+                                    }
+                                }
+                            })) {
+                long overflow = ZLinkTelemetryOwner.state().overflow();
+                ZLinkTelemetryOwner.log(host, logger, Level.WARNING, () -> "first", null);
+                provider.awaitEntered();
+                for (int i = 0; i < ZLinkTelemetryOwner.PENDING_LIMIT; i++) {
+                    ZLinkTelemetryOwner.log(host, logger, Level.WARNING, () -> "queued", null);
+                }
+                assertEquals(
+                        ZLinkTelemetryOwner.PENDING_LIMIT, ZLinkTelemetryOwner.state().pending());
+                for (int i = 0; i < 3; i++) {
+                    ZLinkTelemetryOwner.log(host, logger, Level.WARNING, () -> "overflow", null);
+                }
+                emit(tracer(host, options()), 1);
+                assertEquals(overflow + 4, ZLinkTelemetryOwner.state().overflow());
+                assertTrue(totalsBySource.isEmpty());
+                provider.release.countDown();
+                ZLinkTelemetryTestFence.awaitIdle();
+                assertEquals(
+                        Map.of(
+                                Map.of("source", "diagnostic"),
+                                3L,
+                                Map.of("source", "message_flow"),
+                                1L),
+                        totalsBySource);
+                assertEquals(ZLinkTelemetryOwner.PENDING_LIMIT + 1, provider.records.size());
+                assertEquals("first", provider.records.getFirst().getMessage());
+                assertTrue(
+                        provider.records.subList(1, provider.records.size()).stream()
+                                .allMatch(record -> record.getMessage().equals("queued")));
+            }
+        }
+    }
+
+    @Test
+    void taskFailureAndConsoleUseTheSameWorker() throws Exception {
+        var logger = Logger.getLogger("systems.zlink.framework.runtime");
+        var failure = new IllegalStateException("failed task");
+        var stderr = System.err;
+        var console = new java.io.ByteArrayOutputStream();
+        try (var provider = new Provider(logger);
+                var host = ZLinkTelemetryOwner.openHost();
+                var output =
+                        new java.io.PrintStream(
+                                console, true, java.nio.charset.StandardCharsets.UTF_8)) {
+            ZLinkTelemetryOwner.log(host, logger, Level.WARNING, () -> "gate", null);
+            provider.awaitEntered();
+            System.setErr(output);
+            try {
+                ZLinkTelemetryOwner.runtimeTaskFailure(
+                        host, new ZLinkRuntimeEventDispatcher(), "test-task", failure);
+                ZLinkTelemetryOwner.stderr(host, "queued console diagnostic");
+                assertEquals(2, ZLinkTelemetryOwner.state().pending());
+                assertEquals(0, console.size());
+                provider.release.countDown();
+                ZLinkTelemetryTestFence.awaitIdle();
+                assertEquals(2, provider.records.size());
+                var record = provider.records.getLast();
+                assertSame(failure, record.getThrown());
+                assertEquals(Level.SEVERE, record.getLevel());
+                assertEquals("ZLink runtime task failed", record.getMessage());
+                assertEquals(
+                        "queued console diagnostic" + System.lineSeparator(),
+                        console.toString(java.nio.charset.StandardCharsets.UTF_8));
+            } finally {
+                System.setErr(stderr);
+            }
+        }
+    }
+
+    @Test
     void retiringOneHostRemovesOnlyItsPendingWithoutWaitingOrOverflow() throws Exception {
         try (var provider = new Provider();
                 var hostA = ZLinkTelemetryOwner.openHost();
@@ -194,11 +289,19 @@ class ZLinkTelemetryOwnerTest {
             emit(a, 2);
             emit(b, 3);
             emit(a, 4);
+            ZLinkTelemetryOwner.log(
+                    hostA, provider.logger, Level.WARNING, () -> "retired JUL", null);
             long overflow = ZLinkTelemetryOwner.state().overflow();
             hostA.close();
             assertEquals(1, ZLinkTelemetryOwner.state().pending());
             assertTrue(ZLinkTelemetryOwner.state().executing());
             emit(a, 5);
+            ZLinkTelemetryOwner.log(
+                    hostA,
+                    provider.logger,
+                    Level.WARNING,
+                    () -> fail("retired host formatted a JUL message"),
+                    null);
             emit(tracer(hostC, options()), 6);
             assertEquals(2, ZLinkTelemetryOwner.state().pending());
             assertEquals(overflow, ZLinkTelemetryOwner.state().overflow());

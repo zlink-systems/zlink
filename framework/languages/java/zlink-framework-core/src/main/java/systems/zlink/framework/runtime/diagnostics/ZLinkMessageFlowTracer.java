@@ -163,6 +163,10 @@ public final class ZLinkMessageFlowTracer {
         this.telemetryHost = supplied == null ? ZLinkTelemetryOwner.openHost() : supplied;
     }
 
+    public ZLinkTelemetryOwner.Host telemetryHost() {
+        return telemetryHost;
+    }
+
     /** Compatibility query. Processing points should use begin so mode is read once. */
     public boolean enabled(ZLinkMessageFlowOutcome phase) {
         ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
