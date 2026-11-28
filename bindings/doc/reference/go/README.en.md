@@ -57,3 +57,5 @@ framework's interface-catalog convention). This reference tree follows the same 
 | [Errors](05-errors.en.md) | Drafted | `contracts/errors.go` → `internal/native/error.go`, `result_codes.go` |
 
 This document tree is wired into `mkdocs.yml` nav.
+
+<!-- ci-trial: no-matching-path check, do not merge -->
