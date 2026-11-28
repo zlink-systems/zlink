@@ -7,7 +7,6 @@ import org.slf4j.helpers.SubstituteLogger;
 
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
-import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 
 import java.time.Instant;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -90,7 +89,7 @@ public final class ZLinkTelemetryOwner {
         }
     }
 
-    private sealed interface Diagnostic permits FlowRecord, JulRecord, TaskFailure, ConsoleRecord {
+    private sealed interface Diagnostic permits FlowRecord, JulRecord {
         void publish();
     }
 
@@ -131,22 +130,6 @@ public final class ZLinkTelemetryOwner {
         }
     }
 
-    private record TaskFailure(
-            ZLinkRuntimeEventDispatcher dispatcher, String taskName, Throwable failure)
-            implements Diagnostic {
-        @Override
-        public void publish() {
-            dispatcher.publishRuntimeTaskFailure(taskName, failure);
-        }
-    }
-
-    private record ConsoleRecord(String message) implements Diagnostic {
-        @Override
-        public void publish() {
-            System.err.println(message);
-        }
-    }
-
     static void submit(
             Host host,
             ZLinkMessageFlowEvent event,
@@ -178,17 +161,6 @@ public final class ZLinkTelemetryOwner {
                             Instant.now(),
                             Thread.currentThread().threadId()));
         }
-    }
-
-    public static void runtimeTaskFailure(
-            Host host, ZLinkRuntimeEventDispatcher dispatcher, String taskName, Throwable failure) {
-        if (!retired(host)) {
-            PROCESS.admit(host, new TaskFailure(dispatcher, taskName, failure));
-        }
-    }
-
-    public static void stderr(Host host, String message) {
-        if (!retired(host)) PROCESS.admit(host, new ConsoleRecord(message));
     }
 
     private static boolean retired(Host host) {

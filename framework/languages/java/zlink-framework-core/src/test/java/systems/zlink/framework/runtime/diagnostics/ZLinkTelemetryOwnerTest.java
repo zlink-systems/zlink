@@ -11,7 +11,6 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutc
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowResult;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
-import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -236,42 +235,6 @@ class ZLinkTelemetryOwnerTest {
                 assertTrue(
                         provider.records.subList(1, provider.records.size()).stream()
                                 .allMatch(record -> record.getMessage().equals("queued")));
-            }
-        }
-    }
-
-    @Test
-    void taskFailureAndConsoleUseTheSameWorker() throws Exception {
-        var logger = Logger.getLogger("systems.zlink.framework.runtime");
-        var failure = new IllegalStateException("failed task");
-        var stderr = System.err;
-        var console = new java.io.ByteArrayOutputStream();
-        try (var provider = new Provider(logger);
-                var host = ZLinkTelemetryOwner.openHost();
-                var output =
-                        new java.io.PrintStream(
-                                console, true, java.nio.charset.StandardCharsets.UTF_8)) {
-            ZLinkTelemetryOwner.log(host, logger, Level.WARNING, () -> "gate", null);
-            provider.awaitEntered();
-            System.setErr(output);
-            try {
-                ZLinkTelemetryOwner.runtimeTaskFailure(
-                        host, new ZLinkRuntimeEventDispatcher(), "test-task", failure);
-                ZLinkTelemetryOwner.stderr(host, "queued console diagnostic");
-                assertEquals(2, ZLinkTelemetryOwner.state().pending());
-                assertEquals(0, console.size());
-                provider.release.countDown();
-                ZLinkTelemetryTestFence.awaitIdle();
-                assertEquals(2, provider.records.size());
-                var record = provider.records.getLast();
-                assertSame(failure, record.getThrown());
-                assertEquals(Level.SEVERE, record.getLevel());
-                assertEquals("ZLink runtime task failed", record.getMessage());
-                assertEquals(
-                        "queued console diagnostic" + System.lineSeparator(),
-                        console.toString(java.nio.charset.StandardCharsets.UTF_8));
-            } finally {
-                System.setErr(stderr);
             }
         }
     }
