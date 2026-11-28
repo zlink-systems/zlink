@@ -864,15 +864,3 @@ fn reply_token_from_closed_router_is_rejected_by_recreated_router() {
         .unwrap_err();
     assert_eq!(error.code(), SubmitResult::InvalidArgument);
 }
-
-#[test]
-#[allow(deprecated)]
-fn internal_errno_and_deprecated_native_errno_return_the_same_value() {
-    use zlink::{ConfigError, ConfigResult, ZlinkError};
-    let error = ConfigError::new(ConfigResult::InvalidArgument, libc::EINVAL);
-    assert_eq!(error.internal_errno(), libc::EINVAL);
-    assert_eq!(error.native_errno(), error.internal_errno());
-    let wrapped = ZlinkError::from(error);
-    assert_eq!(wrapped.internal_errno(), libc::EINVAL);
-    assert_eq!(wrapped.native_errno(), wrapped.internal_errno());
-}

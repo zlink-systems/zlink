@@ -130,6 +130,37 @@ impl Received {
     pub fn routing_id(&self) -> Option<&RoutingId> {
         self.routing_id.as_ref()
     }
+    /// Builds a reply. Submitting it requires a received request context.
+    pub fn reply(&self) -> crate::ReplyOp<crate::Empty> {
+        use crate::contracts::messaging::operations::ReplyOpStorage;
+        match self.reply_target() {
+            Some((routed, owner, routing_id, token)) => {
+                ReplyOpStorage::router_reply_op(routed, owner, routing_id, token)
+            }
+            None => crate::ReplyOp {
+                inner: Err(missing_context()),
+                _state: std::marker::PhantomData,
+            },
+        }
+    }
+
+    /// Builds a send addressed to the source of this envelope.
+    pub fn send(&self) -> crate::SendOp<crate::Empty> {
+        use crate::contracts::messaging::operations::SendOpStorage;
+        match self.send_target() {
+            Some((_, Some(routed), owner, routing_id)) => {
+                SendOpStorage::routed_send_op(routed, owner, routing_id)
+            }
+            Some((handle, None, owner, routing_id)) => {
+                SendOpStorage::stream_send_to_op(handle, owner, routing_id)
+            }
+            None => crate::SendOp {
+                inner: Err(missing_context()),
+                _state: std::marker::PhantomData,
+            },
+        }
+    }
+
     pub fn reply_token(&self) -> Option<ReplyToken> {
         self.reply_token.clone()
     }
@@ -211,4 +242,8 @@ impl Received {
 
 pub(crate) fn recv_state_error() -> RecvError {
     RecvError::new(RecvResult::InvalidState, libc::EINVAL)
+}
+
+fn missing_context() -> crate::SubmitError {
+    crate::SubmitError::new(crate::SubmitResult::InvalidArgument, libc::EINVAL)
 }

@@ -139,7 +139,9 @@ pub(crate) fn request_until_received(
             Instant::now() < deadline,
             "timed out waiting for a request-capable connection"
         );
-        let dealer = ctx.dealer_socket().expect("request dealer creation failed");
+        let dealer = ctx
+            .create_dealer_socket()
+            .expect("request dealer creation failed");
         dealer
             .connect(endpoint)
             .expect("request dealer connect failed");
