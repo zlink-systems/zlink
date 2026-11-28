@@ -103,8 +103,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -653,14 +651,16 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(1, runtime.sessionContextCount());
     }
 
-    private final Map<ZLinkStreamRuntime, ManualScheduledExecutor> livenessTimers = new HashMap<>();
+    private record LivenessFixture(ManualScheduledExecutor scheduler, FakeStream stream) {}
+
+    private final Map<ZLinkStreamRuntime, LivenessFixture> livenessFixtures = new HashMap<>();
 
     void fireLivenessTimers(ZLinkStreamRuntime runtime) {
-        livenessTimers.get(runtime).runDueCommands();
+        livenessFixtures.get(runtime).scheduler().runDueCommands();
     }
 
     private void runLivenessTimers(ZLinkStreamRuntime runtime) throws Exception {
-        var stream = livenessTimers.get(runtime).stream;
+        var stream = livenessFixtures.get(runtime).stream();
         int priorWakes = stream.livenessWakes.get();
         fireLivenessTimers(runtime);
         if (stream.livenessWakes.get() != priorWakes) {
@@ -724,7 +724,6 @@ final class ZLinkStreamRuntimeIngressTest {
         var registration = options.registration();
         lastRegistration = registration;
         var scheduler = new ManualScheduledExecutor(clock::get);
-        scheduler.stream = stream;
         var runtime =
                 new ZLinkStreamRuntime(
                                 new FakeProvider(stream),
@@ -747,7 +746,7 @@ final class ZLinkStreamRuntimeIngressTest {
                                 stateLane,
                                 sessions)
                         .start();
-        livenessTimers.put(runtime, scheduler);
+        livenessFixtures.put(runtime, new LivenessFixture(scheduler, stream));
         runtimes.add(runtime);
         return runtime;
     }
@@ -2456,7 +2455,8 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(0, stream.disconnectCalls.get());
         fixture.runtime().handleBoundSessionReplaced(actorRef.nodeRid(), replacement(actorRef));
         try {
-            ScheduledCommand callbackDeadline = replyRetryExecutor.takeScheduledCommand();
+            ManualScheduledExecutor.ScheduledCommand callbackDeadline =
+                    replyRetryExecutor.takeScheduledCommand();
             assertEquals(TimeUnit.MILLISECONDS.toNanos(100), callbackDeadline.delayNanos());
             assertTrue(session.replacementEntered.await(5, TimeUnit.SECONDS));
             assertEquals(0, stream.disconnectCalls.get());
@@ -2467,7 +2467,8 @@ final class ZLinkStreamRuntimeIngressTest {
             assertEquals(1, stream.sessionClosingSends.get());
             assertTrue(session.replacementCompletion.complete(0L));
             assertTrue(callbackDeadline.future().isCancelled());
-            ScheduledCommand delayedClose = replyRetryExecutor.takeScheduledCommand();
+            ManualScheduledExecutor.ScheduledCommand delayedClose =
+                    replyRetryExecutor.takeScheduledCommand();
             assertEquals(TimeUnit.MILLISECONDS.toNanos(100), delayedClose.delayNanos());
             assertEquals(0, stream.disconnectCalls.get());
             delayedClose.command().run();
@@ -3817,8 +3818,10 @@ final class ZLinkStreamRuntimeIngressTest {
             if (decodeWirePayload) {
                 decodedWirePayload.set(payload.decode(WirePayload.class));
             }
-            int count = dispatchCount.incrementAndGet();
+            // Record the name before publishing the count: tests that wait for dispatchCount
+            // then read packetNames from another thread.
             packetNames.add(dispatch.packetName());
+            int count = dispatchCount.incrementAndGet();
             dispatchLatch.countDown();
             if (replyOnDispatch && dispatch.canReply()) {
                 return context.client().reply(Map.of("ok", true)).submit();
@@ -3908,64 +3911,6 @@ final class ZLinkStreamRuntimeIngressTest {
 
         @Override
         public void shutdown() {}
-    }
-
-    private record ScheduledCommand(
-            Runnable command, long delayNanos, long dueNanos, ScheduledFuture<?> future) {}
-
-    private static final class ManualScheduledExecutor extends ScheduledThreadPoolExecutor {
-        private final LinkedBlockingQueue<ScheduledCommand> scheduledCommands =
-                new LinkedBlockingQueue<>();
-
-        private final java.util.function.LongSupplier clock;
-        private FakeStream stream;
-
-        private ManualScheduledExecutor() {
-            this(() -> 0);
-        }
-
-        private ManualScheduledExecutor(java.util.function.LongSupplier clock) {
-            super(1);
-            this.clock = clock;
-            setRemoveOnCancelPolicy(true);
-        }
-
-        @Override
-        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
-            ScheduledFuture<?> future = super.schedule(() -> {}, 1, TimeUnit.DAYS);
-            long delayNanos = unit.toNanos(delay);
-            scheduledCommands.add(
-                    new ScheduledCommand(
-                            command, delayNanos, clock.getAsLong() + delayNanos, future));
-            return future;
-        }
-
-        private void runDueCommands() {
-            scheduledCommands.removeIf(command -> command.future().isCancelled());
-            for (; ; ) {
-                ScheduledCommand due =
-                        scheduledCommands.stream()
-                                .filter(command -> command.dueNanos() - clock.getAsLong() <= 0)
-                                .min(java.util.Comparator.comparingLong(ScheduledCommand::dueNanos))
-                                .orElse(null);
-                if (due == null) {
-                    return;
-                }
-                scheduledCommands.remove(due);
-                if (!due.future().isCancelled()) {
-                    due.future().cancel(false);
-                    due.command().run();
-                }
-            }
-        }
-
-        private ScheduledCommand takeScheduledCommand() throws InterruptedException {
-            ScheduledCommand command = scheduledCommands.poll(5, TimeUnit.SECONDS);
-            if (command == null) {
-                throw new AssertionError("scheduled command was not registered");
-            }
-            return command;
-        }
     }
 
     static class FakeStream implements ZLinkBackendStreamSocket {

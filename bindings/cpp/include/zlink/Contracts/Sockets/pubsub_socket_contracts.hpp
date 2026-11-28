@@ -34,11 +34,10 @@ class subscriber_socket_t : public socket_t
         return socket_t::unset_subscription (filter_);
     }
 
-    [[nodiscard]] int
-    subscription_at (size_t index_, std::string &filter_, bool *is_pattern_ = nullptr)
-    {
-        return socket_t::subscription_at (index_, filter_, is_pattern_);
-    }
+    [[nodiscard]] std::optional<subscription_filter_t> subscription_at (size_t index_);
+
+    [[nodiscard]] bool
+    subscription_at (size_t index_, std::string &filter_out_, bool *is_pattern_out_ = nullptr);
 
     [[nodiscard]] topic_message_t subscribe ()
     {
@@ -82,15 +81,6 @@ class sub_socket_t : public subscriber_socket_t
     void set_subscription (const std::string &filter_);
 
     void unset_subscription (const std::string &filter_);
-
-    void subscription_at (size_t index_, std::string &filter_out_, bool *is_pattern_out_ = nullptr);
-
-    subscription_filter_t subscription_at (size_t index_)
-    {
-        subscription_filter_t filter;
-        subscription_at (index_, filter.filter, &filter.is_pattern);
-        return filter;
-    }
 
     int subscribe (topic_message_t &out_, recv_flags_t flags_ = recv_flags_t::none)
     {
@@ -145,15 +135,6 @@ class xsub_socket_t : public subscriber_socket_t
     void set_subscription (const std::string &filter_);
 
     void unset_subscription (const std::string &filter_);
-
-    void subscription_at (size_t index_, std::string &filter_out_, bool *is_pattern_out_ = nullptr);
-
-    subscription_filter_t subscription_at (size_t index_)
-    {
-        subscription_filter_t filter;
-        subscription_at (index_, filter.filter, &filter.is_pattern);
-        return filter;
-    }
 
     int subscribe (topic_message_t &out_, recv_flags_t flags_ = recv_flags_t::none)
     {
