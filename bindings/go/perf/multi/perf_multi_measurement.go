@@ -12,6 +12,9 @@ const (
 	maxBurstPerSender = 64
 	receiveQuantum    = 1
 	settle            = 500 * time.Millisecond
+	catchUpWindow     = 500 * time.Millisecond
+	recheckBelowMs    = 1
+	maxWaitMs         = 50
 )
 
 type multiSchedule struct {
@@ -74,7 +77,11 @@ func multiLatencyDuration(active time.Duration) time.Duration {
 }
 
 func multiWait(now, until time.Time) time.Duration {
-	return min(50*time.Millisecond, max(0, until.Sub(now).Truncate(time.Millisecond)))
+	remainingMs := until.Sub(now).Milliseconds()
+	if remainingMs < recheckBelowMs {
+		return 0
+	}
+	return time.Duration(min(maxWaitMs, remainingMs)) * time.Millisecond
 }
 
 type multiCatchUp struct {
@@ -83,14 +90,14 @@ type multiCatchUp struct {
 	scheduled, startInFlight, inFlight uint64
 }
 
-func (t *multiCatchUp) observe(now time.Duration, received []uint64, scheduled uint64) bool {
-	if len(received) == 0 {
+func (t *multiCatchUp) observe(now time.Duration, received []uint64, scheduled uint64, targetRate float64) bool {
+	if targetRate <= 0 || len(received) == 0 {
 		return false
 	}
 	minimum := minReceived(received)
 	t.inFlight = scheduled - min(scheduled, minimum)
 	if t.received != nil && t.inFlight <= t.startInFlight {
-		if now-t.start < settle {
+		if now-t.start < catchUpWindow {
 			return false
 		}
 		minimumDelta := received[0] - t.received[0]

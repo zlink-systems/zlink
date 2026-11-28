@@ -6,11 +6,15 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	zlink "zlink.systems/zlink"
 	"zlink.systems/zlink/perf/internal/perfcommon"
 )
+
+// Matches the attempt limit of C's send_stop_token_bounded.
+const pubSubPhaseMarkerAttempts = 5
 
 func runMultiPubSubServer(cfg multiConfig) {
 	ctx, err := perfcommon.NewMultiServerContext()
@@ -43,10 +47,12 @@ func runMultiPubSubServer(cfg multiConfig) {
 		return sent && err == nil
 	}
 	done := func(phase uint8) {
-		marker := perfcommon.NewMessageWithSize(perfcommon.MetricHeaderSize)
-		perfcommon.StampPhaseMarker(marker.Data(), cfg.msgSize, phase)
-		_, err := perfcommon.SubmitMeasurement(publisher.Publish("bench"), marker, zlink.SendFlagsNone)
-		perfcommon.Must(err)
+		err := publishMultiPubSubPhaseMarker(cfg.msgSize, phase, func(marker *zlink.Message) (bool, error) {
+			return perfcommon.SubmitMeasurement(publisher.Publish("bench"), marker, zlink.SendFlagsNone)
+		})
+		if err != nil {
+			perfcommon.Must(fmt.Errorf("multi pubsub publish phase marker: %w", err))
+		}
 		flushControlLine("PHASE_DONE,%d,%d", cfg.msgSize, phase)
 	}
 	end := time.Now().Add(cfg.duration)
@@ -117,6 +123,21 @@ func runMultiPubSubServer(cfg multiConfig) {
 			}
 		}
 	}
+}
+
+func publishMultiPubSubPhaseMarker(msgSize int, phase uint8, publish func(*zlink.Message) (bool, error)) error {
+	for attempt := 0; attempt < pubSubPhaseMarkerAttempts; attempt++ {
+		marker := perfcommon.NewMessageWithSize(perfcommon.MetricHeaderSize)
+		perfcommon.StampPhaseMarker(marker.Data(), msgSize, phase)
+		sent, err := perfcommon.SubmitMessage(marker, publish)
+		if err != nil && !perfcommon.IsTransient(err) {
+			return err
+		}
+		if sent && err == nil {
+			return nil
+		}
+	}
+	return syscall.ETIMEDOUT
 }
 
 type pubSubCommand struct {
@@ -298,7 +319,7 @@ func runMultiPubSubClient(cfg multiConfig, endpoint string) perfcommon.Result {
 						cfg.msgSize, elapsed.Seconds(), floor, minimum, scheduled, schedule.rate)
 					nextProgress = elapsed + time.Second
 				}
-				if elapsed <= latencyDuration && tracker.observe(elapsed, pacedCounts, scheduled) {
+				if elapsed <= latencyDuration && tracker.observe(elapsed, pacedCounts, scheduled, schedule.rate) {
 					caughtUp = true
 					flushControlLine("PHASE_CATCHUP,%d", cfg.msgSize)
 					flushControlLine("PUBSUB_CATCHUP_DIAG,%d,%.6g,%d,window_start_in_flight,%d", cfg.msgSize, elapsed.Seconds(), tracker.inFlight, tracker.startInFlight)
