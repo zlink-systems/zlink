@@ -162,6 +162,23 @@ internal interface IZLinkLocationRepository
         CancellationToken cancellationToken = default
     );
 
+    ValueTask<string> SealAggregateInventoryAsync(
+        ZLinkAggregateFence fence,
+        IReadOnlyList<ZLinkAggregateParticipant> participants,
+        CancellationToken cancellationToken
+    ) => throw new NotSupportedException("Aggregate inventory storage is not supported.");
+
+    ValueTask<IReadOnlyList<ZLinkAggregateInventory.Participant>> ReadAggregateInventoryAsync(
+        ZLinkAggregateFence fence,
+        string digest,
+        CancellationToken cancellationToken
+    ) => throw new NotSupportedException("Aggregate inventory storage is not supported.");
+
+    ValueTask RemoveSealedInventoryAsync(
+        ZLinkAggregateFence fence,
+        CancellationToken cancellationToken
+    ) => ValueTask.CompletedTask;
+
     ValueTask<ZLinkAggregatePrepareResult> PrepareAggregateAsync(
         ZLinkAggregatePrepareRequest request,
         CancellationToken cancellationToken = default
@@ -172,6 +189,13 @@ internal interface IZLinkLocationRepository
         CancellationToken cancellationToken = default
     );
 
+    ValueTask<ZLinkAggregateCommitResult> CommitAggregateAttemptAsync(
+        ZLinkAggregateFence fence,
+        ulong attempt,
+        CancellationToken cancellationToken,
+        ulong? representativeAcceptedRequests = null
+    ) => CommitAggregateAsync(fence, cancellationToken);
+
     ValueTask<ZLinkAggregateCommitResult> CommitAggregateForRecoveryAsync(
         ZLinkAggregateFence fence,
         CancellationToken cancellationToken = default
@@ -181,6 +205,12 @@ internal interface IZLinkLocationRepository
         ZLinkAggregateFence fence,
         CancellationToken cancellationToken = default
     );
+
+    ValueTask<ZLinkAggregateAbortResult> AbortAggregateAttemptAsync(
+        ZLinkAggregateFence fence,
+        ulong attempt,
+        CancellationToken cancellationToken
+    ) => AbortAggregateAsync(fence, cancellationToken);
 
     /// <summary>
     /// Removes ephemeral descriptors owned by the exact host lease token.
