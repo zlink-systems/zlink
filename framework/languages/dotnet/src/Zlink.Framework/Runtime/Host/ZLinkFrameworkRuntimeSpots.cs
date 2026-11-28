@@ -1,3 +1,4 @@
+using Zlink.Framework.Runtime.Backend.DotNet;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -147,7 +148,12 @@ internal sealed partial class ZLinkFrameworkRuntime
         return GetOrCreateAsync<TSpot>(spotId, ZLinkMessage.Empty, cancellationToken);
     }
 
-    public async ValueTask<SpotRef?> FindAsync(
+    ValueTask<SpotRef?> IZLinkSpotManager.FindAsync(
+        string spotId,
+        CancellationToken cancellationToken
+    ) => ZLinkCompletionDispatcher.DeliverLifecycle(FindAsync(spotId, cancellationToken));
+
+    internal async ValueTask<SpotRef?> FindAsync(
         string spotId,
         CancellationToken cancellationToken = default
     )
@@ -164,7 +170,12 @@ internal sealed partial class ZLinkFrameworkRuntime
         return await _spots.ListAsync(GetOrStartState(), cancellationToken).ConfigureAwait(false);
     }
 
-    public async ValueTask<bool> CloseAsync(
+    ValueTask<bool> IZLinkSpotManager.CloseAsync(
+        SpotRef spot,
+        CancellationToken cancellationToken
+    ) => ZLinkCompletionDispatcher.DeliverLifecycle(CloseAsync(spot, cancellationToken));
+
+    internal async ValueTask<bool> CloseAsync(
         SpotRef spot,
         CancellationToken cancellationToken = default
     )
