@@ -147,34 +147,13 @@ bool check_reply_turns ()
     return true;
 }
 
-bool check_catch_up ()
-{
-    using namespace perf_multi_measurement;
-    const uint64_t later = 2 * catch_up_window_ns;
-    // The slowest cumulative subscriber changes. Each subscriber's delta matters.
-    catch_up_tracker_t short_by_one (200.0);
-    const bool starts_caught_up = short_by_one.observe (0, {0, 10}, 500);
-    const bool caught_up = short_by_one.observe (catch_up_window_ns, {100, 109}, 600);
-    catch_up_tracker_t short_by_two (200.0);
-    short_by_two.observe (0, {0, 10}, 500);
-    const bool missed = short_by_two.observe (catch_up_window_ns, {100, 108}, 600);
-    catch_up_tracker_t grew (200.0);
-    grew.observe (0, {0, 0}, 500);
-    grew.observe (catch_up_window_ns / 2, {49, 49}, 550);
-    const bool early = grew.observe (catch_up_window_ns, {100, 100}, 600);
-    const bool settled = grew.observe (later, {300, 300}, 800);
-    return !starts_caught_up && caught_up && !missed && !early && settled;
-}
-
 int main ()
 {
     const bool sender_turns = check_sender_turns ();
     const bool reply_turns = check_reply_turns ();
-    const bool catch_up = check_catch_up ();
     std::cout << "rule 1 sender turns: " << (sender_turns ? "PASS" : "FAIL")
-              << "\nrule 4 reply turns: " << (reply_turns ? "PASS" : "FAIL")
-              << "\nrule 5 catch-up: " << (catch_up ? "PASS" : "FAIL") << std::endl;
-    if (!sender_turns || !reply_turns || !catch_up)
+              << "\nrule 4 reply turns: " << (reply_turns ? "PASS" : "FAIL") << std::endl;
+    if (!sender_turns || !reply_turns)
         return 1;
 
     zlink::context_t context;

@@ -229,7 +229,8 @@ template <typename SocketT> class client_bench_t
 
         size_t submit_cursor = 0;
         const bool websocket = _transport == "ws" || _transport == "wss";
-        const size_t progress_quantum_bytes = 32 * 1024;
+        using perf_multi_measurement::progress_quantum_bytes;
+        // The payload is sized to max(msg_size, header_size) during setup, as in C.
         const size_t submit_count =
           websocket ? std::min (_slots.size (),
                                 std::max<size_t> (1, progress_quantum_bytes

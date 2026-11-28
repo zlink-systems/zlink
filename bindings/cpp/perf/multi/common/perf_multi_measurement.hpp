@@ -22,6 +22,11 @@ static const uint64_t ns_per_ms = 1000000ULL;
 
 static constexpr size_t max_burst_per_sender = 64;
 
+// Bound submission work between completion-poller turns by bytes. This
+// controls only when completions are progressed: it neither caps
+// outstanding requests nor waits for a reply before submitting more.
+static constexpr size_t progress_quantum_bytes = 32 * 1024;
+
 class message_burst_t
 {
   public:

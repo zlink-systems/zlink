@@ -3,6 +3,7 @@
 // Measurement role: drain incoming payloads and emit server queue metrics.
 
 #include "../common/perf_common.hpp"
+#include "../common/perf_dealer_dealer_receive.hpp"
 #include "../common/perf_multi_measurement.hpp"
 #include "../common/perf_entry.hpp"
 #include "../common/perf_metric_header.hpp"
@@ -146,14 +147,8 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
                     || !perf_metric::decode_payload_header (payload.data (), payload.size (),
                                                             &header))
                     continue;
-                const bool matched = perf_metric::is_expected (header, 1U, phase_, msg_size);
-                if (now >= sample_start && now < deadline
-                    && (matched
-                        || (paced
-                            && perf_metric::is_expected (header, 1U, perf_metric::phase_warmup,
-                                                         msg_size))))
-                    ++count_;
-                if (!matched)
+                if (!perf::multi::record_dealer_dealer_receive (
+                      header, phase_, msg_size, now, sample_start, deadline, count_))
                     continue;
                 if (paced) {
                     latency.add (
