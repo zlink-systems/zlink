@@ -692,6 +692,7 @@ function traceJoinError(
     errorReason: ZLinkDispatchErrorReason.HandlerException,
     errorAction,
     errorType: errorDetails?.errorType,
-    errorMessage: errorDetails?.errorMessage
+    errorMessage: errorDetails?.errorMessage,
+    retainAfterRetirement: error instanceof ServiceRelocationAuthorityUnsettledAtStopError
   });
 }

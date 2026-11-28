@@ -126,7 +126,8 @@ parentPort!.postMessage(TELEMETRY_WORKER_AVAILABLE);
 parentPort!.on('message', (batch: ZLinkTelemetryDelivery<ZLinkTelemetryRecord>[]) => {
   for (const item of batch) {
     Atomics.sub(state, TelemetryState.Pending, 1);
-    if (Atomics.load(new Int32Array(item.lease), 0) === 0) deliver(item.record);
+    if (item.lease === undefined || Atomics.load(new Int32Array(item.lease), 0) === 0)
+      deliver(item.record);
   }
   const dropped = Atomics.load(counters, TelemetryCounter.Overflow);
   if (dropped !== reportedOverflow) {

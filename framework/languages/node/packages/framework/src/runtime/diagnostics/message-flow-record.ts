@@ -61,6 +61,7 @@ export type MessageFlowInput = Omit<
   'effectiveMode' | 'flowId' | 'flowOrigin'
 > & {
   readonly severity?: 'warning';
+  readonly retainAfterRetirement?: boolean;
   readonly effectiveMode?: ZLinkMessageFlowLogMode;
   readonly flowId?: string;
   readonly flowOrigin?: import('../../contracts').ZLinkFlowOrigin;

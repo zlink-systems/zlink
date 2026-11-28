@@ -27,7 +27,7 @@ export interface ZLinkTelemetryLease {
 }
 
 export interface ZLinkTelemetryDelivery<T = unknown> {
-  readonly lease: SharedArrayBuffer;
+  readonly lease?: SharedArrayBuffer;
   readonly record: T;
 }
 
@@ -136,14 +136,19 @@ export class ZLinkMessageFlowDelivery {
     return this.enabled() && Atomics.load(lease.retired, 0) === 0;
   }
 
-  submit(lease: ZLinkTelemetryLease, record: unknown): void {
+  submit(lease: ZLinkTelemetryLease, record: unknown, retainAfterRetirement = false): void {
     if (!this.accepts(lease)) return;
     if (Atomics.load(this.state, TelemetryState.Pending) === MESSAGE_FLOW_PENDING_LIMIT) {
       Atomics.add(this.counters, TelemetryCounter.Overflow, 1n);
       return;
     }
     Atomics.add(this.state, TelemetryState.Pending, 1);
-    this.pending.push({ lease: lease.retired.buffer as SharedArrayBuffer, record });
+    // Stop-deadline diagnostics keep their place in the bounded queue after admission.
+    this.pending.push(
+      retainAfterRetirement
+        ? { record }
+        : { lease: lease.retired.buffer as SharedArrayBuffer, record }
+    );
     if (this.workerReady && !this.executing && this.scheduled === undefined) {
       this.scheduled = setImmediate(() => {
         this.scheduled = undefined;
