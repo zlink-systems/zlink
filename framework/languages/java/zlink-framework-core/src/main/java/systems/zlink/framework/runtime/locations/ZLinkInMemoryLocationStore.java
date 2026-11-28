@@ -315,7 +315,7 @@ public final class ZLinkInMemoryLocationStore
                         if (fixedRidClaim && ownerLeaseWait.shouldWait(waitKey, owner, true)) {
                             throw new ZLinkFrameworkException(
                                     ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                    "Previous MeshNode owner lease is within its release wait");
+                                    "MeshNode fixed RID claim is within its release wait");
                         }
                         if (!fixedRidClaim) ownerLeaseWait.clearIfUnchanged(waitKey, observedWait);
                     }

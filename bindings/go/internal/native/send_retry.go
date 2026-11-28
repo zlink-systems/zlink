@@ -32,9 +32,11 @@ func newSendRetryPayload(parts []sendBuilderPart) (*sendRetryPayload, error) {
 		switch {
 		case part.bytes:
 			err = initNativeMessageFromBytes(&owned.msg, part.data)
-		case part.message == nil || part.message.closed:
-			err = configInvalidArgumentError()
 		default:
+			err = validateSubmitMessage(part.message)
+			if err != nil {
+				break
+			}
 			rc41, errno41 := C.zlink_msg_init(&owned.msg)
 			err = configErrorFromCall(rc41, errno41)
 			if err == nil {

@@ -21,9 +21,11 @@ func main() {
 	samplecommon.Must(err)
 	defer subscriber.Close()
 
-	pubMon := samplecommon.OpenMonitor(publisher)
+	pubMon, err := zlink.OpenSocketMonitor(publisher, zlink.MonitorEventConnectionReady)
+	samplecommon.Must(err)
 	defer pubMon.Close()
-	subMon := samplecommon.OpenMonitor(subscriber)
+	subMon, err := zlink.OpenSocketMonitor(subscriber, zlink.MonitorEventConnectionReady)
+	samplecommon.Must(err)
 	defer subMon.Close()
 
 	endpoint := samplecommon.UniqueTCP("pubsub-recv")

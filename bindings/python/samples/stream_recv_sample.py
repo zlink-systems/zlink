@@ -30,7 +30,7 @@ def main():
                     reply = client.recv(64)
                     if reply != b"hello-stream":
                         raise AssertionError(f"unexpected stream reply: {reply!r}")
-            print('[stream/recv] send: "hello-stream" → recv: "hello-stream"')
+            print('[stream/recv] send: "hello-stream" -> recv: "hello-stream"')
 # --8<-- [end:doc]
 
 

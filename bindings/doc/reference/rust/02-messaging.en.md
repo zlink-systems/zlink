@@ -74,19 +74,19 @@ storage.
 | `reply_token()` | `Option<ReplyToken>`, an opaque socket-owned one-shot capability present when replyable |
 | `parts()` | `&[Message]`, every message part this envelope holds |
 | `first_part() -> Result<&Message, RecvError>` | the first part, without transferring ownership |
-| `single_part()` / `single_part_or_error()` | equivalent — both consume `self` and return `Result<Message, RecvError>`, erroring unless exactly one part |
+| `single_part_or_throw()` | consumes `self` and returns `Result<Message, RecvError>`; an `InvalidState` error unless there is exactly one part (including an empty result) |
 | `into_parts() -> Vec<Message>` | consumes `self`, transferring ownership of every part |
 | `close(self) -> Result<(), CloseError>` | consumes `self`, closes every owned part |
 | `reply()` | starts the shared `ReplyOp<Empty>` builder; valid only when an opaque reply token is present |
 | `send()` | starts the shared `SendOp<Empty>` builder, addressed to this envelope's captured source route |
 
-**Completion result.** All members are synchronous. Several methods (`single_part`, `into_parts`,
+**Completion result.** All members are synchronous. Several methods (`single_part_or_throw`, `into_parts`,
 `close`) take `self` by value, consuming the envelope — Rust's ownership system enforces at compile
 time that a consumed `Received` cannot be reused, unlike languages where reuse-after-consume is
 only a runtime contract.
 
 **When to use.** Reuse one `Received` across a receive loop (via `&mut`) rather than constructing a
-new one per message. Use `first_part()` for a non-consuming peek, `single_part()`/`into_parts()`
+new one per message. Use `first_part()` for a non-consuming peek, `single_part_or_throw()`/`into_parts()`
 when the envelope itself is no longer needed and its parts should be moved out.
 
 ---
@@ -112,7 +112,7 @@ if sub.subscribe(&mut published, RecvFlags::NONE)? {
 | `topic() -> &str` | the topic this publish was sent on |
 | `routing_id()` | `Option<&RoutingId>`, the publisher's routing id, present when the receive path provides one |
 | `parts()` | `&[Message]`, every message part this publish holds |
-| `first_part()` / `single_part()` / `single_part_or_error()` / `into_parts()` / `close(self)` | same shape as `Received` |
+| `first_part()` / `single_part_or_throw()` / `into_parts()` / `close(self)` | same shape as `Received` |
 
 **Completion result.** Synchronous; the same consuming-vs-non-consuming member split as `Received`.
 

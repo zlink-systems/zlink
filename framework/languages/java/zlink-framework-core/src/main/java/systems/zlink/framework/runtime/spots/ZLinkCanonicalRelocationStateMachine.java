@@ -34,6 +34,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRo
 import systems.zlink.framework.runtime.internal.locations.ZLinkSpotTypeCapacityDelta;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.relocation.ZLinkAuthorityUnsettledAtStopException;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
@@ -614,11 +615,7 @@ final class ZLinkCanonicalRelocationStateMachine
 
         void stop() {
             stopped = true;
-            result.completeExceptionally(
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.UNAVAILABLE,
-                            "Relocation unit is unsettled at the host stop deadline; retry on"
-                                    + " another node"));
+            result.completeExceptionally(new ZLinkAuthorityUnsettledAtStopException());
         }
     }
 
@@ -627,7 +624,6 @@ final class ZLinkCanonicalRelocationStateMachine
         if (result.isDone() || stopReached(run)) return;
         var prepare = attempt.prepare();
         String key = primary(attempt.request().participants()).authorityKey();
-        String expected = attempt.sourceStoreVersion();
         // Host relocation §14 starts Preserve when shutdown seals admission.
         // Settlement Store requests keep their independent cancellation scope.
         boolean fence =
@@ -636,50 +632,17 @@ final class ZLinkCanonicalRelocationStateMachine
                 locations
                         .read(key, OPEN)
                         .thenCompose(
-                                read -> {
-                                    Optional<AuthoritySettlement> observed =
-                                            settlementOf(read, attempt.request(), expected);
-                                    if (observed.isPresent()) {
-                                        return CompletableFuture.completedFuture(observed);
-                                    }
-                                    if (stopReached(run)) {
-                                        return CompletableFuture
-                                                .<Optional<AuthoritySettlement>>failedFuture(
-                                                        new CancellationException());
-                                    }
-                                    var owner = prepare.coordinator();
-                                    return leaseLive(owner.ownerId(), owner.ownerLeaseGeneration())
-                                            .thenCompose(
-                                                    live -> {
-                                                        if (!live) {
-                                                            return CompletableFuture
-                                                                    .completedFuture(
-                                                                            Optional.of(
-                                                                                    new AuthoritySettlement(
-                                                                                            Settlement
-                                                                                                    .SOURCE_LEASE_EXPIRED,
-                                                                                            null)));
-                                                        }
-                                                        if (stopReached(run)) {
-                                                            return CompletableFuture
-                                                                    .<Optional<AuthoritySettlement>>
-                                                                            failedFuture(
-                                                                                    new CancellationException());
-                                                        }
-                                                        return fence
-                                                                        && read
-                                                                                instanceof
-                                                                                ZLinkAuthoritySnapshot
-                                                                                        current
-                                                                ? preserveSource(
-                                                                        attempt, key, expected,
-                                                                        current)
-                                                                : CompletableFuture.completedFuture(
-                                                                        Optional
-                                                                                .<AuthoritySettlement>
-                                                                                        empty());
-                                                    });
-                                });
+                                read ->
+                                        sourceSettlementOf(read, attempt.request(), false)
+                                                .thenCompose(
+                                                        observed -> {
+                                                            if (observed.isPresent()) {
+                                                                return CompletableFuture
+                                                                        .completedFuture(observed);
+                                                            }
+                                                            return advanceSourceSettlement(
+                                                                    attempt, key, read, fence, run);
+                                                        }));
         step.whenComplete(
                 (settled, failure) -> {
                     if (failure == null && settled.isPresent()) {
@@ -719,42 +682,99 @@ final class ZLinkCanonicalRelocationStateMachine
                 });
     }
 
-    /**
-     * The source {@code Preserve} fence (spec 01 §6.1): an expected-StoreVersion CAS on the version
-     * the target NewOwner CAS expects, keeping the source owner. The caller checks the live source
-     * owner lease before submitting this CAS (spec 28 §4.4).
-     */
-    private CompletionStage<Optional<AuthoritySettlement>> preserveSource(
-            SourceAttempt attempt, String key, String expected, ZLinkAuthoritySnapshot current) {
-        return locations
-                .compareExchange(
-                        key,
-                        new ZLinkAuthorityExpectFound(expected),
-                        ZLinkAuthorityPut.relocation(
-                                current.payload(),
-                                current.relocation() == null
-                                        ? null
-                                        : current.relocation().phase("aborted")),
-                        OPEN)
-                .thenApply(
-                        written -> {
-                            if (written instanceof ZLinkAuthorityStored) {
-                                return Optional.of(
-                                        new AuthoritySettlement(Settlement.SOURCE_PRESERVED, null));
+    private CompletionStage<Optional<AuthoritySettlement>> advanceSourceSettlement(
+            SourceAttempt attempt,
+            String key,
+            ZLinkAuthorityReadResult read,
+            boolean fence,
+            SettleRun run) {
+        if (stopReached(run)) return failed(new CancellationException());
+        var owner = attempt.prepare().coordinator();
+        return leaseLive(owner.ownerId(), owner.ownerLeaseGeneration())
+                .thenCompose(
+                        live -> {
+                            if (!live) {
+                                return CompletableFuture.completedFuture(
+                                        Optional.of(
+                                                new AuthoritySettlement(
+                                                        Settlement.SOURCE_LEASE_EXPIRED, null)));
                             }
-                            //  A conflict is reconciled from the current
-                            //  record; anything else is indeterminate.
-                            return written instanceof ZLinkAuthorityConflict conflict
-                                    ? settlementOf(conflict.current(), attempt.request(), expected)
-                                    : Optional.<AuthoritySettlement>empty();
+                            if (stopReached(run)) return failed(new CancellationException());
+                            if (fence && read instanceof ZLinkAuthoritySnapshot current) {
+                                var relocation = sourceRelocationOf(current, attempt.request());
+                                if (relocation != null && !relocation.hasReached("committed")) {
+                                    return preserveSource(
+                                            key, attempt.request(), current, relocation);
+                                }
+                            }
+                            return CompletableFuture.completedFuture(Optional.empty());
                         });
     }
 
-    /** Classifies the existing source fence, including later owners of the same object (§10). */
-    private static Optional<AuthoritySettlement> settlementOf(
+    /** Preserve races NewOwner on the current version of the same relocation (§10). */
+    private CompletionStage<Optional<AuthoritySettlement>> preserveSource(
+            String key,
+            ZLinkSpotRetireControl.StageRequest request,
+            ZLinkAuthoritySnapshot current,
+            ZLinkAuthorityRelocation relocation) {
+        return locations
+                .compareExchange(
+                        key,
+                        new ZLinkAuthorityExpectFound(current.storeVersion()),
+                        ZLinkAuthorityPut.relocation(
+                                current.payload(), relocation.phase("aborted")),
+                        OPEN)
+                .thenCompose(
+                        written -> {
+                            if (written instanceof ZLinkAuthorityStored) {
+                                // CAS proves same owner and relocation; no read or lease check.
+                                return sourceSettlementOf(current, request, true);
+                            }
+                            return written instanceof ZLinkAuthorityConflict conflict
+                                    ? sourceSettlementOf(conflict.current(), request, false)
+                                    : CompletableFuture.completedFuture(Optional.empty());
+                        });
+    }
+
+    private CompletionStage<Optional<AuthoritySettlement>> sourceSettlementOf(
             ZLinkAuthorityReadResult read,
             ZLinkSpotRetireControl.StageRequest request,
-            String expectedStoreVersion) {
+            boolean preserveStored) {
+        var ownerSettlement = ownerSettlementOf(read, request);
+        if (ownerSettlement.isPresent() || !(read instanceof ZLinkAuthoritySnapshot snapshot)) {
+            return CompletableFuture.completedFuture(ownerSettlement);
+        }
+        var relocation = sourceRelocationOf(snapshot, request);
+        // A different relocation with the same owner is reobserved until settlement or stop.
+        if (relocation == null || (!preserveStored && !relocation.aborted())) {
+            return CompletableFuture.completedFuture(Optional.empty());
+        }
+        // A stored CAS validated the lease. An observed abort needs a live source lease.
+        CompletionStage<Boolean> lease =
+                preserveStored
+                        ? CompletableFuture.completedFuture(true)
+                        : leaseLive(snapshot.ownerId(), snapshot.ownerLeaseGeneration());
+        return lease.thenApply(
+                live ->
+                        Optional.of(
+                                new AuthoritySettlement(
+                                        live
+                                                ? Settlement.SOURCE_PRESERVED
+                                                : Settlement.SOURCE_LEASE_EXPIRED,
+                                        null)));
+    }
+
+    private static ZLinkAuthorityRelocation sourceRelocationOf(
+            ZLinkAuthoritySnapshot snapshot, ZLinkSpotRetireControl.StageRequest request) {
+        var relocation = snapshot.relocation();
+        return relocation != null && relocation.relocationId().equals(request.fence().aggregateId())
+                ? relocation
+                : null;
+    }
+
+    /** Classifies owner changes, including later owners of the same object (§10). */
+    private static Optional<AuthoritySettlement> ownerSettlementOf(
+            ZLinkAuthorityReadResult read, ZLinkSpotRetireControl.StageRequest request) {
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
             return Optional.of(new AuthoritySettlement(Settlement.SOURCE_LEASE_EXPIRED, null));
         }
@@ -777,9 +797,7 @@ final class ZLinkCanonicalRelocationStateMachine
                 || snapshot.objectGeneration() != source.objectGeneration()
                 || snapshot.authorityOwnerGeneration() != source.sourceAuthorityOwnerGeneration())
             return Optional.of(new AuthoritySettlement(Settlement.SOURCE_LEASE_EXPIRED, null));
-        return snapshot.storeVersion().equals(expectedStoreVersion)
-                ? Optional.empty()
-                : Optional.of(new AuthoritySettlement(Settlement.SOURCE_PRESERVED, null));
+        return Optional.empty();
     }
 
     /** Resends the whole boundary batch and the cutover after a transport reconnect. */
@@ -1906,13 +1924,17 @@ final class ZLinkCanonicalRelocationStateMachine
                 .read(key, OPEN)
                 .thenCompose(
                         read -> {
-                            Optional<AuthoritySettlement> settled =
-                                    settlementOf(read, request, expected);
+                            var settled = ownerSettlementOf(read, request);
                             if (settled.isPresent()) {
                                 return CompletableFuture.completedFuture(
                                         settled.get().outcome() == Settlement.TARGET_COMMITTED
                                                 ? TargetAuthority.SUBMIT
                                                 : TargetAuthority.SOURCE_PRESERVED);
+                            }
+                            if (read instanceof ZLinkAuthoritySnapshot snapshot
+                                    && !snapshot.storeVersion().equals(expected)) {
+                                return CompletableFuture.completedFuture(
+                                        TargetAuthority.SOURCE_PRESERVED);
                             }
                             return leaseLive(
                                             request.targetOwnerId(),

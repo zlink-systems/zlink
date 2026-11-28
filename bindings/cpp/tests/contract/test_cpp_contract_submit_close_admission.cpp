@@ -288,8 +288,9 @@ void preparation_failure_releases_reservation ()
             fixture.submit (kind, invalid);
             assert (false);
         }
-        catch (const zlink::binding_error_t &error) {
-            assert (error.internal_errno () == EINVAL);
+        catch (const zlink::submit_error_t &error) {
+            assert (error.result () == zlink::submit_result_t::invalid_handle
+                    && error.internal_errno () == EFAULT);
         }
         assert (native_submits.load () == before);
         fixture.socket (kind).close ();

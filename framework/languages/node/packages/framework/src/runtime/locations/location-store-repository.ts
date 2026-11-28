@@ -3316,7 +3316,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       ) {
         const claimAllowed = this.ownerLeaseReleaseDelay.allows(releaseDelayScope, undefined);
         releaseDelayObservation = this.ownerLeaseReleaseDelay.observation(releaseDelayScope);
-        if (!claimAllowed) throw new ZLinkOwnerLeaseReleaseDelayPendingError();
+        if (!claimAllowed) throw new ZLinkOwnerLeaseReleaseDelayPendingError(false);
       }
     }
 

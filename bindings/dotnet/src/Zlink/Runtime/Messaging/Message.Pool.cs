@@ -41,7 +41,7 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
             var result = pool[count];
             pool[count] = null!;
             t_poolCount = count;
-            result.Invalidate(clearHandle: true);
+            result.Invalidate();
             result._poolState = PoolState.Rented;
             return result;
         }

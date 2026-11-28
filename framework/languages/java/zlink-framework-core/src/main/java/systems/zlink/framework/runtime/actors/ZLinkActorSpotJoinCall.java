@@ -29,6 +29,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
+import systems.zlink.framework.runtime.internal.relocation.ZLinkAuthorityUnsettledAtStopException;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
@@ -361,14 +362,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                             (result, error) -> {
                                 if (error != null) {
                                     Throwable cause = unwrap(error);
-                                    ZLinkFrameworkErrorKind kind = completionFailureKind(cause);
-                                    //  A deferred Join that ends in `Failed` reports only
-                                    //  an error kind to the application. Trace the cause on
-                                    //  the message flow so the failure carries the same
-                                    //  flow identity as the Join that produced it.
-                                    traceJoinFailed(kind, cause);
-                                    return (ZLinkActorJoinCompletion)
-                                            new ZLinkActorJoinCompletion.Failed(operationId, kind);
+                                    return failedCompletion(
+                                            operationId, completionFailureKind(cause), cause);
                                 }
                                 if (result instanceof ZLinkActorJoinOutcome.Relayed) return result;
                                 if (result instanceof ZLinkActorJoinOutcome.Accepted accepted) {
@@ -383,11 +378,30 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                     .thenCompose(
                             terminal ->
                                     terminal instanceof ZLinkActorJoinOutcome.Relayed relayed
-                                            ? ZLinkSerialExecutionQueue.yieldCurrent(
-                                                    relayed.sourceCleanup())
+                                            ? finishRelayedCompletion(operationId, relayed)
                                             : notifyCompletion(
                                                     (ZLinkActorJoinCompletion) terminal));
         }
+    }
+
+    private CompletionStage<Void> finishRelayedCompletion(
+            ZLinkActorJoinOperationId operationId, ZLinkActorJoinOutcome.Relayed relayed) {
+        return ZLinkSerialExecutionQueue.yieldCurrent(relayed.sourceCleanup())
+                .exceptionallyCompose(
+                        failure -> {
+                            if (unwrap(failure)
+                                    instanceof ZLinkAuthorityUnsettledAtStopException unsettled) {
+                                return notifyCompletion(
+                                        failedCompletion(operationId, unsettled.kind(), unsettled));
+                            }
+                            return CompletableFuture.failedFuture(failure);
+                        });
+    }
+
+    private ZLinkActorJoinCompletion.Failed failedCompletion(
+            ZLinkActorJoinOperationId operationId, ZLinkFrameworkErrorKind kind, Throwable cause) {
+        traceJoinFailed(kind, cause);
+        return new ZLinkActorJoinCompletion.Failed(operationId, kind);
     }
 
     static Duration remainingTimeout(long deadlineNanos) {

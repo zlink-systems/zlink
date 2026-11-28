@@ -4,7 +4,7 @@
 #include <zlink/stream_connector.hpp>
 #include "runtime/protocol/header_codec.hpp"
 #include "runtime/protocol/framing/frame_codec.hpp"
-#include "locked_stream_capture.hpp"
+#include "../../tests/support/stream_capture.hpp"
 #include <boost/asio.hpp>
 #include <algorithm>
 #include <array>
@@ -162,7 +162,7 @@ template <class WithConnector> int connector_cases (WithConnector with_connector
                                                             [&] (const auto &) { ++callbacks; });
         auto pong = connector.template on<sc::packet_t> ("$zlink.heartbeat.pong",
                                                          [&] (const auto &) { ++callbacks; });
-        stream_capture_t logs (std::cerr);
+        zlink::framework::test::stream_capture_t logs (std::cerr);
         std::vector<std::uint8_t> batch;
         for (int i = 0; i < 1000; ++i) {
             auto bytes = frame ("$zlink.future", {255, 1, 2});

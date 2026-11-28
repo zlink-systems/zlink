@@ -25,16 +25,16 @@ fn main() {
     let args = common::MultiArgs::parse();
     let settings = common::MultiSettings::from_env();
     let ctx = common::perf_server_context();
-    let stream = ctx.stream_socket().expect("stream");
+    let stream = ctx.create_stream_socket().expect("stream");
     // C parity: numeric HWM remains behind the manual-override gate.
     common::apply_multi_hwm(&stream, &settings);
     stream
         .common_options()
-        .set_send_timeout(settings.send_timeout_ms)
+        .set_send_timeout(common::timeout_ms(settings.send_timeout_ms))
         .expect("sndtimeo");
     stream
         .common_options()
-        .set_receive_timeout(settings.receive_timeout_ms)
+        .set_receive_timeout(common::timeout_ms(settings.receive_timeout_ms))
         .expect("rcvtimeo");
     stream
         .common_options()

@@ -157,7 +157,7 @@ public sealed class test_message_gc_lifetime
                 Message owned = Message.From(Payload(i % 64));
                 owned.Dispose();
                 owned.Dispose();
-                Assert.Throws<ObjectDisposedException>(() => owned.AsSpan());
+                Assert.True(owned.AsSpan().IsEmpty);
             }
         });
         thread.Start();

@@ -24,20 +24,30 @@ with socket:
     ...
 ```
 
-**Options.** **No `unbind`, no TLS methods (`set_tls_server`/`set_tls_client`/etc.) at all** —
-unlike every other language covered so far, this binding's socket base contract has neither.
-
 | Member | Meaning |
 | --- | --- |
 | `bind(endpoint)` | starts listening on an address |
+| `unbind(endpoint)` | stops listening on the bound local endpoint |
+| `set_tls_server(cert, key, require_client_cert=False)` | sets the server certificate, key, and client certificate requirement before binding |
+| `set_tls_client(ca_cert, hostname, trust_system=False)` | sets the trusted CA, expected server name, and system CA policy before connecting. `ca_cert` and `hostname` accept `None`. |
 | `close()` | closes the native socket |
 | `options` | property, the typed options facade for this socket type |
 | `__enter__` / `__exit__` | sync context-manager only — **no `__aenter__`/`__aexit__` here**, unlike the async-and-sync-both pattern every other resource type in this binding follows |
 
-**Completion result.** `bind`/`close` are synchronous with no return value.
+| Operation | Completion result |
+| --- | --- |
+| `bind(endpoint)` | Returns `None` on success. Raises `BindError` on failure. |
+| `unbind(endpoint)` | Returns `None` on success. Raises `ConnectError` on failure. |
+| `set_tls_server(...)` | Returns `None` on success. Raises `ConfigError` on failure. |
+| `set_tls_client(...)` | Returns `None` on success. Raises `ConfigError` on failure. |
 
 **When to use.** Every concrete socket type below extends this Protocol and adds its own
 `connect`/`disconnect`/send/recv surface.
+
+On raw sockets other than STREAM, `connection_attempts_snapshot()` returns one
+`ConnectionAttempt` per outbound connection registration. Watch for changes with
+`PollEventFlag.POLLCONNECT`. A successful snapshot clears readiness unless a newer
+change occurred during the query.
 
 ---
 
@@ -67,11 +77,8 @@ socket.options.submit_retry_mode = SubmitRetryMode.LOCAL_FAILURE
 | `max_message_size` | maximum size in bytes of a single accepted message |
 | `backlog` | pending-connection queue length for a listening socket |
 | `reconnect_interval_ms` / `reconnect_interval_max_ms` | delay between reconnect attempts / cap on that delay |
-| `submit_retry_mode` | whether a failed submit retries automatically on local back-pressure |
+| `submit_retry_mode` | Uses `SubmitRetryMode.OFF` or `SubmitRetryMode.LOCAL_FAILURE`. |
 | `submit_retry_timeout_ms` / `submit_retry_attempts` | retry timeout/attempt cap when `submit_retry_mode` requests it |
-| `heartbeat_interval_ms` | interval between heartbeat pings on an idle connection — **no other language covered so far exposes this property** |
-| `heartbeat_ttl_ms` | how long the remote keeps the connection alive without a heartbeat — same exclusivity |
-| `heartbeat_timeout_ms` | how long to wait for a heartbeat reply before treating the connection as dead — same exclusivity |
 
 **Options — per-type extensions.**
 
@@ -83,13 +90,13 @@ socket.options.submit_retry_mode = SubmitRetryMode.LOCAL_FAILURE
 | `RouterSocketOptions` | `mandatory` | error instead of silent drop on an unknown route |
 | | `handover` | convenience wrapper over `rid_duplicate_policy` |
 | | `probe` | sends an empty probe on connect |
-| | `connect_routing_id` | the *only* routing-id-shaped surface anywhere in this binding's socket contracts — see the README's note that no socket type has `set_routing_id`/`get_routing_id` of its own |
+| | `connect_routing_id` | Sets the peer routing ID for the next outbound connection. |
 | | `weight` / `request_timeout_ms` | both directions |
 | `StreamSocketOptions` | `notify` | delivers peer connect/disconnect as application messages when enabled |
 | `PubSocketOptions` | `verbose` / `verboser` | deliver every (un)subscribe message, including duplicates |
 | | `manual` / `manual_last_value` | subscriptions require `approve_subscribe`/`reject_subscribe`; `manual_last_value` also replays the last cached message per topic to a newly accepted subscriber |
 | | `no_drop` | error instead of silent drop on back-pressure |
-| | `welcome_message` | sent automatically to each newly connected subscriber |
+| | `welcome_message` | Sends automatically to new subscribers. The current getter raises `ConfigError` for values longer than 256 bytes. |
 | | `topics_count` | read-only, active subscription count |
 | | `approve_subscribe(routing_id)` / `reject_subscribe(routing_id)` | set-only, no getters |
 | `SubSocketOptions` | `topics_count` | read-only — the only per-type option this socket has |
@@ -97,9 +104,7 @@ socket.options.submit_retry_mode = SubmitRetryMode.LOCAL_FAILURE
 **Completion result.** Every property read/write is synchronous.
 
 **When to use.** Set `send_high_water_mark`/`receive_high_water_mark` and `linger_ms` before the
-socket starts exchanging messages when the defaults don't fit the deployment. Use the three
-`heartbeat_*` properties to tune ZMTP-level liveness detection independent of the transport's own
-TCP keep-alive.
+socket starts exchanging messages when the defaults don't fit the deployment.
 
 ---
 
@@ -137,11 +142,13 @@ not load-balance.
 Load-balances sends across its connected peers and can issue routed requests.
 
 ```python
-dealer = create_dealer_socket(ctx)
-reply = await dealer.request().message(b"payload").submit()
+# The dealer is connected. The caller drives the completion poller while the reply is pending.
+completion_poller.add_socket(dealer, PollEventFlag.POLLCOMPLETION, slot=1)
+submission = dealer.request().message(b"payload").timeout(5.0).submit()
+reply = await submission.reply
 ```
 
-**Options.** **No `set_routing_id`/`get_routing_id` at all** — see the README's note.
+**Options.** Use `set_routing_id` and `get_routing_id` to set and read the DEALER socket's own routing ID.
 
 | Member | Meaning |
 | --- | --- |
@@ -165,8 +172,10 @@ surface instead.
 Routes messages to peers addressed by routing id, and can reply to a specific peer's request.
 
 ```python
-router = create_router_socket(ctx)
-await router.send(peer_rid).message(b"hello").submit()
+# The caller drives the completion poller while admission is pending.
+completion_poller.add_socket(router, PollEventFlag.POLLCOMPLETION, slot=1)
+submission = router.send(peer_rid).message(b"hello").submit()
+await submission.admitted
 ```
 
 **Options.** ROUTER uses the same managed send/request terminals as DEALER. Core keeps the selected
@@ -259,7 +268,7 @@ language's STREAM asymmetry.
 | `stream_options` | the per-type options facade |
 | `send(routing_id)` | starts the shared `SendOp`, addressed to that peer |
 | `recv_into(received, *, flags=0)` | pulls the next RAW-mode record |
-| `recv_packet_into(packet, *, flags=0)` | pulls the next PACKET-mode header/body pair into reusable caller-owned storage |
+| `recv_packet_into(packet, *, flags=0)` | pulls the next PACKET-mode header/body pair into reusable caller-owned storage. A concurrent receive into the same `StreamPacket` raises `RecvError` with `RecvResult.INVALID_STATE` and `internal_errno == errno.EBUSY`. |
 | `disconnect_rid(peer_rid)` | disconnects the peer identified by that routing id |
 
 **Completion result.** `recv_into` and `recv_packet_into` follow the convention above. The caller
@@ -278,9 +287,13 @@ to accumulate parts and reach a terminal submit. All builder stages extend the s
 `_FluentMessageOp` base Protocol.
 
 ```python
-await dealer.send().message(part1).message(part2).submit()
+# Register the dealer once and drive the poller while either stage is pending.
+completion_poller.add_socket(dealer, PollEventFlag.POLLCOMPLETION, slot=1)
+submission = dealer.send().message(part1).message(part2).submit()
+await submission.admitted
 
-reply = await dealer.request().message(payload).timeout(5.0).submit()
+submission = dealer.request().message(payload).timeout(5.0).submit()
+reply = await submission.reply
 
 received.reply().message(b"ok").submit()
 ```
@@ -291,19 +304,28 @@ received.reply().message(b"ok").submit()
 | --- | --- | --- |
 | `_FluentMessageOp` (shared base) | `message(payload)` | add one part, starts/continues the chain |
 | | `messages(*payloads)` | add several parts in one call — **declared directly on the shared base Protocol here**, unlike other languages where the multi-part convenience is a separate extension method |
-| `SendOp extends _FluentMessageOp` | `submit()` / `submit_sync()` | awaitable or blocking terminal |
-| `RequestOp extends _FluentMessageOp` | `timeout(timeout)` / `submit()` / `submit_sync()` | adds a reply-wait timeout; returns caller-owned reply messages |
+| `RequestOp` | `timeout(timeout)` | sets the reply timeout in seconds, measured from admission |
 | `PublishOp extends _FluentMessageOp` | `flags(flags)` / `submit()` | synchronous lossy/NODROP publication; the only operation family retaining send flags |
 | `ReplyOp extends _FluentMessageOp` | `submit()` | terminal |
 
-**Completion result.** Send `submit()` is awaitable and `submit_sync()` blocks for Core's terminal
-result. Request has matching awaitable/blocking terminals returning reply messages; reply and
-publish `submit()` are synchronous. Managed send/request/reply terminals do not accept
-`SendFlags.DONT_WAIT`.
+| Terminal | Completion result |
+| --- | --- |
+| `SendOp.submit()` | Returns a `SendSubmission` immediately. Read the initial result in `submission.result` and await `submission.admitted` for admission. |
+| `SendOp.submit_sync()` | Blocks until admission or failure. |
+| `RequestOp.submit()` | Returns a `RequestSubmission` immediately. It exposes the same result and admission properties as a send submission. Await `submission.reply` for caller-owned reply parts. |
+| `RequestOp.submit_sync()` | Blocks until it returns caller-owned reply parts or raises an error. |
+| `PublishOp.submit()` | Completes publication synchronously. |
+| `ReplyOp.submit()` | Submits the reply synchronously. |
+
+A submitted `Message` is consumed when Core admits it. A synchronous rejection leaves it with the caller. When an asynchronous send or request returns `BACKPRESSURED` with a wait token, the binding consumes the original once it has secured its own copy for resubmission. A consumed `Message` reports empty data and size zero. Submitting it again raises `ConfigError` with `ConfigResult.INVALID_HANDLE`. To keep using the payload, make a copy with `Message.copy()` before submitting.
+
+Register the socket for `PollEventFlag.POLLCOMPLETION` before submitting an asynchronous request
+or a send that may wait for admission. Call [`Poller.wait()`](04-eventing.en.md#poller) while
+admission or a reply is pending. The [async request sample](../../../../bindings/python/samples/request_reply_async_sample.py)
+shows registration, poller execution alongside the responder, and reply cleanup.
 
 **When to use.** Use `messages(*payloads)` to add several parts in one call instead of chaining
-`.message(...)` per part. Prefer the awaitable terminal in `asyncio` code and use the synchronous
-terminal only when the calling thread may block.
+`.message(...)` per part. Use `submit_sync()` when the calling thread can block.
 
 ---
 

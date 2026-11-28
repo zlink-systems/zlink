@@ -67,7 +67,10 @@ member Actor owner를 한 번의 조건부 변경으로 함께 바꾼다.
 Relocation은 object를 삭제하고 다시 만드는 작업이 아니므로 `ObjectGeneration`을 유지한다.
 Owner가 바뀐 순서는, 같은 object incarnation 안에서 owner가 바뀐 차례를 매기는
 [`AuthorityOwnerGeneration`](../00-foundation/02-glossary.ko.md#authority-owner-generation)으로
-구분한다. 여러 control message가 같은
+구분한다. **Actor의 membership epoch는 한 owner tenure(같은 `ObjectGeneration`과 `AuthorityOwnerGeneration`) 안에서만
+순서가 있다.** Relocation은 epoch를 옮기지 않으며 target은 새 owner tenure에서 epoch를 초기값부터 다시 센다.
+Epoch를 비교하는 곳은 두 값이 같은 owner tenure의 값인지 먼저 확인하고, 다른 tenure의 epoch는 크기로 비교하지
+않고 그 tenure가 현재가 아니라는 이유로 거부한다. 여러 control message가 같은
 이동에 속하는지는 runtime이 만든 0이 아닌 relocation identity로 구분한다. 이 identity는
 `RelocationId`, 하나의 `RelocationId` 안에서 target 준비 시도마다 유일한 0이 아닌 값
 `targetAttemptGeneration`과 coordinator fence — 이동을 시작한 coordinator가 예상하는 현재

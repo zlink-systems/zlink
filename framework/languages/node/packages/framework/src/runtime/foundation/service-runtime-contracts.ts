@@ -185,6 +185,8 @@ export interface ActorTransferControlPayload {
   readonly role: number;
   readonly transferId: ActorTransferId;
   readonly actor: ServiceActorRef | null;
+  /** Source owner tenure required by target Preparing and Fenced controls. */
+  readonly sourceAuthorityOwnerGeneration?: bigint;
   readonly membershipEpoch: bigint;
   readonly finalSequence: bigint;
   readonly resultCode: number;

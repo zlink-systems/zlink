@@ -12,22 +12,51 @@ class _SocketContract(Protocol):
     """Operations common to every socket type."""
 
     def bind(self, endpoint):
-        """Bind to a local transport address (for example ``tcp://*:5555``) to
-        accept connections there."""
+        """Bind to a local transport address, such as ``tcp://*:5555``.
+
+        Raises:
+            ValueError: The endpoint contains a NUL or exceeds 255 UTF-8 bytes.
+            BindError: Core could not bind the endpoint.
+        """
         ...
 
-    def unbind(self, endpoint: str): ...
+    def unbind(self, endpoint: str):
+        """Stop accepting connections at the bound endpoint.
+
+        Raises:
+            ValueError: The endpoint contains a NUL or exceeds 255 UTF-8 bytes.
+            ConnectError: Core could not unbind the endpoint.
+        """
+        ...
 
     def set_tls_server(
         self, cert: str, key: str, require_client_cert: bool = False
-    ): ...
+    ):
+        """Configure the server certificate, key, and client certificate policy.
+
+        Call before binding.
+
+        Raises:
+            ValueError: The certificate or key path contains a NUL.
+            ConfigError: Core rejected the TLS configuration.
+        """
+        ...
 
     def set_tls_client(
         self,
         ca_cert: Optional[str],
         hostname: Optional[str],
         trust_system: bool = False,
-    ): ...
+    ):
+        """Configure the trusted CA, server name, and system CA policy.
+
+        Call before connecting.
+
+        Raises:
+            ValueError: The CA path or server name contains a NUL.
+            ConfigError: Core rejected the TLS configuration.
+        """
+        ...
 
     def monitor_open(
         self, events: MonitorEventMask = MonitorEventMask.ALL, monitor_hwm_bytes: int = 0
@@ -64,10 +93,14 @@ class _ConnectSocketContract(_DisconnectRidContract, Protocol):
     """Sockets that connect outward and report their connection attempts."""
 
     def connection_attempts_snapshot(self) -> List[ConnectionAttempt]:
-        """Return one :class:`ConnectionAttempt` per current outbound
-        connection registration as one atomic snapshot. A successful
-        snapshot clears ``PollEventFlag.POLLCONNECT`` readiness unless a
-        later change raced with it."""
+        """Return an atomic snapshot of outbound connection registrations.
+
+        A successful snapshot clears ``PollEventFlag.POLLCONNECT`` readiness
+        unless a later change occurred during the snapshot.
+
+        Raises:
+            ConfigError: Core could not read the connection attempts.
+        """
         ...
 
 
