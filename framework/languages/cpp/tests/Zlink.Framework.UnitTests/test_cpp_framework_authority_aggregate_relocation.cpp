@@ -36,8 +36,7 @@ nlohmann::json aggregate_storage_golden ()
     return nlohmann::json::parse (fixture);
 }
 
-// Enable after the #5354 C++ port moves SpotWide projection out of the target-dependent seal.
-TEST (AuthorityAggregateRelocation, DISABLED_SpotWideSourceSealMatchesGolden)
+TEST (AuthorityAggregateRelocation, SpotWideSourceSealMatchesGolden)
 {
     const auto vector = aggregate_storage_golden ().at ("spotWideSeal");
     const auto &input = vector.at ("input");
@@ -270,7 +269,7 @@ TEST (AuthorityAggregateRelocation, ProviderSealMatchesAggregateStorageGolden)
 }
 
 // Enable after #4789. Source capture still hashes the previous Spot membership.
-TEST (AuthorityAggregateRelocation, DISABLED_StandaloneActorCommitMatchesGolden)
+TEST (AuthorityAggregateRelocation, StandaloneActorCommitMatchesGolden)
 {
     const auto golden = aggregate_storage_golden ();
     const auto &vector = golden.at ("standaloneActorCommit");
@@ -462,8 +461,23 @@ TEST (AuthorityAggregateRelocation, DISABLED_StandaloneActorCommitMatchesGolden)
     ASSERT_TRUE (committed->aggregate && committed->aggregate->relocation);
     EXPECT_EQ (committed->aggregate->relocation->phase, "committed");
     EXPECT_GT (committed->authority_owner_generation, owner_generation);
-    EXPECT_EQ (committed->aggregate->encoded.at ("relocation").at ("sourceInventorySha256"),
-               expected.at ("digestSha256"));
+    const auto digest = [&] (const auto &payload) {
+        return aggregate_inventory::build_tree ({{key,
+                                                  original_version,
+                                                  authority_generation_transition_t::new_owner,
+                                                  payload,
+                                                  {}}})
+          .root.at ("digestSha256")
+          .template get<std::string> ();
+    };
+    EXPECT_EQ (digest (committed->payload), text (expected, "digestSha256"));
+    EXPECT_EQ (committed->aggregate->encoded.at ("relocation")
+                 .at ("sourceInventorySha256")
+                 .get<std::string> (),
+               digest (encode_actor_authority_payload (source_actor)));
+    const auto inventory_keys =
+      provider.scan ({"zlink:v11:aggregate-inventory:", std::nullopt, 10}).result ().value ();
+    EXPECT_TRUE (std::get<store_scan_page_t> (inventory_keys).items.empty ());
 }
 
 TEST (AuthorityAggregateRelocation, SharedRecordsRoundTripAndMalformedRecordsFailClosed)
