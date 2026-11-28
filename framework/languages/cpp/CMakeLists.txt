@@ -3424,6 +3424,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_backpressure_reliability.cpp
     "framework-unit;framework-regression;backpressure;reliability")
   add_zlink_framework_test(
+    test_cpp_framework_local_send_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_local_send_admission.cpp
+    "framework-unit;framework-regression;backpressure;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_local_send_admission)
+  target_include_directories(test_cpp_framework_local_send_admission PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_stream_typed_reply
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_typed_reply.cpp
     "framework-unit;framework-contract;stream;reply"

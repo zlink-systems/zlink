@@ -2010,7 +2010,8 @@ void public_host_runtime_t::publish_local_application (mesh::service_mailbox_app
     record.application_permit.emplace (std::move (dispatch.application_permit));
     record.application = std::move (original);
     if (!_transport->mailbox ().try_enqueue (std::move (record)))
-        throw protocol::service_wire_error_t ("local application mailbox is closed");
+        throw framework_exception_t (framework_error_kind_t::rejected,
+                                     "local application mailbox is closed");
 }
 
 task_t<std::optional<stateful::object_ref_t>> public_host_runtime_t::accept_local_application (
@@ -2195,35 +2196,29 @@ void public_host_runtime_t::admit_local_application (
     auto application = original.retain_mutable ();
     auto pending = waiter ? waiter : std::make_shared<application_job_queue_t::waiter_t> ();
     std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
+    const auto stop_admission = [] (const auto &completion) {
+        if (completion)
+            completion->complete (detail::boundary_failure<void> (
+              detail::boundary_error_t::shutdown, "local application admission stopped"));
+    };
     auto register_supply = waiter ? &application_job_queue_t::register_request_supply
                                   : &application_job_queue_t::register_supply;
     auto registration = (_options.mesh.application_jobs.get ()->*register_supply) (
-      [weak, waiter = pending, application,
-       admitted] (std::optional<application_job_queue_t::permit_t> reserved) mutable {
+      [weak, waiter = pending, application, admitted,
+       stop_admission] (std::optional<application_job_queue_t::permit_t> reserved) mutable {
           auto waiting = std::move (waiter);
-          if (!reserved) {
-              if (admitted)
-                  admitted->complete (
-                    result_t<void>::failure (framework_error_kind_t::unavailable,
-                                             "application queue stopped before admission"));
-              return;
-          }
           auto host = weak.lock ();
-          if (!host) {
-              if (admitted)
-                  admitted->complete (
-                    result_t<void>::failure (framework_error_kind_t::unavailable,
-                                             "application owner closed before admission"));
+          if (!reserved || !host) {
+              stop_admission (admitted);
               return;
           }
           application->application_permit = std::move (*reserved);
-          auto publish = [weak, waiting, application, admitted] () mutable {
+          auto publish = [weak, waiting, application = std::move (application), admitted,
+                          stop_admission] () mutable {
               auto host = weak.lock ();
               if (!host || !host->_transport->started ()) {
-                  if (admitted)
-                      admitted->complete (
-                        result_t<void>::failure (framework_error_kind_t::unavailable,
-                                                 "application owner closed before admission"));
+                  application.reset ();
+                  stop_admission (admitted);
                   return;
               }
               auto &dispatch = *application;
@@ -2238,17 +2233,31 @@ void public_host_runtime_t::admit_local_application (
               dispatch.application_permit.mark_queued ();
               mesh::service_mailbox_application_t original;
               original.emplace (std::move (application));
-              host->publish_local_application (std::move (original));
+              try {
+                  host->publish_local_application (std::move (original));
+              }
+              catch (...) {
+                  if (!admitted)
+                      throw;
+                  admitted->complete (detail::current_exception_result<void> ());
+                  return;
+              }
               host->_transport->signal_activity ();
               if (admitted)
                   admitted->complete (result_t<void>::success ());
           };
-          if (host->_local_dispatch_completion_lane.is_on_lane ())
+          if (host->_local_dispatch_completion_lane.is_on_lane ()) {
               publish ();
-          else if (!host->_local_dispatch_completion_lane.try_post (std::move (publish))
-                   && admitted)
-              admitted->complete (result_t<void>::failure (framework_error_kind_t::unavailable,
-                                                           "application admission lane closed"));
+              return;
+          }
+          std::function<void (std::exception_ptr)> abandon;
+          if (admitted)
+              abandon = [admitted, stop_admission] (std::exception_ptr) {
+                  stop_admission (admitted);
+              };
+          if (!host->_local_dispatch_completion_lane.try_post (std::move (publish),
+                                                               std::move (abandon)))
+              stop_admission (admitted);
       },
       application_job_queue_t::origin_t::local);
     *pending = std::move (registration.waiter);

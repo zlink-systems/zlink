@@ -197,6 +197,21 @@ task_t<zlink::submit_result_t> local_enqueue_result (zlink::submit_result_t resu
     return task_t<zlink::submit_result_t> (result_t<zlink::submit_result_t>::success (result));
 }
 
+template <typename Admit>
+task_t<zlink::submit_result_t> submit_local_application (bool wait_for_publication, Admit admit)
+{
+    auto admitted = wait_for_publication ? detail::make_task_completion_source<void> () : nullptr;
+    admit (admitted);
+    if (!admitted)
+        return local_enqueue_result (zlink::submit_result_t::ok);
+    auto publication = admitted->task ();
+    if (!publication.await_ready ())
+        publication = detail::with_task_resume_scheduler (
+          std::move (publication), detail::capture_native_continuation_scheduler ());
+    return continue_task<zlink::submit_result_t> (
+      std::move (publication), [] { return local_enqueue_result (zlink::submit_result_t::ok); });
+}
+
 struct route_owner_fence_read_t
 {
     host::route_fence_t fence;
@@ -1374,11 +1389,14 @@ task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_messag
                                   if (operation)
                                       record.reply_route_id = operation->id.low;
                               }
-                              admit_local_application (
-                                local_application_dispatch_t{std::move (owner), std::move (record),
-                                                             parts},
-                                waiter);
-                              return zlink::submit_result_t::ok;
+                              return submit_local_application (
+                                !operation && _options.mesh.application_jobs,
+                                [&] (const auto &admitted) {
+                                    admit_local_application (
+                                      local_application_dispatch_t{std::move (owner),
+                                                                   std::move (record), parts},
+                                      waiter, admitted);
+                                });
                           });
                     });
               });
@@ -1454,10 +1472,15 @@ public_host_runtime_t::enqueue_local_spot_send (const protocol::spot_route_fence
                                 record.source_node_rid = std::move (source_node_rid);
                                 record.spot_route = std::move (target);
                                 record.operation_id = operation_id;
-                                admit_local_application (local_application_dispatch_t{
-                                  std::move (owner), std::move (record), parts,
-                                  std::move (source_spot_id)});
-                                return zlink::submit_result_t::ok;
+                                return submit_local_application (
+                                  static_cast<bool> (_options.mesh.application_jobs),
+                                  [&] (const auto &admitted) {
+                                      admit_local_application (
+                                        local_application_dispatch_t{std::move (owner),
+                                                                     std::move (record), parts,
+                                                                     std::move (source_spot_id)},
+                                        {}, admitted);
+                                  });
                             });
                       });
                 });
