@@ -108,10 +108,14 @@ func (r *Received) FirstPart() (*Message, error) {
 	if r == nil {
 		return nil, newRecvError(RecvInvalidHandle, int(C.EFAULT))
 	}
-	if len(r.parts) == 0 {
-		return nil, newRecvError(RecvNotSupported, int(C.EINVAL))
+	return firstMessagePart(r.parts)
+}
+
+func firstMessagePart(parts []*Message) (*Message, error) {
+	if len(parts) == 0 {
+		return nil, newRecvError(RecvInvalidState, int(C.EINVAL))
 	}
-	return r.parts[0], nil
+	return parts[0], nil
 }
 
 func (r *Received) SinglePartOrError() (*Message, error) {

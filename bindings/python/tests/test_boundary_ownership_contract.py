@@ -174,7 +174,7 @@ class OwnershipContractTests(unittest.TestCase):
                     if failures:
                         raise failures[0]
 
-    def test_concurrent_whole_message_send_preserves_public_parts(self):
+    def test_concurrent_whole_message_send_consumes_public_parts(self):
         endpoint = f"inproc://python-concurrent-multipart-{uuid.uuid4()}"
         with zlink.create_context() as context:
             with zlink.create_pair_socket(context) as sender:
@@ -204,12 +204,8 @@ class OwnershipContractTests(unittest.TestCase):
                                 )
                                 try:
                                     sender.send().messages(first, second).submit_sync()
-                                    self.assertEqual(
-                                        first.to_bytes(), (prefix + "-a").encode()
-                                    )
-                                    self.assertEqual(
-                                        second.to_bytes(), (prefix + "-b").encode()
-                                    )
+                                    self.assertEqual(first.to_bytes(), b"")
+                                    self.assertEqual(second.to_bytes(), b"")
                                     local_successes.add(prefix)
                                 finally:
                                     first.close()
