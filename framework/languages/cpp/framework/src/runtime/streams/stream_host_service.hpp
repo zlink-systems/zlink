@@ -27,6 +27,7 @@
 
 namespace zlink::framework::detail
 {
+struct app_test_access_t;
 class monitoring_runtime_state_t;
 class mesh_node_runtime_t;
 class delay_owner_t;
@@ -37,6 +38,10 @@ namespace zlink::framework::runtime
 
 struct stream_host_service_test_access_t;
 class stream_host_ingress_t;
+namespace admission_queue
+{
+class queue_node_t;
+}
 class host_capacity_runtime_t;
 namespace host
 {
@@ -100,6 +105,7 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     {
         _monitoring = std::move (monitoring);
     }
+    void bind_admission_queue (std::shared_ptr<admission_queue::queue_node_t> queue);
     void bind_delay_owner (detail::delay_owner_t &owner) noexcept { _delay_owner = &owner; }
 
     /* graceful-drain-handoff §7: sends session-closing(reason) to every
@@ -121,9 +127,16 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     }
 
   private:
+    friend struct detail::app_test_access_t;
     friend struct stream_host_service_test_access_t;
     class listener_t;
     using listeners_t = std::vector<std::shared_ptr<listener_t>>;
+
+    static task_t<void> report_admission (std::weak_ptr<stream_host_ingress_t> ingress,
+                                          std::shared_ptr<std::atomic_bool> stop,
+                                          detail::delay_owner_t &delays,
+                                          std::stop_token cancellation,
+                                          std::vector<std::weak_ptr<listener_t>> listeners);
 
     enum class admission_t
     {
@@ -159,6 +172,9 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     std::atomic<admission_t> _admission{admission_t::inactive};
     // Existing sessions keep using the transport during graceful drain.
     std::atomic_bool _transport_stop{false};
+    // Outlives the host for the detached admission report loop (#4546).
+    std::shared_ptr<std::atomic_bool> _admission_report_stop =
+      std::make_shared<std::atomic_bool> (false);
     boost::asio::io_context _liveness_io;
     std::mutex _listeners_mutex;
     listeners_t _listeners;

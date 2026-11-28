@@ -19,18 +19,12 @@ CONFIGURE_ARGS=(
   -DZLINK_CPP_CORE_PACKAGE_PREFIX=
   -DZLINK_CPP_USE_CORE_BUILD_RUNTIME=ON
   -DZLINK_CPP_BUILD_TESTS=ON
-  -DZLINK_CPP_BUILD_SAMPLES=OFF
-  -DZLINK_CPP_BUILD_BENCHMARKS=OFF
+  -DZLINK_CPP_BUILD_SAMPLES=ON
+  -DZLINK_CPP_BUILD_BENCHMARKS=ON
 )
 
 if [[ $# -gt 0 ]]; then
   CONFIGURE_ARGS+=("$@")
-fi
-
-if [[ -f "${BUILD_DIR}/CMakeCache.txt" ]] && \
-    ! grep -q '^ZLINK_CPP_BUILD_TESTS:BOOL=ON$' "${BUILD_DIR}/CMakeCache.txt"; then
-  echo "[cpp-tests] reset stale non-test build: ${BUILD_DIR}"
-  rm -rf "${BUILD_DIR}"
 fi
 
 echo "[cpp-tests] configure: ${BUILD_DIR}"
@@ -41,7 +35,8 @@ cmake --build "${BUILD_DIR}" --parallel "${ZLINK_BUILD_JOBS:-$(nproc)}"
 
 echo "[cpp-tests] run contract tests"
 if ctest --test-dir "${BUILD_DIR}" --output-on-failure -L contract && \
-    "${CPP_DIR}/samples/run_samples.sh"; then
+    bash "${SCRIPT_DIR}/run_perf_tests.sh" "${BUILD_DIR}" && \
+    ctest --test-dir "${BUILD_DIR}" --output-on-failure -L sample-smoke; then
   echo "[cpp-tests] PASS"
 else
   echo "[cpp-tests] FAIL"

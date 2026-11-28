@@ -24,9 +24,15 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
@@ -408,27 +414,53 @@ final class ZLinkCommittedActorLocalIngressTest {
                                                     .map(CompletionStage::toCompletableFuture)
                                                     .toArray(CompletableFuture[]::new)));
             if (conflict) {
-                BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> abortCommit =
-                        (repository, arguments) -> {
-                            observedRaw.complete(targetNode.actorLookup(ACTOR));
-                            return repository
-                                    .abortAggregate(
-                                            (ZLinkAggregateFence) arguments[0],
-                                            (systems.zlink.framework.runtime.internal.locations
-                                                            .ZLinkStoreCancellation)
-                                                    arguments[1])
-                                    .thenApply(
-                                            ignored ->
-                                                    systems.zlink.framework.runtime.internal
-                                                            .locations.ZLinkAggregateCommitResult
-                                                            .STALE);
-                        };
-                interceptCommit(node(source), abortCommit);
+                BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>>
+                        commitAfterSourcePreserve =
+                                (repository, arguments) -> {
+                                    observedRaw.complete(targetNode.actorLookup(ACTOR));
+                                    var fence = (ZLinkAggregateFence) arguments[0];
+                                    var cancellation = (ZLinkStoreCancellation) arguments[1];
+                                    String key = ZLinkAuthorityKeyCodec.actor(ACTOR);
+                                    // Inject the source winning the authority CAS before target
+                                    // commit.
+                                    return repository
+                                            .read(key, cancellation)
+                                            .thenCompose(
+                                                    read -> {
+                                                        var current =
+                                                                assertInstanceOf(
+                                                                        ZLinkAuthoritySnapshot
+                                                                                .class,
+                                                                        read);
+                                                        assertEquals(
+                                                                fence.aggregateId(),
+                                                                current.relocation()
+                                                                        .relocationId());
+                                                        return repository.compareExchange(
+                                                                key,
+                                                                new ZLinkAuthorityExpectFound(
+                                                                        current.storeVersion()),
+                                                                ZLinkAuthorityPut.relocation(
+                                                                        current.payload(),
+                                                                        current.relocation()
+                                                                                .phase("aborted")),
+                                                                cancellation);
+                                                    })
+                                            .thenCompose(
+                                                    written -> {
+                                                        assertInstanceOf(
+                                                                ZLinkAuthorityStored.class,
+                                                                written);
+                                                        return repository.commitAggregate(
+                                                                fence, cancellation);
+                                                    });
+                                };
+                interceptCommit(node(source), commitAfterSourcePreserve);
                 interceptCommit(
                         targetNode,
                         (repository, arguments) -> {
                             observeTargetCleanup.run();
-                            return abortCommit.apply(repository, arguments);
+                            return commitAfterSourcePreserve.apply(repository, arguments);
                         });
             } else {
                 targetFactory =

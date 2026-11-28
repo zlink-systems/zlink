@@ -1,3 +1,4 @@
+import queue
 import sys
 import time
 from contextlib import ExitStack
@@ -5,15 +6,13 @@ from contextlib import ExitStack
 import zlink
 
 from perf_multi_common import (
-    STOP_TOKEN,
+    HEADER_SIZE,
     TOPIC,
     apply_multi_socket_options,
-    active_message_latency_ns,
     benchmark_run_id,
     configure_multi_tls_client,
     LatencySampler,
     parse_client_args,
-    PERF_MULTI_AUX_POLL_WAIT_MS,
     perf_client_context,
     resolve_multi_monitor_hwm_bytes,
     print_result_lines,
@@ -26,6 +25,12 @@ from perf_multi_common import (
     wait_monitor_event,
 )
 
+from perf_metrics import interpolated_percentile
+from perf_multi_measurement import (
+    CatchUp, MAX_BURST_PER_SENDER, NS_PER_SECOND, PHASE_ACTIVE, PHASE_LATENCY,
+    PHASE_WARMUP, Schedule, active_receive, latency_duration, metric_header, phase_commands,
+)
+
 
 def main(argv=None):
     args = parse_client_args(
@@ -33,7 +38,7 @@ def main(argv=None):
     )
     run_id = benchmark_run_id()
     latency_sampler = LatencySampler()
-    count = 0
+    reference = LatencySampler()
 
     with perf_client_context() as ctx:
         sockets = [zlink.create_sub_socket(ctx) for _ in range(args.clients)]
@@ -65,88 +70,145 @@ def main(argv=None):
                     break
                 raise SystemExit(f"unexpected command: {command}")
 
-            active_deadline = time.perf_counter() + args.duration
+            ctx.recalculate_auto_hwm()
+            commands = phase_commands()
+            active = [0] * len(sockets)
+            paced = [0] * len(sockets)
+            samples = [0] * len(sockets)
+            tracker = CatchUp()
+            epoch = None
+            caught_up = False
+            duration = latency_duration(args.duration)
+            inflight_floor = None
+            next_progress = 0
             recv_storage = [zlink.create_topic_message() for _ in sockets]
+
             with zlink.create_poller() as poller:
-                poll_events = zlink.create_poll_events(max(1, len(sockets)))
+                events = zlink.create_poll_events(len(sockets))
                 for index, sock in enumerate(sockets):
                     poller.add_socket(sock, zlink.PollEventFlag.POLLIN, index)
-                phase_done = False
-                while not phase_done:
-                    now = time.perf_counter()
-                    if now >= active_deadline:
-                        break
-                    remaining_ms = max(1, int((active_deadline - now) * 1000))
-                    ready_count = safe_poll(
-                        poller,
-                        poll_events,
-                        min(PERF_MULTI_AUX_POLL_WAIT_MS, remaining_ms),
-                    )
-                    if not ready_count:
-                        continue
-                    for offset in range(ready_count):
-                        index = poll_events.slot(offset)
-                        if index < 0 or index >= len(sockets):
-                            continue
-                        current_sock = sockets[index]
-                        while True:
-                            if time.perf_counter() >= active_deadline:
-                                phase_done = True
-                                break
-                            received = recv_nonblocking(
-                                current_sock,
-                                method="subscribe",
-                                storage=recv_storage[index],
-                            )
-                            if received is None:
-                                break
-                            with received:
-                                parts = received.parts
-                                if not parts:
-                                    continue
-                                if len(parts) == 1 and parts[0].data == STOP_TOKEN:
-                                    phase_done = True
-                                    break
-                                if len(parts) != measurement_part_count() or (
-                                    len(parts) == 2 and len(parts[1].data) != 0
-                                ):
-                                    raise RuntimeError("invalid measured multipart pubsub payload")
-                                data = parts[0].data
-                                active, latency = active_message_latency_ns(
-                                    data,
-                                    expected_msg_size=args.msg_size,
-                                    run_id=run_id,
-                                    active_deadline_ns=int(active_deadline * 1_000_000_000),
-                                )
-                                if not active:
-                                    continue
-                                count += 1
-                                if latency is not None:
-                                    latency_sampler.add(latency)
-                        if phase_done:
-                            break
 
-            if count <= 0:
-                raise RuntimeError(
-                    "multi pubsub benchmark did not receive any active message"
-                )
-            if latency_sampler.count == 0:
-                raise RuntimeError(
-                    "multi pubsub benchmark received active messages without latency samples"
-                )
+                def receive_phase(phase, seconds, schedule=None):
+                    nonlocal epoch, caught_up, inflight_floor, next_progress
+                    deadline = time.monotonic_ns() + int(seconds * NS_PER_SECOND)
+                    drain_end = deadline + 10 * NS_PER_SECOND
+                    last_payload = time.monotonic()
+                    done_at = None
+                    done_line = f"PHASE_DONE,{args.msg_size},{phase}"
+                    stopped = set()
+                    while time.monotonic_ns() < drain_end:
+                        try:
+                            command, when = commands.get_nowait()
+                            if command == done_line:
+                                done_at = when
+                        except queue.Empty:
+                            pass
+                        if done_at is not None and (
+                            len(stopped) == len(sockets)
+                            or time.monotonic() - max(last_payload, done_at) >= 0.05
+                        ):
+                            return
+                        ready = safe_poll(poller, events, 10)
+                        for offset in range(ready):
+                            index = events.slot(offset)
+                            if index >= len(sockets) or not events.revents(offset) & int(zlink.PollEventFlag.POLLIN):
+                                continue
+                            for _ in range(MAX_BURST_PER_SENDER):
+                                received = recv_nonblocking(
+                                    sockets[index], method="subscribe", storage=recv_storage[index]
+                                )
+                                if received is None:
+                                    break
+                                observed = time.monotonic_ns()
+                                last_payload = observed / NS_PER_SECOND
+                                with received:
+                                    parts = received.parts
+                                    if len(parts) != measurement_part_count() or (
+                                        len(parts) == 2 and len(parts[1].data) != 0
+                                    ):
+                                        raise RuntimeError("invalid measured multipart pubsub payload")
+                                    data = parts[0].data
+                                    wire_size = len(data)
+                                    header = metric_header(
+                                        data, args.msg_size, run_id, marker=wire_size == HEADER_SIZE
+                                    )
+                                if header is None:
+                                    continue
+                                if header["seq"] == 0 and header["sent_ts_ns"] == 0:
+                                    if header["phase"] == phase:
+                                        stopped.add(index)
+                                    continue
+                                if wire_size != args.msg_size:
+                                    continue
+                                if schedule is None:
+                                    if header["phase"] == PHASE_ACTIVE and active_receive(observed, deadline):
+                                        active[index] += 1
+                                    continue
+                                if header["phase"] not in (PHASE_WARMUP, PHASE_LATENCY):
+                                    continue
+                                sent = header["sent_ts_ns"]
+                                paced[index] += 1
+                                if not 0 < sent <= observed:
+                                    continue
+                                if epoch is None:
+                                    epoch = sent
+                                if not caught_up:
+                                    reference.add(observed - sent)
+                                elif header["phase"] == PHASE_LATENCY:
+                                    samples[index] += 1
+                                    latency_sampler.add(observed - sent)
+
+                        if schedule is not None and epoch is not None and not caught_up:
+                            elapsed = (time.monotonic_ns() - epoch) / NS_PER_SECOND
+                            scheduled = schedule.scheduled(elapsed)
+                            caught_up = elapsed <= duration and tracker.observe(
+                                elapsed, paced, scheduled, schedule.rate
+                            )
+                            if elapsed >= next_progress:
+                                floor = max(0, scheduled - min(paced))
+                                inflight_floor = floor if inflight_floor is None else min(inflight_floor, floor)
+                                print(f"PUBSUB_CATCHUP_PROGRESS,{args.msg_size},{elapsed:.6g},{floor},{min(paced)},{scheduled},{schedule.rate:.6g}", flush=True)
+                                next_progress = elapsed + 1
+                            if caught_up:
+                                print(f"PHASE_CATCHUP,{args.msg_size}", flush=True)
+                                print(
+                                    f"PUBSUB_CATCHUP_DIAG,{args.msg_size},{elapsed:.6g},{tracker.in_flight}"
+                                    f",window_start_in_flight,{tracker.start_in_flight}", flush=True,
+                                )
+                    raise TimeoutError("multi pubsub receive drain timed out")
+
+                receive_phase(PHASE_ACTIVE, args.duration)
+                minimum = min(active)
+                if minimum == 0:
+                    raise RuntimeError("multi pubsub subscriber received no active messages")
+                print(f"PHASE_DRAINED,{args.msg_size},{minimum}", flush=True)
+                schedule = Schedule(0, minimum, args.duration)
+                receive_phase(PHASE_LATENCY, 2 * duration, schedule)
+
+            print(f"PHASE_COMPLETE,{args.msg_size},{min(samples)}", flush=True)
             metrics = result_metrics(
-                count=count,
-                msg_size=args.msg_size,
-                elapsed_s=args.duration,
+                count=sum(active), msg_size=args.msg_size, elapsed_s=args.duration,
                 latency_sampler=latency_sampler,
             )
-            if sockets:
-                print_multi_auto_hwm_detail(
-                    sockets[0], "endpoint", args.transport, args.msg_size, "sub"
-                )
+            if latency_sampler.count:
+                p50 = interpolated_percentile(latency_sampler.samples, 0.5) / 1e6
+                print(f"PUBSUB_LATENCY_DIAG,{args.msg_size},latency_p50_ms,{p50:.6f}", flush=True)
+            else:
+                for name in ("latency", "latency_p95", "latency_p99"):
+                    metrics[name] = "invalid:receiver_not_caught_up_by_deadline"
+                key = f"REFERENCE,current,PUBSUB,{args.transport},{args.msg_size}"
+                floor = inflight_floor or 0
+                print(f"{key},inflight_floor,{floor}", flush=True)
+                for name, value in (
+                    ("latency_ref_p50", interpolated_percentile(reference.samples, 0.5) / 1e6),
+                    ("latency_ref_p99", interpolated_percentile(reference.samples, 0.99) / 1e6),
+                    ("inflight_floor_ms", floor / schedule.rate * 1000),
+                ):
+                    print(f"{key},{name},{value:.6f}", flush=True)
+            print_multi_auto_hwm_detail(
+                sockets[0], "endpoint", args.transport, args.msg_size, "sub"
+            )
             print_result_lines("PUBSUB", args.transport, args.msg_size, metrics)
-            # PERF_POLICY.md:469-471 / D-2 - the C PUBSUB client emits
-            # CLIENT_DONE (bindings/c/perf/multi/src/perf_multi_pubsub_client.cpp:367).
             print(f"CLIENT_DONE,{args.msg_size}", flush=True)
         finally:
             for sock in sockets:

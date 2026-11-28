@@ -40,7 +40,9 @@ internal sealed class Program
         var builder = Host.CreateApplicationBuilder(args);
         builder.Logging.ClearProviders();
 
-        TestHostScenarioConfigurator.Configure(builder.Services, options);
+        using var events = new TestHostEventSink(options.EventFilePath);
+        builder.Services.AddSingleton(events);
+        TestHostScenarioConfigurator.Configure(builder.Services, options, events);
         builder.Services.AddHostedService(provider => new ReadySignalHostedService(
             provider.GetRequiredService<IHostApplicationLifetime>(),
             readyFilePath,
@@ -50,6 +52,7 @@ internal sealed class Program
         ));
 
         using var host = builder.Build();
+        _ = host.Services.GetService<TestHostMessageFlowListener>();
         await host.RunAsync();
     }
 }
@@ -493,15 +496,11 @@ internal sealed class UserSpotTargetHostedService(
     string meshName,
     string sourceNodeRid,
     int placementWeight,
-    SealedJoinObservation? sealedJoin,
-    TestHostMessageFlowListener? flow
+    SealedJoinObservation? sealedJoin
 ) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        // The flow listener is a lazily built singleton; taking it here makes
-        // it start listening before the first Join, and keeps it alive.
-        GC.KeepAlive(flow);
         var serving = false;
         await foreach (var observed in runtime.ObserveAsync(cancellationToken))
         {
@@ -900,26 +899,6 @@ internal sealed class EntryRelocationTargetHostedService(
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-}
-
-internal sealed class TestHostEventSink(string? path)
-{
-    private readonly object _gate = new();
-
-    public void Append(string value)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-            return;
-
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-
-        lock (_gate)
-        {
-            File.AppendAllText(path, value + Environment.NewLine);
-        }
-    }
 }
 
 internal sealed record TestHostProfileRequest(string Value);

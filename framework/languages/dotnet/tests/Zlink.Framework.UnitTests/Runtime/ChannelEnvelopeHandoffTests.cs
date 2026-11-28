@@ -212,10 +212,13 @@ public sealed class ChannelEnvelopeHandoffTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData("work", "handoff-event", null)]
+    [InlineData("work", "", "ZLink envelope message name is missing.")]
+    [InlineData("", "handoff-event", "ZLink envelope channel name is missing.")]
     public async Task Fanout_dispatch_uses_the_ingress_header_or_error_after_frame_release(
-        bool malformed
+        string channelName,
+        string messageName,
+        string? expectedError
     )
     {
         var registration = new ZLinkFrameworkRegistration();
@@ -266,11 +269,10 @@ public sealed class ChannelEnvelopeHandoffTests
         subscriber.Connect(endpoint);
         subscriber.SetSubscription("events");
         Assert.True(publisher.ReceiveSubscriptionEvent(new SubscriptionEvent()));
-        var messageName = malformed ? "" : "handoff-event";
         using var headerFrame = ZLinkEnvelopeCodec.EncodeHeader(
             new ZLinkEnvelopeHeader(
                 ZLinkMessageKind.Publish,
-                "work",
+                channelName,
                 messageName,
                 "application/json",
                 null,
@@ -285,7 +287,7 @@ public sealed class ChannelEnvelopeHandoffTests
         using var received = new TopicMessage();
         Assert.True(subscriber.Subscribe(received));
         var envelope = dispatcher.ReadHeader(received.Parts);
-        Assert.Equal(malformed, envelope.Error is not null);
+        Assert.Equal(expectedError, envelope.Error?.Message);
         received.Parts[0].Dispose();
         await dispatcher.DispatchEventMessageAsync(
             "work",
@@ -294,8 +296,11 @@ public sealed class ChannelEnvelopeHandoffTests
             envelope
         );
         global::Zlink.Framework.UnitTests.MessageFlowDeliveryTests.WaitForDelivery();
-        Assert.True(probe.Calls == (malformed ? 0 : 1), string.Join("; ", logger.Messages));
-        if (malformed)
+        Assert.True(
+            probe.Calls == (expectedError is null ? 1 : 0),
+            string.Join("; ", logger.Messages)
+        );
+        if (expectedError is not null)
             Assert.Single(logger.Messages);
         else
         {

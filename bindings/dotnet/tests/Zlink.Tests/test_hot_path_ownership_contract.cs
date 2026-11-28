@@ -24,7 +24,7 @@ public sealed class test_hot_path_ownership_contract
         for (var i = 1; i < count; i++)
             operation.Message(source);
         await operation.Async().Admitted;
-        Assert.Throws<ObjectDisposedException>(() => source.GetString());
+        Assert.Empty(source.GetString());
         using Received received = Received.Create();
         Assert.True(receiver.Recv(received));
         Assert.Equal(count, received.Parts.Count);
@@ -52,7 +52,8 @@ public sealed class test_hot_path_ownership_contract
         for (var i = 1; i < count - 1; i++)
             operation.Message(source);
         operation.Message(invalid);
-        Assert.Throws<ObjectDisposedException>(() => operation.Async());
+        var error = Assert.Throws<ZlinkSubmitException>(() => operation.Async());
+        Assert.Equal(ZlinkSubmitException.ErrorCode.InvalidHandle, error.Result);
         Assert.Equal("prefix", source.GetString());
         sender.Send().Message(source).Submit();
         using Received received = Received.Create();
@@ -110,7 +111,7 @@ public sealed class test_hot_path_ownership_contract
         for (var i = 1; i < count; i++)
             operation.Message(source);
         operation.Submit();
-        Assert.Throws<ObjectDisposedException>(() => source.GetString());
+        Assert.Empty(source.GetString());
         var reply = await pending.WaitAsync(TimeSpan.FromSeconds(2));
         try
         {
@@ -159,7 +160,8 @@ public sealed class test_hot_path_ownership_contract
         for (var i = 1; i < count - 1; i++)
             operation.Message(source);
         operation.Message(invalid);
-        Assert.Throws<ObjectDisposedException>(() => operation.Submit());
+        var error = Assert.Throws<ZlinkSubmitException>(() => operation.Submit());
+        Assert.Equal(ZlinkSubmitException.ErrorCode.InvalidHandle, error.Result);
         Assert.Equal("prefix", source.GetString());
         received.Reply().Message(source).Submit();
         var reply = await pending.WaitAsync(TimeSpan.FromSeconds(2));

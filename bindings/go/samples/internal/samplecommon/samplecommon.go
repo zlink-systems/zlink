@@ -80,24 +80,18 @@ func FrameStreamPacketMessage(header, body *zlink.Message) *zlink.Message {
 	return msg
 }
 
-func OpenMonitor(socket zlink.SocketTarget) *zlink.SocketMonitor {
-	mon, err := zlink.OpenSocketMonitor(socket, zlink.MonitorEventConnectionReady)
-	Must(err)
-	return mon
-}
-
 func WaitConnected(serverMon, clientMon *zlink.SocketMonitor) {
 	waitConnectedMonitor(serverMon)
 	waitConnectedMonitor(clientMon)
 }
 
 func waitConnectedMonitor(mon *zlink.SocketMonitor) {
-	if !WaitMonitorEvent(mon).IsConnectionReady() {
+	if !waitMonitorEvent(mon).IsConnectionReady() {
 		Must(fmt.Errorf("expected CONNECTION_READY"))
 	}
 }
 
-func WaitMonitorEvent(mon *zlink.SocketMonitor) *zlink.MonitorEvent {
+func waitMonitorEvent(mon *zlink.SocketMonitor) *zlink.MonitorEvent {
 	poller, err := zlink.NewPoller()
 	Must(err)
 	defer poller.Close()

@@ -17,7 +17,8 @@ internal sealed class ZLinkStreamSessionTable(
     bool actorDispatchEnabled,
     IZLinkRuntimeFailureReporter errorSink,
     ZLinkStreamNodeRegistration? livenessOptions = null,
-    ZLinkStreamSessionLiveness.Reader? readerLiveness = null
+    ZLinkStreamSessionLiveness.Reader? readerLiveness = null,
+    ZLinkAdmissionQueueNode? admissionQueue = null
 )
 {
     private const int RejectedCreationLimit = 4096;
@@ -127,7 +128,8 @@ internal sealed class ZLinkStreamSessionTable(
                     requireConnectionReady: true,
                     livenessOptions: livenessOptions,
                     readerLiveness: readerLiveness,
-                    markLivenessDue: readerLiveness is null ? null : MarkLivenessDue
+                    markLivenessDue: readerLiveness is null ? null : MarkLivenessDue,
+                    admissionQueue: admissionQueue
                 )
                 .ConfigureAwait(false);
         }
@@ -330,12 +332,7 @@ internal sealed class ZLinkStreamSessionTable(
     private void Remove(string sessionId)
     {
         var routingId = RoutingId.FromHex(sessionId);
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                _sessions.Remove(routingId);
-            })
-        );
+        AwaitStateLane(_lane.RunAsync(() => _sessions.Remove(routingId)));
     }
 
     private ZLinkStreamSessionRuntime[] StopCore()

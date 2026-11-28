@@ -52,79 +52,52 @@ inline bool submit_raw_send_state (operation_state_t &state_,
     if (state_.kind == operation_kind_t::raw_publish && state_.raw.topic.empty ())
         throw_invalid_argument ();
 
-    if (state_.message.single_part.has_value () || state_.message.single_part_source) {
-        message_t &part = send_single_part (state_);
-        const int direct_rc = zlink::detail::submit_borrowed_message_part (
-          part, [&] (zlink_msg_t *parts_, size_t part_count_) {
-              switch (state_.kind) {
-                  case operation_kind_t::raw_send:
-                      return zlink_send (
-                        call->handle (), parts_, part_count_,
-                        static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
-                        user_context_, completion_id_out_);
-                  case operation_kind_t::raw_routed_send:
-                      return zlink_send_rid (
-                        call->handle (), first_rid, parts_, part_count_,
-                        static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
-                        user_context_, completion_id_out_);
-                  case operation_kind_t::raw_publish:
-                      return zlink_publish (
-                        call->handle (), state_.raw.topic.c_str (), parts_, part_count_,
-                        static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)));
-                  default:
-                      return ZLINK_SUBMIT_INVALID_ARGUMENT;
-              }
-          });
-
-        const int submit_errno = zlink_errno ();
-        const submit_result_t rc = static_cast<submit_result_t> (direct_rc);
-        if (rc == submit_result_t::ok)
-            return true;
-        if (restore_sources_on_failure_)
-            restore_single_send_part_to_source (state_);
-        if (state_.flags == send_flags_t::dontwait && rc == submit_result_t::backpressured) {
-            return false;
+    const auto submit_record = [&] (zlink_msg_t *parts_, size_t part_count_) {
+        const auto flags =
+          static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags));
+        switch (state_.kind) {
+            case operation_kind_t::raw_send:
+                return zlink_send (call->handle (), parts_, part_count_, flags,
+                                   user_context_, completion_id_out_);
+            case operation_kind_t::raw_routed_send:
+                return zlink_send_rid (call->handle (), first_rid, parts_, part_count_, flags,
+                                       user_context_, completion_id_out_);
+            case operation_kind_t::raw_publish:
+                return zlink_publish (call->handle (), state_.raw.topic.c_str (),
+                                      parts_, part_count_, flags);
+            default:
+                return ZLINK_SUBMIT_INVALID_ARGUMENT;
         }
-        throw submit_error_t (rc, submit_errno);
-    }
+    };
 
-    // Multipart record staging, ownership recovery, and pooled capacity belong
-    // to one operation state. Moving this vector into a call-local temporary
-    // makes the terminal destroy its capacity after every record, even though
-    // the state pool is intended to retain it for the next builder chain.
-    std::vector<message_t> &parts = state_.message.parts;
-    const int raw_rc = zlink::detail::submit_message_parts (
-      parts, [&] (zlink_msg_t *native_parts_, size_t part_count_) {
-          switch (state_.kind) {
-              case operation_kind_t::raw_send:
-                  return zlink_send (
-                    call->handle (), native_parts_, part_count_,
-                    static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
-                    user_context_, completion_id_out_);
-              case operation_kind_t::raw_routed_send:
-                  return zlink_send_rid (
-                    call->handle (), first_rid, native_parts_, part_count_,
-                    static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)),
-                    user_context_, completion_id_out_);
-              case operation_kind_t::raw_publish:
-                  return zlink_publish (
-                    call->handle (), state_.raw.topic.c_str (), native_parts_, part_count_,
-                    static_cast<zlink_send_flags_t> (static_cast<int> (state_.flags)));
-              default:
-                  return ZLINK_SUBMIT_INVALID_ARGUMENT;
-          }
-      });
+    // Keep multipart storage in the pooled operation state across submissions.
+    const int raw_result =
+      state_.message.single_part.has_value () || state_.message.single_part_source
+        ? submit_borrowed_message_part (send_single_part (state_), submit_record)
+        : submit_message_parts (state_.message.parts, submit_record);
     const int submit_errno = zlink_errno ();
-    const submit_result_t rc = static_cast<submit_result_t> (raw_rc);
-    if (rc != submit_result_t::ok) {
-        if (restore_sources_on_failure_)
-            restore_send_parts_to_sources (state_, parts);
-        if (state_.flags == send_flags_t::dontwait && rc == submit_result_t::backpressured) {
+    const auto result = static_cast<submit_result_t> (raw_result);
+
+    if (result == submit_result_t::ok) {
+        if (completion_id_out_ && *completion_id_out_ != 0)
+            throw submit_error_t (submit_result_t::internal_error, EPROTO);
+        return true;
+    }
+
+    if (restore_sources_on_failure_)
+        restore_async_send_sources (state_);
+    if (state_.flags == send_flags_t::dontwait && result == submit_result_t::backpressured) {
+        // DONTWAIT publish reports backpressure through its boolean terminal.
+        if (!completion_id_out_)
+            return false;
+        if (*completion_id_out_ != 0) {
+            if (submit_errno != EAGAIN)
+                throw submit_error_t (submit_result_t::internal_error, EPROTO);
             return false;
         }
-        throw submit_error_t (rc, submit_errno);
     }
-    return true;
+
+    throw submit_error_t (result, submit_errno);
 }
 
 inline bool submit_raw_request_state (

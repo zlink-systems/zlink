@@ -299,7 +299,7 @@ final class SocketSendPlane {
             return new PartAttempt(result, errno);
         } finally {
             if (!submitted && moved > 0) {
-                NativeMessage.multipartClose(nativeParts, moved);
+                restoreMovedParts(parts, nativeParts, partSize, moved);
             }
         }
     }
@@ -340,8 +340,23 @@ final class SocketSendPlane {
             return new PartAttempt(attempt.result(), attempt.errno());
         } finally {
             if (!nativeCalled[0] && moved > 0) {
-                NativeMessage.multipartClose(nativeParts, moved);
+                restoreMovedParts(parts, nativeParts, partSize, moved);
             }
+        }
+    }
+
+    private static void restoreMovedParts(List<Message> parts,
+                                          MemorySegment nativeParts,
+                                          long partSize, int moved) {
+        try {
+            for (int i = moved - 1; i >= 0; i--) {
+                Message part = parts.get(i);
+                InternalAccess.messageRestoreFromNative(part,
+                    nativeParts.asSlice(partSize * i, partSize), part.more(),
+                    null);
+            }
+        } finally {
+            NativeMessage.multipartClose(nativeParts, moved);
         }
     }
 

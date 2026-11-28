@@ -19,8 +19,24 @@ final class RuntimeTestSupport {
 
     static ZLinkFrameworkRuntime startFixedRidFramework(
             DefaultZLinkFrameworkOptions options, ZLinkBackendAdapterProvider backendFactory) {
+        return startFixedRidFramework(options, backendFactory, null);
+    }
+
+    static ZLinkFrameworkRuntime startFixedRidFramework(
+            DefaultZLinkFrameworkOptions options,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkFrameworkRuntimeTestAccess.Construction construction) {
         options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
-        ZLinkFrameworkRuntime runtime = startFramework(options, backendFactory);
+        ZLinkFrameworkRuntime runtime =
+                construction == null
+                        ? startFramework(options, backendFactory)
+                        : ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                                options,
+                                backendFactory,
+                                systems.zlink.framework.runtime.internal.handlers
+                                        .ZLinkHandlerActivator.reflection(),
+                                null,
+                                construction);
         try {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime).toCompletableFuture().join();
             if (!runtime.isReady()) {

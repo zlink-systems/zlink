@@ -2,6 +2,8 @@
 
 #include "runtime/protocol/header_codec.hpp"
 
+#include "runtime/protocol/admission_queue_codec.hpp"
+
 #include <zlink/framework/detail/utf8.hpp>
 
 #include "runtime/protocol/metadata_codec.hpp"
@@ -96,7 +98,8 @@ bool is_defined (codec_t codec)
     return false;
 }
 
-result_t<void> validate_header (const stream_header_t &header, header_flags_t flags)
+result_t<void>
+validate_header (const stream_header_t &header, header_flags_t flags, bool allow_reserved)
 {
     if (!is_defined (header.kind) || !is_defined (header.codec)
         || (static_cast<std::uint8_t> (flags) & ~known_flags) != 0) {
@@ -136,9 +139,10 @@ result_t<void> validate_header (const stream_header_t &header, header_flags_t fl
         return result_t<void>::failure (error_code_t::validation_failed,
                                         "Response and error packet names must be empty.");
     }
-    const auto name_error = is_reply ? zlink::detail::stream_wire::packet_name_error_t::none
-                                     : zlink::detail::stream_wire::validate_packet_name (
-                                         header.name, header.kind == message_kind_t::control);
+    const auto name_error =
+      is_reply ? zlink::detail::stream_wire::packet_name_error_t::none
+               : zlink::detail::stream_wire::validate_packet_name (
+                   header.name, header.kind == message_kind_t::control || allow_reserved);
     if (name_error == zlink::detail::stream_wire::packet_name_error_t::invalid) {
         return result_t<void>::failure (error_code_t::validation_failed,
                                         "Packet name length is invalid.");
@@ -157,7 +161,8 @@ result_t<void> validate_header (const stream_header_t &header, header_flags_t fl
 
 } // namespace
 
-result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_t &header) const
+result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_t &header,
+                                                            bool framework_request) const
 {
     auto flags = header.flags;
     if (header.request_seq) {
@@ -185,7 +190,11 @@ result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_
         return result_t<std::vector<std::uint8_t>>::failure (error_code_t::validation_failed,
                                                              "Correlation id is too large.");
     }
-    if (auto validation = validate_header (header, flags); !validation) {
+    if (auto validation =
+          validate_header (header, flags,
+                           framework_request && header.kind == message_kind_t::request
+                             && header.name == admission_enqueue_name);
+        !validation) {
         return result_t<std::vector<std::uint8_t>>::failure (validation.error ()->code,
                                                              validation.error ()->message);
     }
@@ -316,7 +325,10 @@ result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t
         return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
                                                    "Helper header contains trailing bytes.");
     }
-    if (auto validation = validate_header (header, header.flags); !validation) {
+    if (auto validation = validate_header (header, header.flags,
+                                           header.kind == message_kind_t::send
+                                             && admission_push_kind (header.name));
+        !validation) {
         return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
                                                    validation.error ()->message);
     }

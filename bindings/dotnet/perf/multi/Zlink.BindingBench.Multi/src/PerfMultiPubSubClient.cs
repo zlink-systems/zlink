@@ -6,16 +6,18 @@ using static PerfRunner;
 
 internal static class PerfMultiPubSubClient
 {
+    private const ulong DrainQuietNs = 50_000_000;
+
     internal static int Run(PerfOptions options)
     {
         int size = Math.Max(1, options.Size);
-        int sndTimeoutMs = ResolveMultiSndTimeoutMs(options);
         int rcvTimeoutMs = ResolveMultiRcvTimeoutMs(options);
         int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
         ulong monitorHwmBytes = ResolveMultiMonitorHwmBytes();
         int latencySampleCap = ResolveMultiLatencySampleCap(options);
         int clientCount = ResolveMultiClients(options);
         int durationSeconds = ResolveMultiDurationSeconds(options);
+        int latencyDurationSeconds = ResolveMultiLatencyDurationSeconds(options);
         string endpoint = options.Endpoint;
 
         using var ctx = Zlink.CreateContext();
@@ -50,7 +52,6 @@ internal static class PerfMultiPubSubClient
             DisposeAllQuietly(monitors);
             monitors.Clear();
 
-            for (int i = 0; i < clients.Count; i++)
             RecalculateAutoHwm(ctx);
             if (clients.Count > 0)
                 PrintAutoHwmSnapshot(clients[0], "endpoint",
@@ -66,13 +67,32 @@ internal static class PerfMultiPubSubClient
             }
 
             var result = RunMultiPubSubClientLoop(pollManager, activeClients,
-                size, latencySampleCap, durationSeconds);
-
-            if (result.measureCount <= 0 || result.latencyCount <= 0)
+                size,
+                latencySampleCap, durationSeconds, latencyDurationSeconds,
+                controlState);
+            if (result.measureCount <= 0)
                 return 2;
 
-            PrintResult(options.Pattern, options.Transport, size, result.throughput,
-                result.latencyNs, result.latencyP95Ns, result.latencyP99Ns);
+            if (result.caughtUp && result.latencyCount > 0)
+            {
+                PrintResult(options.Pattern, options.Transport, size,
+                    result.throughput, result.latencyNs,
+                    result.latencyP95Ns, result.latencyP99Ns);
+                WriteStdoutLine(FormattableString.Invariant($"PUBSUB_LATENCY_DIAG,{size},latency_p50_ms,{result.latencyP50Ns / 1_000_000.0:F6}"));
+            }
+            else
+            {
+                string prefix = $"dotnet,PUBSUB,{options.Transport},{size}";
+                WriteStdoutLine(FormattableString.Invariant($"RESULT,{prefix},throughput,{result.throughput:F3}"));
+                WriteStdoutLine(FormattableString.Invariant($"RESULT,{prefix},bandwidth,{result.throughput * size / 1_000_000.0:F3}"));
+                foreach (string metric in new[] { "latency", "latency_p95", "latency_p99" })
+                    WriteStdoutLine($"RESULT,{prefix},{metric},invalid:receiver_not_caught_up_by_deadline");
+                WriteStdoutLine(FormattableString.Invariant($"REFERENCE,{prefix},latency_ref_p50,{result.referenceP50 / 1_000_000.0:F6}"));
+                WriteStdoutLine(FormattableString.Invariant($"REFERENCE,{prefix},latency_ref_p99,{result.referenceP99 / 1_000_000.0:F6}"));
+                WriteStdoutLine($"REFERENCE,{prefix},inflight_floor,{result.inflightFloor}");
+                WriteStdoutLine(FormattableString.Invariant($"REFERENCE,{prefix},inflight_floor_ms,{(result.targetRate > 0.0 ? result.inflightFloor / result.targetRate * 1000.0 : 0.0):F6}"));
+            }
+            WriteStdoutLine($"PHASE_COMPLETE,{size},{result.pacedReceived}");
             WriteStdoutLine($"CLIENT_DONE,{size}");
             return 0;
         }
@@ -84,116 +104,258 @@ internal static class PerfMultiPubSubClient
     }
 
     private static (double throughput, double latencyNs, double latencyP95Ns,
-        double latencyP99Ns, long measureCount, long latencyCount)
+        double latencyP99Ns, long measureCount, long latencyCount,
+        long pacedReceived, bool caughtUp, double latencyP50Ns, double referenceP50,
+        double referenceP99, long inflightFloor, double targetRate)
         RunMultiPubSubClientLoop(PollManager pollManager,
-            List<ISocket> activeClients, int msgSize, int latencySampleCap,
-            int durationSeconds)
+            List<ISocket> activeClients, int msgSize,
+            int latencySampleCap, int durationSeconds,
+            int latencyDurationSeconds, RunnerControlState controlState)
     {
-        _ = pollManager;
         const uint expectedRunId = 1;
-        var activeLatSamples = new List<double>(latencySampleCap);
-        long activeSampleSeen = 0;
-        double activeSampleSum = 0.0;
+        var samples = new List<double>(latencySampleCap);
+        var referenceSamples = new List<double>(latencySampleCap);
+        long sampleSeen = 0;
+        long referenceSeen = 0;
+        double sampleSum = 0.0;
+        double referenceSum = 0.0;
         uint rng = 0xA341316Cu;
+        uint referenceRng = 0x183720AFu;
+        var activeReceived = new long[activeClients.Count];
+        var pacedReceived = new long[activeClients.Count];
+        var latencyReceived = new long[activeClients.Count];
         long measureCount = 0;
+        double targetRate = 0.0;
+        ulong pacedEpochNs = 0;
+        var catchUp = new CatchUpTracker(activeClients.Count);
+        long inflightFloor = long.MaxValue;
+        ulong nextProgressNs = 0;
+        bool phaseSucceeded = true;
+        var receiveMasks = new PollEventFlags[activeClients.Count];
+        Array.Fill(receiveMasks, PollEventFlags.PollIn);
 
-        // C perf_multi_pubsub_client.cpp run_recv_duration: active_deadline
-        // only gates whether a received sample is *recorded*; the loop ends
-        // purely on the wire stop token or a cooldown-phase header. There is
-        // no separate stop deadline / timer cap (PERF_MULTI § 1.3.1).
-        long benchDeadlineTicks = Stopwatch.GetTimestamp()
-            + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
-        var subscribedMessages = new TopicMessage[activeClients.Count];
-        for (int i = 0; i < activeClients.Count; i++)
-        {
-            subscribedMessages[i] = new TopicMessage();
-        }
-
+        var messages = new TopicMessage[activeClients.Count];
+        for (int i = 0; i < messages.Length; i++)
+            messages[i] = new TopicMessage();
         try
         {
-            bool phaseDone = false;
-            int nextClient = 0;
-            while (!phaseDone)
+            for (int phaseIndex = 0; phaseIndex < 2; phaseIndex++)
             {
-                if (Stopwatch.GetTimestamp() >= benchDeadlineTicks)
-                    break;
-
-                int i = nextClient;
-                nextClient = (nextClient + 1) % activeClients.Count;
-                TopicMessage subscribed = subscribedMessages[i];
-                if (!TrySubscribe((ISubSocket)activeClients[i], subscribed,
-                        RecvFlags.None))
-                    continue;
-
-                do
+                bool paced = phaseIndex == 1;
+                var stopped = new HashSet<int>(activeClients.Count);
+                long startTicks = Stopwatch.GetTimestamp();
+                long deadlineTicks = startTicks
+                    + (long)(paced ? 2 * latencyDurationSeconds
+                        : durationSeconds) * Stopwatch.Frequency;
+                long drainDeadlineTicks = deadlineTicks
+                    + 10 * Stopwatch.Frequency;
+                long lastPayloadTicks = startTicks;
+                string donePhase = paced ? "PHASE_DONE,3" : "PHASE_DONE,1";
+                bool drained = false;
+                while (!controlState.StopRequested
+                       && Stopwatch.GetTimestamp() < drainDeadlineTicks)
                 {
-                    if (subscribed.Parts.Count == 1
-                        && IsStopTokenPayload(subscribed.FirstPart()
-                            .AsReadOnlySpan()))
+                    long nowTicks = Stopwatch.GetTimestamp();
+                    if (controlState.TryGetPhase(donePhase, out ulong doneNs)
+                        && (stopped.Count == activeClients.Count
+                            || (nowTicks >= deadlineTicks
+                                && EpochNsFromTimestamp(nowTicks)
+                                    >= Math.Max(doneNs, EpochNsFromTimestamp(lastPayloadTicks))
+                                        + DrainQuietNs)))
                     {
-                        phaseDone = true;
+                        drained = true;
                         break;
                     }
-                    if (!PerfSocketIo.TryMeasurementPayload(subscribed.Parts,
-                            out Message payloadPart))
-                        continue;
-                    ReadOnlySpan<byte> body = payloadPart.AsReadOnlySpan();
-
-                    long recvTicks = Stopwatch.GetTimestamp();
-                    if (recvTicks >= benchDeadlineTicks)
-                        continue;
-
-                    bool headerOk = PerfRunner.TryDecodeMetricHeader(body,
-                        out PerfMetricHeader header);
-                    if (!headerOk
-                        || body.Length != Math.Max(msgSize,
-                            PerfMetricHeaderSize)
-                        || header.RunId != expectedRunId
-                        || header.MsgSize != (uint)msgSize)
+                    int ready = PollSocketEvents(pollManager, activeClients,
+                        receiveMasks, 10);
+                    for (int offset = 0; offset < ready; offset++)
                     {
-                        continue;
-                    }
-
-                    if (header.Phase == (uint)PerfPhase.Active)
-                    {
-                        measureCount++;
-                        if (header.SentTsNs > 0)
+                        int i = ReadySocketIndexAt(pollManager, offset);
+                        TopicMessage subscribed = messages[i];
+                        for (int turn = 0; turn < MaxBurstPerSender && TrySubscribe(
+                                 (ISubSocket)activeClients[i], subscribed,
+                                 RecvFlags.DontWait); turn++)
                         {
-                            AddLatencySample(activeLatSamples,
-                                ref activeSampleSeen, ref activeSampleSum,
-                                latencySampleCap, ref rng, header,
-                                EpochNsFromTimestamp(recvTicks));
+                            lastPayloadTicks = Stopwatch.GetTimestamp();
+                            if (lastPayloadTicks >= drainDeadlineTicks)
+                                break;
+                            if (!paced && lastPayloadTicks >= deadlineTicks
+                                && subscribed.FirstPart().Size != PerfMetricHeaderSize)
+                                continue;
+                            if (!PerfSocketIo.TryMeasurementPayload(
+                                    subscribed.Parts, out Message payloadPart))
+                                continue;
+                            ReadOnlySpan<byte> body = payloadPart.AsReadOnlySpan();
+                            if (!PerfRunner.TryDecodeMetricHeader(body,
+                                    out PerfMetricHeader header)
+                                || header.RunId != expectedRunId
+                                || header.MsgSize != (uint)msgSize)
+                                continue;
+                            if (body.Length == PerfMetricHeaderSize
+                                && header.Seq == 0 && header.SentTsNs == 0
+                                && header.Phase == (uint)(paced
+                                    ? PerfPhase.Latency : PerfPhase.Active))
+                            {
+                                stopped.Add(i);
+                                continue;
+                            }
+                            if (body.Length != Math.Max(msgSize,
+                                    PerfMetricHeaderSize))
+                                continue;
+                            if (!paced && header.Phase == (uint)PerfPhase.Active
+                                && lastPayloadTicks < deadlineTicks)
+                            {
+                                activeReceived[i]++;
+                                measureCount++;
+                            }
+                            if (!paced || (header.Phase != (uint)PerfPhase.Warmup
+                                             && header.Phase != (uint)PerfPhase.Latency))
+                                continue;
+                            pacedReceived[i]++;
+                            if (pacedEpochNs == 0 && header.SentTsNs > 0)
+                                pacedEpochNs = header.SentTsNs;
+                            ulong nowNs = EpochNsFromTimestamp(lastPayloadTicks);
+                            AddLatencySample(referenceSamples,
+                                ref referenceSeen, ref referenceSum,
+                                latencySampleCap, ref referenceRng, header, nowNs);
+                            if (catchUp.CaughtUp && header.Phase == (uint)PerfPhase.Latency
+                                && header.SentTsNs > 0
+                                && nowNs >= header.SentTsNs)
+                            {
+                                latencyReceived[i]++;
+                                AddLatencySample(samples, ref sampleSeen,
+                                    ref sampleSum, latencySampleCap,
+                                    ref rng, header, nowNs);
+                            }
                         }
                     }
-                    else if (header.Phase == (uint)PerfPhase.Cooldown)
+                    ulong tickNs = EpochNs();
+                    if (paced && pacedEpochNs != 0 && !catchUp.CaughtUp
+                        && tickNs - pacedEpochNs <= (ulong)latencyDurationSeconds * 1_000_000_000UL)
                     {
-                        phaseDone = true;
-                        break;
+                        double elapsed = (tickNs - pacedEpochNs) / 1_000_000_000.0;
+                        long scheduled = (long)(targetRate * elapsed);
+                        bool caughtUp = catchUp.Observe(tickNs, pacedReceived, scheduled, targetRate);
+                        if (tickNs >= nextProgressNs)
+                        {
+                            inflightFloor = Math.Min(inflightFloor, catchUp.InFlight);
+                            WriteStdoutLine(FormattableString.Invariant($"PUBSUB_CATCHUP_PROGRESS,{msgSize},{elapsed:G12},{catchUp.InFlight},{catchUp.MinReceived},{scheduled},{targetRate:G12}"));
+                            nextProgressNs = tickNs + 1_000_000_000UL;
+                        }
+                        if (caughtUp)
+                        {
+                            WriteStdoutLine($"PHASE_CATCHUP,{msgSize}");
+                            WriteStdoutLine(FormattableString.Invariant($"PUBSUB_CATCHUP_DIAG,{msgSize},{elapsed:G12},{catchUp.InFlight},window_start_in_flight,{catchUp.WindowStartInFlight}"));
+                        }
                     }
                 }
-                while (TrySubscribe((ISubSocket)activeClients[i], subscribed,
-                    RecvFlags.DontWait));
+                if (!drained)
+                {
+                    if (!controlState.StopRequested)
+                        Console.Error.WriteLine($"multi_client_error:pubsub_drain_timeout:{donePhase},stopped,{stopped.Count}/{activeClients.Count}");
+                    phaseSucceeded = false;
+                    break;
+                }
+                if (!paced)
+                {
+                    long smallest = Smallest(activeReceived);
+                    if (smallest <= 0)
+                    {
+                        phaseSucceeded = false;
+                        break;
+                    }
+                    targetRate = MultiTargetRate(smallest, durationSeconds);
+                    WriteStdoutLine($"PHASE_DRAINED,{msgSize},{smallest}");
+                }
             }
         }
         finally
         {
-            for (int i = 0; i < subscribedMessages.Length; i++)
-                subscribedMessages[i]?.Dispose();
+            foreach (TopicMessage message in messages)
+                message.Dispose();
         }
 
-        double configuredSeconds = Math.Max(1.0, durationSeconds);
-        double throughput = measureCount / configuredSeconds;
-        // PERF_POLICY: report measured latency only. C
-        // normalize_latency_stats reports zeros when no samples and never
-        // fabricates a duration-derived latency.
-        var latency = ComputeMultiLatencyStats(activeLatSamples,
-            activeSampleSeen, activeSampleSum);
-        double latencyNs = latency.mean;
-        double latencyP95Ns = Math.Max(latency.p95, latencyNs);
-        double latencyP99Ns = Math.Max(latency.p99, latencyP95Ns);
+        var latency = ComputeMultiLatencyStats(samples,
+            sampleSeen, sampleSum);
+        referenceSamples.Sort();
+        double referenceP50 = Percentile(referenceSamples, 0.50);
+        double referenceP99 = Percentile(referenceSamples, 0.99);
+        return (measureCount / (double)durationSeconds, latency.mean,
+            latency.p95, latency.p99,
+            phaseSucceeded ? measureCount : 0, sampleSeen,
+            Smallest(latencyReceived), catchUp.CaughtUp, Percentile(samples, 0.50),
+            referenceP50,
+            referenceP99, inflightFloor == long.MaxValue ? 0 : inflightFloor,
+            targetRate);
 
-        return (throughput, latencyNs, latencyP95Ns, latencyP99Ns,
-            measureCount, activeSampleSeen);
+        static long Smallest(long[] counts)
+        {
+            long min = long.MaxValue;
+            foreach (long count in counts)
+                min = Math.Min(min, count);
+            return min == long.MaxValue ? 0 : min;
+        }
+
+        static double Percentile(IReadOnlyList<double> sorted, double q)
+        {
+            if (sorted.Count == 0)
+                return 0.0;
+            double pos = (sorted.Count - 1) * q;
+            int lo = (int)pos;
+            int hi = Math.Min(lo + 1, sorted.Count - 1);
+            return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+        }
+    }
+
+    internal sealed class CatchUpTracker(int subscriberCount)
+    {
+        private const ulong WindowNs = 500_000_000UL;
+        private const long ReceiveQuantum = 1;
+        private readonly long[] _windowReceived = new long[subscriberCount];
+        private ulong _windowStartNs;
+        private long _windowScheduled;
+
+        internal long MinReceived { get; private set; }
+        internal long InFlight { get; private set; }
+        internal long WindowStartInFlight { get; private set; }
+        internal bool CaughtUp { get; private set; }
+
+        internal bool Observe(ulong nowNs, ReadOnlySpan<long> received, long scheduled,
+            double targetRate)
+        {
+            if (targetRate <= 0.0)
+                return false;
+            if (CaughtUp)
+                return true;
+
+            long smallest = received[0];
+            for (int i = 1; i < received.Length; i++)
+                smallest = Math.Min(smallest, received[i]);
+            MinReceived = smallest;
+            InFlight = Math.Max(0, scheduled - MinReceived);
+
+            if (_windowStartNs != 0 && InFlight <= WindowStartInFlight)
+            {
+                if (nowNs - _windowStartNs < WindowNs)
+                    return false;
+
+                // The slowest subscriber can change within the window.
+                long minimumDelta = received[0] - _windowReceived[0];
+                for (int i = 1; i < received.Length; i++)
+                    minimumDelta = Math.Min(minimumDelta, received[i] - _windowReceived[i]);
+                if (minimumDelta + ReceiveQuantum >= scheduled - _windowScheduled)
+                {
+                    CaughtUp = true;
+                    return true;
+                }
+            }
+
+            _windowStartNs = nowNs;
+            WindowStartInFlight = InFlight;
+            _windowScheduled = scheduled;
+            received.CopyTo(_windowReceived);
+            return false;
+        }
     }
 
     private static void AddLatencySample(List<double> samples,

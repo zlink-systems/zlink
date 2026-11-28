@@ -52,14 +52,14 @@ class ReplyNativeTests(unittest.TestCase):
                 self.exchange(expected, lambda server, received:
                               received.reply().messages(*received).submit())
 
-    def test_message_and_mutable_input_remain_usable(self):
+    def test_reply_consumes_message_and_preserves_mutable_input(self):
         expected = [b"mutable", b"message", b""]
 
         def reply(server, received):
             data = bytearray(expected[0])
             with zlink.Message.from_(expected[1]) as message:
                 received.reply().messages(data, message, memoryview(b"")).submit()
-                self.assertEqual(message.to_bytes(), expected[1])
+                self.assertEqual(message.to_bytes(), b"")
                 data[:] = b"changed"
 
         self.exchange(expected, reply)
@@ -99,7 +99,7 @@ class ReplyNativeTests(unittest.TestCase):
                 spaced = bytearray(len(raw) * 2)
                 spaced[::2] = raw
                 server.reply(memoryview(spaced)[::2], received.reply_token).message(payload).submit()
-                self.assertEqual(payload.to_bytes(), b"rid")
+                self.assertEqual(payload.to_bytes(), b"")
 
         self.exchange([b"rid"], reply)
 

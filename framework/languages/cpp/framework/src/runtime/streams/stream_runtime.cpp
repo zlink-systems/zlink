@@ -16,6 +16,7 @@
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/streams/session_serial_executor.hpp"
+#include "runtime/streams/admission_queue_messages.hpp"
 
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -239,6 +240,10 @@ class stream_write_call_state_t
         }
         const auto packet_name =
           _packet_name.empty () ? std::string (_header->packet_name ()) : _packet_name;
+        if (!_packet_name.empty ()
+            && _packet_name.starts_with (zlink::detail::stream_wire::reserved_packet_name_prefix))
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "STREAM packet name is reserved");
         auto header =
           stream_header_t (_header->kind (), _header->codec (), flags, _header->request_seq (),
                            packet_name, stream_metadata_t (std::move (metadata)));
@@ -504,6 +509,8 @@ struct packet_dispatch_state_t
     std::shared_ptr<stream_reply_submission_t> reply_submission;
     session_message_context_t context;
     message_t payload;
+    std::shared_ptr<void> global_admission_permit;
+    stream_runtime_t::async_dispatch_started_t ticket_used;
 };
 
 task_t<void> dispatch_packet_session_callback (packet_stream_session_t *session,
@@ -515,6 +522,8 @@ task_t<void> dispatch_packet_session_callback (packet_stream_session_t *session,
     auto task = [&] {
         const stream_relay_dispatch_scope_t relay_scope (invocation->header,
                                                          invocation->reply_submission);
+        if (invocation->ticket_used)
+            invocation->ticket_used ();
         return session->on_packet (stream, invocation->context, invocation->payload);
     }();
     co_return co_await task;
@@ -1331,9 +1340,13 @@ result_t<void> validate_stream_header (const stream_header_view_t &header)
     const bool is_reply =
       header.kind == stream_message_kind_t::response || header.kind == stream_message_kind_t::error;
     if (!is_reply) {
-        if (auto valid_name =
-              validate_name (header.packet_name, header.kind == stream_message_kind_t::control);
-            !valid_name) {
+        const bool framework_packet =
+          header.kind == stream_message_kind_t::control
+          || (header.kind == stream_message_kind_t::request
+              && header.packet_name == runtime::admission_queue::client_enqueue_packet)
+          || (header.kind == stream_message_kind_t::send
+              && runtime::admission_queue::is_client_delivery_packet (header.packet_name));
+        if (auto valid_name = validate_name (header.packet_name, framework_packet); !valid_name) {
             return valid_name;
         }
     }
@@ -1857,6 +1870,25 @@ void stream_runtime_t::send_actor_unbound (stream_t &stream, std::uint16_t actor
       .value ();
 }
 
+task_t<void> stream_runtime_t::write_admission_packet (stream_t stream,
+                                                       const char *packet_name,
+                                                       const nlohmann::json &payload,
+                                                       const stream_header_t *request) const
+{
+    auto header = request
+                    ? make_terminal_header (stream_message_kind_t::response, *request)
+                    : stream_header_t (stream_message_kind_t::send, stream_codec_t::json,
+                                       stream_header_flags_t::none, std::nullopt, packet_name, {});
+    auto bytes =
+      encoded_payload_to_raw (_state->serializers->get<nlohmann::json> ().serialize (payload));
+    return stream.write_packet_with_header (std::move (header), std::move (bytes)).async ();
+}
+
+std::stop_token stream_runtime_t::session_closed (const stream_t &stream) const noexcept
+{
+    return stream._state->closed.get_token ();
+}
+
 void stream_runtime_t::send_control_frame (stream_t &stream,
                                            const char *name,
                                            std::optional<stream_close_reason_t> close_reason,
@@ -2137,7 +2169,9 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
                                                         async_dispatch_completion_t completion,
                                                         async_dispatch_started_t started,
                                                         async_dispatch_cancel_t cancelled,
-                                                        std::shared_ptr<void> admission_lease) const
+                                                        std::shared_ptr<void> admission_lease,
+                                                        std::shared_ptr<void> global_permit,
+                                                        async_dispatch_started_t ticket_used) const
 {
     std::shared_ptr<packet_dispatch_state_t> packet;
     if (admission_lease) {
@@ -2193,6 +2227,8 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
         if (header.request_seq ())
             packet->reply_submission = std::make_shared<stream_reply_submission_t> ();
     }
+    packet->global_admission_permit = std::move (global_permit);
+    packet->ticket_used = std::move (ticket_used);
     dispatch_stream._reply_submission = packet->reply_submission;
     packet->context.packet_name = std::string (header.packet_name ());
     packet->context.metadata = message_metadata_t (header.metadata ().values ());

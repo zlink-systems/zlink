@@ -695,7 +695,8 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                 PreparedSpot preparedSpot,
                 List<QueuedTurn> dispatches,
                 String laneId,
-                byte[] record,
+                Supplier<byte[]> record,
+                long recordSizeHint,
                 Supplier<CompletionStage<Void>> turn,
                 CompletableFuture<Void> admission) {
             if (enqueueFailure != null) return enqueueFailure;
@@ -716,14 +717,14 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                 return dispatch.target()
                         .executeActorLazyRecord(
                                 dispatch.activation(),
-                                () -> record,
-                                record.length,
+                                record,
+                                recordSizeHint,
                                 turn,
                                 () -> {},
                                 admission);
             }
             return fifo.enqueueRelocatableLazyRecord(
-                    () -> record, record.length, turn, () -> {}, admission);
+                    record, recordSizeHint, turn, () -> {}, admission);
         }
 
         @Override
@@ -877,7 +878,8 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
                 PreparedSpot spot,
                 List<QueuedTurn> dispatches,
                 String lane,
-                byte[] record,
+                Supplier<byte[]> record,
+                long recordSizeHint,
                 Supplier<CompletionStage<Void>> turn,
                 CompletableFuture<Void> admission) {
             var failure = new AssertionError("restore-only fixture must not dispatch backlog");

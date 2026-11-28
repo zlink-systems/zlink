@@ -130,6 +130,37 @@ impl Received {
     pub fn routing_id(&self) -> Option<&RoutingId> {
         self.routing_id.as_ref()
     }
+    /// Builds a reply. Submitting it requires a received request context.
+    pub fn reply(&self) -> crate::ReplyOp<crate::Empty> {
+        use crate::contracts::messaging::operations::ReplyOpStorage;
+        match self.reply_target() {
+            Some((routed, owner, routing_id, token)) => {
+                ReplyOpStorage::router_reply_op(routed, owner, routing_id, token)
+            }
+            None => crate::ReplyOp {
+                inner: Err(missing_context()),
+                _state: std::marker::PhantomData,
+            },
+        }
+    }
+
+    /// Builds a send addressed to the source of this envelope.
+    pub fn send(&self) -> crate::SendOp<crate::Empty> {
+        use crate::contracts::messaging::operations::SendOpStorage;
+        match self.send_target() {
+            Some((_, Some(routed), owner, routing_id)) => {
+                SendOpStorage::routed_send_op(routed, owner, routing_id)
+            }
+            Some((handle, None, owner, routing_id)) => {
+                SendOpStorage::stream_send_to_op(handle, owner, routing_id)
+            }
+            None => crate::SendOp {
+                inner: Err(missing_context()),
+                _state: std::marker::PhantomData,
+            },
+        }
+    }
+
     pub fn reply_token(&self) -> Option<ReplyToken> {
         self.reply_token.clone()
     }
@@ -146,21 +177,15 @@ impl Received {
     pub fn first_part(&self) -> Result<&Message, RecvError> {
         self.parts.first().ok_or_else(recv_state_error)
     }
-    pub fn single_part(mut self) -> Result<Message, RecvError> {
-        if self.parts.len() != 1 {
+    /// Consumes the envelope and returns its only part, transferring ownership.
+    /// Returns a receive error unless it holds exactly one part.
+    pub fn single_part_or_throw(mut self) -> Result<Message, RecvError> {
+        if !self.is_single_part() {
             return Err(recv_state_error());
         }
-        Ok(std::mem::take(&mut self.parts)
-            .into_iter()
-            .next()
-            .expect("single part"))
+        Ok(self.parts.pop().expect("exactly one part"))
     }
 
-    /// Deprecated name of [`single_part`](Self::single_part).
-    #[deprecated(note = "use single_part")]
-    pub fn single_part_or_error(self) -> Result<Message, RecvError> {
-        self.single_part()
-    }
     pub fn into_parts(mut self) -> Vec<Message> {
         std::mem::take(&mut self.parts)
     }
@@ -217,4 +242,8 @@ impl Received {
 
 pub(crate) fn recv_state_error() -> RecvError {
     RecvError::new(RecvResult::InvalidState, libc::EINVAL)
+}
+
+fn missing_context() -> crate::SubmitError {
+    crate::SubmitError::new(crate::SubmitResult::InvalidArgument, libc::EINVAL)
 }

@@ -364,7 +364,8 @@ final class ZLinkJoinedActorSendAdmissionTest {
         observer.setLevel(Level.ALL);
         logger.addHandler(observer);
         logger.setLevel(Level.ALL);
-        try (var runtime = start(options)) {
+        try (var runtime = ZLinkFrameworkRuntimeTestAccess.startHost(options, probe.provider())) {
+            assertTrue(runtime.isReady());
             TABLE_CLIENT.set(runtime.actorClient());
             completionRelease.complete(null);
             runtime.spotManager()
@@ -413,7 +414,11 @@ final class ZLinkJoinedActorSendAdmissionTest {
 
     @Test
     void requestWithoutHandlerEndsWithoutHanging() throws Exception {
-        try (var runtime = start(options("request-missing-handler", null, null, null, true))) {
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.startHost(
+                        options("request-missing-handler", null, null, null, true),
+                        probe.provider())) {
+            assertTrue(runtime.isReady());
             runtime.actorManager()
                     .create(PLAYER, "player")
                     .submit()

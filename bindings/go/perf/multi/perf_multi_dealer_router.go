@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"time"
 
 	zlink "zlink.systems/zlink"
 	"zlink.systems/zlink/perf/internal/perfcommon"
@@ -47,7 +46,6 @@ func runMultiDealerRouterServer(cfg multiConfig) {
 // runMultiDealerRouterClient continuously submits until socket HWM applies
 // backpressure and drains echoed messages independently on POLLIN.
 func runMultiDealerRouterClient(cfg multiConfig, endpoint string) perfcommon.Result {
-	stats := perfcommon.NewMultiStats()
 	clientCtx, err := perfcommon.NewMultiClientContext()
 	perfcommon.Must(err)
 	defer clientCtx.Close()
@@ -77,110 +75,17 @@ func runMultiDealerRouterClient(cfg multiConfig, endpoint string) perfcommon.Res
 		}
 	}()
 
-	window := activeDeadline(cfg.duration)
-	runMultiDealerRouterEchoWindow(dealers, stats, cfg.msgSize, window)
+	targets := make([]multiEchoSocket, len(dealers))
+	for i, dealer := range dealers {
+		targets[i] = dealer.socket
+	}
+	result := runMultiEcho(cfg, targets, func(index int, message *zlink.Message) (zlink.SendSubmission, error) {
+		return perfcommon.SubmitMeasurementSendSubmission(context.Background(), dealers[index].socket.Send(), message)
+	})
 	if len(dealers) > 0 {
 		perfcommon.PrintMultiSocketAutoHWMDetail(
 			dealers[0].socket, dealers[0].monitor, cfg.pattern, cfg.transport, "client", "endpoint", zlink.SocketTypeDealer, cfg.msgSize,
 		)
 	}
-	return stats.Snapshot(cfg.duration, cfg.msgSize)
-}
-
-func runMultiDealerRouterEchoWindow(
-	dealers []dealerRouterClient,
-	stats *perfcommon.Stats,
-	msgSize int,
-	window perfcommon.BenchmarkWindow,
-) {
-	if len(dealers) == 0 {
-		return
-	}
-	poller, err := zlink.NewPoller()
-	perfcommon.Must(err)
-	defer poller.Close()
-	events := make([]zlink.PollEvent, len(dealers))
-	for i, dealer := range dealers {
-		perfcommon.Must(poller.AddSocket(
-			dealer.socket, perfcommon.ZLinkPollIn|zlink.PollCompletion, uintptr(i)))
-	}
-
-	payloads := make([][]byte, len(dealers))
-	for index := range payloads {
-		payloads[index] = perfcommon.PreparePayload(msgSize)
-	}
-	submit := func(index int) (zlink.SendSubmission, error) {
-		submission, sendErr := sendMultiDealerRouterRequest(dealers[index].socket, payloads[index], window)
-		if sendErr != nil {
-			return nil, fmt.Errorf("multi dealer/router client send: %w", sendErr)
-		}
-		return submission, nil
-	}
-	pendingReplies := 0
-	progress := func(wait time.Duration) error {
-		n, waitErr := poller.Wait(events, wait)
-		if waitErr != nil {
-			if perfcommon.IsTransient(waitErr) {
-				return nil
-			}
-			return fmt.Errorf("multi dealer/router client poll: %w", waitErr)
-		}
-		for i := 0; i < n; i++ {
-			idx := int(events[i].Slot)
-			if idx < 0 || idx >= len(dealers) {
-				continue
-			}
-			socket := dealers[idx].socket
-			if events[i].Revents&perfcommon.ZLinkPollIn != 0 {
-				drained := drainMultiDealerRouterReplies(socket, stats, msgSize, window)
-				if drained > pendingReplies {
-					return fmt.Errorf("multi dealer/router received %d replies with %d pending", drained, pendingReplies)
-				}
-				pendingReplies -= drained
-			}
-		}
-		return nil
-	}
-	perfcommon.Must(runMultiSendTurns(
-		len(dealers), window, "multi dealer/router", submit, progress,
-		func(submitted int) { pendingReplies += submitted },
-		func() bool { return pendingReplies > 0 }))
-}
-
-func sendMultiDealerRouterRequest(
-	socket *zlink.DealerSocket,
-	payload []byte,
-	window perfcommon.BenchmarkWindow,
-) (zlink.SendSubmission, error) {
-	perfcommon.StampWindowPayload(payload, window.ActiveAt)
-	message := perfcommon.NewMessage(payload)
-	return perfcommon.SubmitMeasurementSendSubmission(context.Background(), socket.Send(), message)
-}
-
-func drainMultiDealerRouterReplies(
-	socket *zlink.DealerSocket,
-	stats *perfcommon.Stats,
-	msgSize int,
-	window perfcommon.BenchmarkWindow,
-) int {
-	drained := 0
-	var reply zlink.Received
-	for {
-		ok, err := socket.Recv(&reply, zlink.RecvFlagsDontWait)
-		if err != nil {
-			if perfcommon.IsTransient(err) {
-				return drained
-			}
-			perfcommon.Must(fmt.Errorf("multi dealer/router client recv: %w", err))
-		}
-		if !ok {
-			return drained
-		}
-		part, partErr := perfcommon.MeasurementPayload(reply.Parts())
-		if partErr == nil {
-			drained++
-			perfcommon.RecordMessageRTTLatency(stats, window.ActiveAtNs, window.StopAtNs, msgSize, part)
-		}
-		_ = reply.Close()
-	}
+	return result
 }
