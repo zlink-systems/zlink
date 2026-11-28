@@ -712,7 +712,8 @@ latency는 패턴 유형에 따라 측정 방식을 분리한다.
 1. ready → active phase(포화 송신) → bounded drain → paced latency phase → drain
 - throughput은 active phase에서만 산출한다. active phase의 송신은 패턴의 모든 sender(client 소켓)에 고르게 돌린다.
   한 sender가 막힐 때까지 그 sender로만 보내지 않는다. 그래서 "N clients" 칸은 연결 N개의 합계 처리량이다.
-  sender를 바꾸는 단위는 paced phase와 같은 기준 구현(C `perf_multi_dealer_dealer_client.cpp`)의 상수를 쓴다.
+  한 sender에 연속으로 보내는 수는 최대 64이고, 그 뒤 다음 sender로 넘긴다. 이 64는 수신 쪽 구독자당 처리 묶음과 같은
+  값이며 C 공통 상수 하나(`perf_multi_measurement`)가 소유한다. active·paced, 송신·수신이 같은 상수를 쓴다.
 - latency는 paced latency phase에서만 산출한다. 목표 송신률은 active phase 수신률 × 0.8이다.
   한 패턴의 sender들은 `epoch + k / rate` 일정 하나를 공유하고, 일정의 다음 송신은 지금 보낼 수 있는
   sender가 맡는다. sender마다 일정을 나누지 않는다. 기준 구현은 C
