@@ -1364,7 +1364,7 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
 
     runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t wire{
       .relocation = relocation,
-      .target_attempt_generation = target.lifecycle_generation,
+      .target_attempt_generation = 1,
       .coordinator = coordinator,
       .target_node_routing_id = target.rid.to_bytes (),
       .target_node_generation = target.lifecycle_generation,
@@ -1402,7 +1402,7 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
             target.rid,
             runtime::protocol::relocation_prepare_t{
               relocation,
-              target.lifecycle_generation,
+              1,
               coordinator,
               {target.rid.to_bytes (), target.lifecycle_generation, target.owner_id,
                static_cast<std::uint64_t> (target.lease_generation)},
@@ -1587,7 +1587,7 @@ mesh_node_runtime_t::relocate_application_unit (
     auto session_checkpoint_attempted = std::make_shared<bool> (false);
     eligible_relocation_unit_t::canonical_wire_context_t wire{
       .relocation = relocation,
-      .target_attempt_generation = target.lifecycle_generation,
+      .target_attempt_generation = 1,
       .coordinator = coordinator,
       .target_node_routing_id = target.rid.to_bytes (),
       .target_node_generation = target.lifecycle_generation,
@@ -1623,7 +1623,7 @@ mesh_node_runtime_t::relocate_application_unit (
             target.rid,
             runtime::protocol::relocation_prepare_t{
               relocation,
-              target.lifecycle_generation,
+              1,
               coordinator,
               {target.rid.to_bytes (), target.lifecycle_generation, target.owner_id,
                static_cast<std::uint64_t> (target.lease_generation)},
@@ -3401,7 +3401,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       recovery.actor_generation, recovery.actor_authority_owner_generation};
     runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t wire{
       .relocation = s->relocation,
-      .target_attempt_generation = s->target.node_generation,
+      .target_attempt_generation = 1,
       .coordinator = s->relocation_coordinator,
       .target_node_routing_id = s->target.node_rid.to_bytes (),
       .target_node_generation = s->target.node_generation,
@@ -3438,7 +3438,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
             s->target.node_rid,
             runtime::protocol::relocation_prepare_t{
               s->relocation,
-              s->target.node_generation,
+              1,
               s->relocation_coordinator,
               {s->target.node_rid.to_bytes (), s->target.node_generation, s->target.owner.owner_id,
                static_cast<std::uint64_t> (s->target.owner.lease_generation)},

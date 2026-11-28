@@ -298,6 +298,10 @@ class provider_location_repository_t final : public location_repository_t
 
     static object_creation_target_t decode_aggregate_target (const json_t &record);
 
+    task_t<std::optional<store_version_condition_t>>
+    aggregate_attempt_condition (const aggregate_fence_t &fence,
+                                 const object_creation_target_t &target);
+
     task_t<bool> put_inventory_record (store_key_t key, std::vector<std::byte> bytes);
 
     task_t<bool> write_inventory (const aggregate_fence_t &fence,
@@ -307,7 +311,8 @@ class provider_location_repository_t final : public location_repository_t
     task_t<std::optional<std::vector<aggregate_participant_t>>>
     read_inventory (const aggregate_fence_t &fence, const std::string &digest);
 
-    task_t<resolved_authority_t> resolve_authority_async (const store_found_t &row);
+    task_t<resolved_authority_t> resolve_authority_async (const store_key_t &key,
+                                                          const store_found_t &row);
 
     task_t<store_write_result_t>
     write_async (store_write_request_t request,
@@ -547,7 +552,8 @@ class provider_location_repository_t final : public location_repository_t
                             const object_reservation_fence_t &right);
 
     task_t<authority_compare_exchange_result_t>
-    authority_conflict (store_read_result_t current,
+    authority_conflict (const store_key_t &key,
+                        store_read_result_t current,
                         std::optional<framework_error_kind_t> membership_failure = std::nullopt);
 
     static std::string version_of (const store_write_applied_t &applied, const store_key_t &key);
@@ -595,9 +601,7 @@ class provider_location_repository_t final : public location_repository_t
     task_t<bool> capacity_still_available (const capacity_changes_t &changes);
 
     task_t<authority_compare_exchange_result_t>
-    publish_retarget (const authority_key_t &authority,
-                      const store_key_t &authority_key,
-                      const store_version_t &authority_version,
+    publish_retarget (const store_key_t &authority_key,
                       authority_snapshot_t target,
                       const placement_allocation_t &source,
                       stored_target_t descriptor,

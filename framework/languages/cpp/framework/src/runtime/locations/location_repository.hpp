@@ -533,6 +533,12 @@ struct aggregate_participant_t
     std::vector<std::byte> authority_payload;
     std::vector<std::byte> membership_mutation;
 };
+struct aggregate_relocation_attempt_t
+{
+    authority_key_t representative;
+    std::uint64_t generation;
+};
+
 struct aggregate_prepare_request_t
 {
     aggregate_id_t aggregate_id;
@@ -543,6 +549,7 @@ struct aggregate_prepare_request_t
     std::uint64_t target_descriptor_lifecycle_generation = 0;
     placement_capacity_bundle_t capacity_bundle;
     location_owner_token_t target_owner;
+    std::optional<aggregate_relocation_attempt_t> relocation_attempt;
 };
 struct aggregate_fence_t
 {
@@ -550,6 +557,7 @@ struct aggregate_fence_t
     std::uint64_t aggregate_generation = 0;
     // Carries the manifest digest across private aggregate retries.
     std::optional<inventory_digest_t> inventory_digest;
+    std::optional<aggregate_relocation_attempt_t> relocation_attempt;
 };
 struct aggregate_prepared_t
 {

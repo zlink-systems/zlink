@@ -625,14 +625,48 @@ provider_location_repository_t::compare_exchange_authority_core (
         auto current = co_await _store.read (row_key);
         auto *found = std::get_if<store_found_t> (&current);
         if (!found)
-            co_return co_await authority_conflict (std::move (current));
-        auto observed = co_await resolve_authority_async (*found);
+            co_return co_await authority_conflict (row_key, std::move (current));
+        auto observed = co_await resolve_authority_async (row_key, *found);
         auto snapshot = std::move (observed.snapshot);
-        if (observed.participation)
-            co_return authority_compare_exchange_result_t{
-              authority_conflict_t{std::move (snapshot)}};
+        if (observed.participation) {
+            // A subsequent target attempt changes only the representative relocation field.
+            const auto *next =
+              put && put->replace_aggregate ? put->replace_aggregate->get () : nullptr;
+            const auto &marker = observed.participation->encoded;
+            if (!next || !next->relocation || !observed.participation->relocation
+                || observed.participation->relocation->phase != "prepared"
+                || put->payload != snapshot.payload)
+                co_return authority_compare_exchange_result_t{
+                  authority_conflict_t{std::move (snapshot)}};
+            auto replacement = next->encoded;
+            auto &next_target = replacement.at ("relocation").at ("target");
+            const auto &current_target = marker.at ("relocation").at ("target");
+            if (next_target.is_null () || current_target.is_null ()
+                || authority_aggregate_codec::number (next_target, "attemptGeneration") - 1
+                     != authority_aggregate_codec::number (current_target, "attemptGeneration"))
+                co_return authority_compare_exchange_result_t{
+                  authority_conflict_t{std::move (snapshot)}};
+            next_target["attemptGeneration"] = current_target.at ("attemptGeneration");
+            if (json_t (replacement) != json_t (marker))
+                co_return authority_compare_exchange_result_t{
+                  authority_conflict_t{std::move (snapshot)}};
+            if (snapshot.store_version != expected_store_version)
+                co_return authority_compare_exchange_result_t{
+                  authority_conflict_t{std::move (snapshot)}};
+            snapshot.aggregate = *put->replace_aggregate;
+            store_write_request_t advance{
+              {version_condition (row_key, found->value.version)},
+              {store_put_t{row_key, encode_authority (snapshot, snapshot.store_version),
+                           std::nullopt}}};
+            const auto written = co_await write_async (std::move (advance));
+            const auto *applied = std::get_if<store_write_applied_t> (&written);
+            if (!applied)
+                co_return co_await authority_conflict (row_key, co_await _store.read (row_key));
+            snapshot.store_now = applied->store_now;
+            co_return authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}};
+        }
         if (snapshot.store_version != expected_store_version)
-            co_return co_await authority_conflict (std::move (current));
+            co_return co_await authority_conflict (row_key, std::move (current));
 
         const auto old_member = snapshot.allocation.object_kind == placement_object_kind_t::actor
                                   ? decode_direct_actor_authority_payload (snapshot.payload)
@@ -646,16 +680,16 @@ provider_location_repository_t::compare_exchange_authority_core (
         std::optional<stored_target_t> relocation_target;
         if (std::holds_alternative<authority_delete_t> (mutation)) {
             if (snapshot.allocation.state != placement_allocation_state_t::active)
-                co_return co_await authority_conflict (std::move (current));
+                co_return co_await authority_conflict (row_key, std::move (current));
             if (!co_await owner_is_live_async (snapshot.owner))
-                co_return co_await authority_conflict (std::move (current));
+                co_return co_await authority_conflict (row_key, std::move (current));
             const auto descriptor_key = key_mesh (snapshot.allocation.target.mesh_name,
                                                   zlink::routing_id_t::from (std::string (
                                                     snapshot.allocation.target.node_rid.value ())));
             const auto descriptor = co_await _store.read (descriptor_key);
             const auto decoded_key = authority_key_codec_detail::decode_authority_key (key.value);
             if (!decoded_key)
-                co_return co_await authority_conflict (std::move (current));
+                co_return co_await authority_conflict (row_key, std::move (current));
             write_request.conditions = {version_condition (row_key, found->value.version),
                                         owner_condition (snapshot.owner),
                                         condition_for (descriptor_key, descriptor)};
@@ -666,15 +700,15 @@ provider_location_repository_t::compare_exchange_authority_core (
             capacity.append_to (write_request);
         } else if (put && put->preservation) {
             if (!put->matches_preserved (snapshot))
-                co_return co_await authority_conflict (std::move (current));
+                co_return co_await authority_conflict (row_key, std::move (current));
             if (!co_await owner_is_live_async (qualification_owner))
-                co_return co_await authority_conflict (std::move (current));
+                co_return co_await authority_conflict (row_key, std::move (current));
             auto target = snapshot.allocation.target;
             target.owner = qualification_owner;
             const auto descriptor = co_await read_target_descriptor_async (target, false, false);
             if (!descriptor || descriptor->descriptor.owner_id != qualification_owner.owner_id
                 || descriptor->descriptor.lifecycle_generation != target.node_lifecycle_generation)
-                co_return co_await authority_conflict (std::move (current));
+                co_return co_await authority_conflict (row_key, std::move (current));
             snapshot.owner = qualification_owner;
             snapshot.allocation.target.owner = qualification_owner;
             snapshot.payload = put->payload;
@@ -684,18 +718,18 @@ provider_location_repository_t::compare_exchange_authority_core (
                              {store_put_t{row_key, encode_authority (snapshot), std::nullopt}}};
         } else if (const auto *restore = std::get_if<authority_restore_t> (&mutation)) {
             if (!same_owner (snapshot.owner, restore->expected_owner))
-                co_return co_await authority_conflict (std::move (current));
+                co_return co_await authority_conflict (row_key, std::move (current));
             snapshot.payload = restore->payload;
             write_request = {{version_condition (row_key, found->value.version)},
                              {store_put_t{row_key, encode_authority (snapshot), std::nullopt}}};
         } else if (retarget) {
             if (snapshot.allocation.state != placement_allocation_state_t::active)
-                co_return co_await authority_conflict (std::move (current));
+                co_return co_await authority_conflict (row_key, std::move (current));
             auto target_descriptor = co_await read_target_descriptor_async (retarget->target);
             if (!target_descriptor
                 || !target_accepts (target_descriptor->descriptor, snapshot.allocation.object_kind,
                                     snapshot.allocation.stable_type))
-                co_return co_await authority_conflict (std::move (current));
+                co_return co_await authority_conflict (row_key, std::move (current));
             if (capacity_scope (snapshot.allocation.target) != capacity_scope (retarget->target)) {
                 source_allocation = snapshot.allocation;
                 relocation_target = target_descriptor;
@@ -720,10 +754,10 @@ provider_location_repository_t::compare_exchange_authority_core (
               store_put_t{row_key, encode_authority (snapshot), std::nullopt});
         } else {
             if (snapshot.allocation.state != placement_allocation_state_t::active)
-                co_return co_await authority_conflict (std::move (current));
+                co_return co_await authority_conflict (row_key, std::move (current));
             auto live_owner = co_await read_live_owner_async (snapshot.owner);
             if (!live_owner)
-                co_return co_await authority_conflict (std::move (current));
+                co_return co_await authority_conflict (row_key, std::move (current));
             write_request.conditions = {version_condition (row_key, found->value.version),
                                         owner_condition (snapshot.owner)};
             if (auto *reincarnate = std::get_if<authority_reincarnate_t> (&mutation)) {
@@ -750,13 +784,14 @@ provider_location_repository_t::compare_exchange_authority_core (
             const auto membership_failure = co_await append_user_membership_conditions (
               old_member, snapshot.payload, write_request);
             if (membership_failure)
-                co_return co_await authority_conflict (std::move (current), membership_failure);
+                co_return co_await authority_conflict (row_key, std::move (current),
+                                                       membership_failure);
         }
         check_deadline ();
         if (source_allocation) {
             co_return co_await publish_retarget (
-              key, row_key, found->value.version, std::move (snapshot), *source_allocation,
-              *relocation_target, std::move (write_request), cancellation,
+              row_key, std::move (snapshot), *source_allocation, *relocation_target,
+              std::move (write_request), cancellation,
               operation_deadline.value_or (std::chrono::steady_clock::time_point::max ()));
         }
         auto written = co_await write_async (
@@ -767,7 +802,7 @@ provider_location_repository_t::compare_exchange_authority_core (
             if (co_await conflict_qualification_unchanged (row_key, found->value.version,
                                                            qualification_owner, std::nullopt))
                 continue;
-            co_return co_await authority_conflict (co_await _store.read (row_key));
+            co_return co_await authority_conflict (row_key, co_await _store.read (row_key));
         }
         if (std::holds_alternative<authority_delete_t> (mutation)) {
             co_return authority_compare_exchange_result_t{
@@ -808,7 +843,7 @@ provider_location_repository_t::list_authorities (std::string key_prefix,
         const auto &logical_key = key->value;
         store_found_t row{item.value};
         row.value.store_now = page->store_now;
-        auto observed = co_await resolve_authority_async (row);
+        auto observed = co_await resolve_authority_async (item.key, row);
         output.items.push_back ({{logical_key}, std::move (observed.snapshot)});
     }
     if (page->next_cursor)
@@ -906,7 +941,7 @@ provider_location_repository_t::append_user_membership_conditions (
         const auto *spot_row = std::get_if<store_found_t> (&spot_read);
         if (!spot_row)
             co_return framework_error_kind_t::not_found;
-        auto observed = co_await resolve_authority_async (*spot_row);
+        auto observed = co_await resolve_authority_async (spot_key, *spot_row);
         if (observed.participation)
             co_return framework_error_kind_t::unavailable;
         const auto &spot = observed.snapshot;
@@ -977,7 +1012,7 @@ provider_location_repository_t::reserve_once (const object_reserve_request_t &re
                                                           "Object creation deadline expired")));
     std::optional<authority_snapshot_t> decoded_current;
     if (const auto *found = std::get_if<store_found_t> (&authority)) {
-        decoded_current = (co_await resolve_authority_async (*found)).snapshot;
+        decoded_current = (co_await resolve_authority_async (authority_key, *found)).snapshot;
         if (!authority_matches_creation_type (*decoded_current, request))
             co_return object_reserve_result_t{object_type_mismatch_t{std::move (*decoded_current)}};
     }
@@ -1351,7 +1386,7 @@ task_t<bool> provider_location_repository_t::release_ended_reservation (
         const auto *found = std::get_if<store_found_t> (&read);
         if (!found)
             co_return false;
-        const auto observed = co_await resolve_authority_async (*found);
+        const auto observed = co_await resolve_authority_async (row_key, *found);
         const auto &current = observed.snapshot;
         if (current.store_version != expected_store_version)
             co_return false;
@@ -1483,7 +1518,7 @@ task_t<object_commit_result_t> provider_location_repository_t::commit_core (
         if (!stored_authority)
             co_return object_commit_result_t{object_commit_conflict_t{
               authority_missing_t{std::get<store_missing_t> (authority).store_now}}};
-        auto observed = co_await resolve_authority_async (*stored_authority);
+        auto observed = co_await resolve_authority_async (authority_key, *stored_authority);
         auto snapshot = std::move (observed.snapshot);
         if (observed.participation)
             co_return object_commit_result_t{object_commit_conflict_t{std::move (snapshot)}};
@@ -1562,7 +1597,7 @@ provider_location_repository_t::abort (object_abort_request_t request,
         if (!stored_authority)
             co_return object_abort_result_t{object_abort_conflict_t{
               authority_missing_t{std::get<store_missing_t> (authority).store_now}}};
-        auto observed = co_await resolve_authority_async (*stored_authority);
+        auto observed = co_await resolve_authority_async (authority_key, *stored_authority);
         auto snapshot = std::move (observed.snapshot);
         if (observed.participation)
             co_return object_abort_result_t{object_abort_conflict_t{std::move (snapshot)}};
@@ -1624,15 +1659,24 @@ provider_location_repository_t::prepare_aggregate_core (aggregate_prepare_reques
     const aggregate_fence_t fence{
       request.aggregate_id, request.aggregate_generation,
       inventory_digest_t{unhex_array<32> (
-        inventory.root.at (location_record_fields::digestSha256).get<std::string> ())}};
+        inventory.root.at (location_record_fields::digestSha256).get<std::string> ())},
+      request.relocation_attempt};
     const auto key = key_aggregate (fence);
     const auto prepared = encode_aggregate (request, aggregate_status::prepared, inventory);
     auto preparing = prepared;
     preparing[location_record_fields::state] = aggregate_status::preparing;
+    const auto target = decode_aggregate_target (prepared);
+    auto current_attempt = fence.relocation_attempt
+                             ? co_await aggregate_attempt_condition (fence, target)
+                             : std::optional<store_version_condition_t>{};
+    if (fence.relocation_attempt && !current_attempt)
+        co_return aggregate_prepare_conflict_t{};
     auto current = co_await _store.read (key);
     if (std::holds_alternative<store_missing_t> (current)) {
         store_write_request_t claim{{missing_condition (key)},
                                     {store_put_t{key, to_bytes (preparing.dump ()), std::nullopt}}};
+        if (current_attempt)
+            claim.conditions.push_back (*current_attempt);
         (void) co_await write_async (std::move (claim));
         current = co_await _store.read (key);
     }
@@ -1649,7 +1693,6 @@ provider_location_repository_t::prepare_aggregate_core (aggregate_prepare_reques
     if (state != aggregate_status::preparing)
         co_return aggregate_prepare_stale_t{};
 
-    const auto target = decode_aggregate_target (record);
     const auto descriptor = co_await read_target_descriptor_async (target);
     bool target_live = false;
     if (descriptor)
@@ -1672,13 +1715,25 @@ provider_location_repository_t::prepare_aggregate_core (aggregate_prepare_reques
             const auto *row = std::get_if<store_found_t> (&read);
             if (!row)
                 break;
-            auto observed = co_await resolve_authority_async (*row);
+            auto observed = co_await resolve_authority_async (authority_key, *row);
             const auto &snapshot = observed.snapshot;
             if (observed.participation) {
                 if (!matches_aggregate_marker (observed.participation->encoded, fence, marker))
                     break;
             } else {
-                if (snapshot.store_version != participant.expected_store_version
+                const bool representative =
+                  fence.relocation_attempt
+                  && participant.key.value == fence.relocation_attempt->representative.value;
+                if (representative) {
+                    current_attempt = co_await aggregate_attempt_condition (fence, target);
+                    if (!current_attempt
+                        || row->value.version.value != current_attempt->expected.value
+                        || snapshot.aggregate->relocation->expected_store_version
+                             != participant.expected_store_version)
+                        break;
+                }
+                if ((!representative
+                     && snapshot.store_version != participant.expected_store_version)
                     || snapshot.allocation.state != placement_allocation_state_t::active)
                     break;
                 store_write_request_t install{
@@ -1705,7 +1760,8 @@ provider_location_repository_t::prepare_aggregate_core (aggregate_prepare_reques
                 auto next = snapshot;
                 next.aggregate = authority_aggregate_codec::read (std::move (aggregate));
                 install.mutations.push_back (store_put_t{
-                  authority_key, encode_authority (next, snapshot.store_version), std::nullopt});
+                  authority_key, encode_authority (next, participant.expected_store_version),
+                  std::nullopt});
                 if (!std::holds_alternative<store_write_applied_t> (
                       co_await write_async (std::move (install)))) {
                     const auto aggregate_after = co_await _store.read (key);
@@ -1751,6 +1807,12 @@ provider_location_repository_t::prepare_aggregate_core (aggregate_prepare_reques
            version_condition (qualified->key, qualified->provider_version),
            owner_condition (target.owner)},
           {store_put_t{key, to_bytes (prepared.dump ()), std::nullopt}}};
+        if (fence.relocation_attempt) {
+            current_attempt = co_await aggregate_attempt_condition (fence, target);
+            if (!current_attempt)
+                co_return aggregate_prepare_conflict_t{};
+            publish.conditions.push_back (*current_attempt);
+        }
         capacity.append_to (publish);
         if (std::holds_alternative<store_write_applied_t> (
               co_await write_async (std::move (publish))))
@@ -1779,6 +1841,36 @@ provider_location_repository_t::prepare_aggregate_core (aggregate_prepare_reques
     co_return aggregate_prepare_conflict_t{};
 }
 
+task_t<std::optional<store_version_condition_t>>
+provider_location_repository_t::aggregate_attempt_condition (const aggregate_fence_t &fence,
+                                                             const object_creation_target_t &target)
+{
+    const auto &attempt = *fence.relocation_attempt;
+    const auto key = key_authority (attempt.representative.value);
+    const auto read = co_await _store.read (key);
+    const auto *row = std::get_if<store_found_t> (&read);
+    if (!row)
+        co_return std::nullopt;
+    const auto representative =
+      decode_authority (row->value.bytes, row->value.version, row->value.store_now);
+    if (!representative.aggregate || !representative.aggregate->relocation)
+        co_return std::nullopt;
+    const auto &relocation = *representative.aggregate->relocation;
+    if (relocation.phase != "prepared"
+        || relocation.relocation_id != aggregate_inventory::uuid (fence.aggregate_id))
+        co_return std::nullopt;
+    const auto &record =
+      representative.aggregate->encoded.at (location_record_fields::relocation).at ("target");
+    const authority_relocation_fence_t expected{
+      zlink::routing_id_t::from (std::string (target.node_rid.value ())).to_hex (),
+      target.node_lifecycle_generation, target.owner.owner_id,
+      static_cast<std::uint64_t> (target.owner.lease_generation)};
+    if (authority_aggregate_codec::read_fence (record) != expected
+        || authority_aggregate_codec::number (record, "attemptGeneration") != attempt.generation)
+        co_return std::nullopt;
+    co_return store_version_condition_t{key, row->value.version};
+}
+
 task_t<aggregate_commit_result_t>
 provider_location_repository_t::commit_aggregate (aggregate_fence_t fence,
                                                   std::stop_token cancellation)
@@ -1795,6 +1887,13 @@ provider_location_repository_t::commit_aggregate (aggregate_fence_t fence,
         if (!matches_aggregate_fence (record, fence))
             co_return aggregate_commit_result_t::stale;
         const auto state = record.at (location_record_fields::state).get<std::string> ();
+        const auto target = decode_aggregate_target (record);
+        std::optional<store_version_condition_t> attempt;
+        if (fence.relocation_attempt) {
+            attempt = co_await aggregate_attempt_condition (fence, target);
+            if (!attempt)
+                co_return aggregate_commit_result_t::stale;
+        }
         if (state == aggregate_status::committed)
             co_return aggregate_commit_result_t::already_committed;
         if (state != aggregate_status::prepared)
@@ -1805,15 +1904,14 @@ provider_location_repository_t::commit_aggregate (aggregate_fence_t fence,
             || participants->size ()
                  != record.at (location_record_fields::participantCount).get<std::size_t> ())
             co_return aggregate_commit_result_t::stale;
-        const auto target = decode_aggregate_target (record);
-        const auto descriptor = co_await read_target_descriptor_async (target);
-        bool target_live = false;
-        if (descriptor)
-            target_live = co_await owner_is_live_async (target.owner);
-        if (!target_live)
-            co_return aggregate_commit_result_t::stale;
+
         std::map<std::string, stored_target_t> descriptors;
-        descriptors.emplace (descriptor->key.value, *descriptor);
+        if (!attempt) {
+            const auto descriptor = co_await read_target_descriptor_async (target);
+            if (!descriptor || !co_await owner_is_live_async (target.owner))
+                co_return aggregate_commit_result_t::stale;
+            descriptors.emplace (descriptor->key.value, *descriptor);
+        }
         capacity_changes_t capacity;
         capacity.change (target, decode_bundle (record.at (location_record_fields::capacity)), -1,
                          1);
@@ -1831,20 +1929,27 @@ provider_location_repository_t::commit_aggregate (aggregate_fence_t fence,
                                               aggregate_inventory::entry (participant, index)))
                 co_return aggregate_commit_result_t::stale;
             const auto &source_target = snapshot.allocation.target;
-            const auto source = co_await read_target_descriptor_async (source_target, false, false);
-            if (source) {
-                auto [position, inserted] = descriptors.emplace (source->key.value, *source);
-                if (!inserted && position->second.provider_version != source->provider_version)
-                    co_return aggregate_commit_result_t::stale;
+            if (!attempt) {
+                const auto source =
+                  co_await read_target_descriptor_async (source_target, false, false);
+                if (source) {
+                    auto [position, inserted] = descriptors.emplace (source->key.value, *source);
+                    if (!inserted && position->second.provider_version != source->provider_version)
+                        co_return aggregate_commit_result_t::stale;
+                }
             }
             capacity.change (source_target, snapshot.allocation.capacity_bundle, 0, -1);
         }
         record[location_record_fields::state] = aggregate_status::committed;
-        store_write_request_t commit{
-          {version_condition (key, found->value.version), owner_condition (target.owner)},
-          {store_put_t{key, to_bytes (record.dump ()), std::nullopt}}};
-        for (const auto &[name, value] : descriptors)
-            commit.conditions.push_back (version_condition (value.key, value.provider_version));
+        store_write_request_t commit{{version_condition (key, found->value.version)},
+                                     {store_put_t{key, to_bytes (record.dump ()), std::nullopt}}};
+        if (attempt) {
+            commit.conditions.push_back (*attempt);
+        } else {
+            commit.conditions.push_back (owner_condition (target.owner));
+            for (const auto &[name, value] : descriptors)
+                commit.conditions.push_back (version_condition (value.key, value.provider_version));
+        }
         capacity.append_to (commit);
         if (!batch_fits (commit))
             co_return aggregate_commit_result_t::stale;
@@ -1871,13 +1976,21 @@ provider_location_repository_t::abort_aggregate (aggregate_fence_t fence,
     const auto state = record.at (location_record_fields::state).get<std::string> ();
     if (state == aggregate_status::aborted)
         co_return aggregate_abort_result_t::already_aborted;
+    const auto target = decode_aggregate_target (record);
+    std::optional<store_version_condition_t> attempt;
+    if (fence.relocation_attempt) {
+        attempt = co_await aggregate_attempt_condition (fence, target);
+        if (!attempt)
+            co_return aggregate_abort_result_t::stale;
+    }
     if (state != aggregate_status::preparing && state != aggregate_status::prepared)
         co_return aggregate_abort_result_t::stale;
     record[location_record_fields::state] = aggregate_status::aborted;
     store_write_request_t abort{{version_condition (key, found->value.version)},
                                 {store_put_t{key, to_bytes (record.dump ()), std::nullopt}}};
+    if (attempt)
+        abort.conditions.push_back (*attempt);
     if (state == aggregate_status::prepared) {
-        const auto target = decode_aggregate_target (record);
         capacity_changes_t capacity;
         capacity.change (target, decode_bundle (record.at (location_record_fields::capacity)), -1,
                          0);
@@ -1951,7 +2064,7 @@ provider_location_repository_t::remove_all_by_owner (location_owner_token_t owne
     } while (cursor);
     std::int64_t removed = 0;
     for (const auto &row : rows) {
-        const auto observed = co_await resolve_authority_async (store_found_t{row.value});
+        const auto observed = co_await resolve_authority_async (row.key, store_found_t{row.value});
         const auto &snapshot = observed.snapshot;
         if (!same_owner (snapshot.owner, owner))
             continue;
@@ -2147,7 +2260,8 @@ provider_location_repository_t::read_inventory (const aggregate_fence_t &fence,
 }
 
 task_t<provider_location_repository_t::resolved_authority_t>
-provider_location_repository_t::resolve_authority_async (const store_found_t &row)
+provider_location_repository_t::resolve_authority_async (const store_key_t &key,
+                                                         const store_found_t &row)
 {
     const auto record = parse_canonical_record (row.value.bytes, location_record_fields::authority);
     auto snapshot = decode_authority (record, row.value.version.value, row.value.store_now);
@@ -2163,10 +2277,17 @@ provider_location_repository_t::resolve_authority_async (const store_found_t &ro
     const auto generation =
       authority_aggregate_codec::number (aggregate, location_record_fields::aggregateGeneration);
     const auto suffix = aggregate_inventory::key_suffix (id, generation);
+    const auto reread_materialized = [&] () -> task_t<resolved_authority_t> {
+        const auto latest = co_await _store.read (key);
+        const auto *updated = std::get_if<store_found_t> (&latest);
+        if (!updated || updated->value.version.value == row.value.version.value)
+            authority_aggregate_codec::invalid_record ();
+        co_return co_await resolve_authority_async (key, *updated);
+    };
     const auto read = co_await _store.read (key_aggregate (suffix));
     const auto *found = std::get_if<store_found_t> (&read);
     if (!found)
-        authority_aggregate_codec::invalid_record ();
+        co_return co_await reread_materialized ();
     const auto state = parse_json (found->value.bytes);
     if (state.at (location_record_fields::aggregateId) != id
         || state.at (location_record_fields::aggregateGeneration) != std::to_string (generation))
@@ -2182,10 +2303,11 @@ provider_location_repository_t::resolve_authority_async (const store_found_t &ro
         const auto index = aggregate.at (location_record_fields::index).get<std::size_t> ();
         const auto payload = co_await _store.read (key_inventory_payload (suffix, index));
         const auto *stored = std::get_if<store_found_t> (&payload);
-        if (!stored
-            || aggregate_inventory::digest_hex (stored->value.bytes)
-                 != authority_aggregate_codec::text (
-                   aggregate, location_record_fields::authorityPayloadSha256))
+        if (!stored)
+            co_return co_await reread_materialized ();
+        if (aggregate_inventory::digest_hex (stored->value.bytes)
+            != authority_aggregate_codec::text (aggregate,
+                                                location_record_fields::authorityPayloadSha256))
             authority_aggregate_codec::invalid_record ();
         snapshot.payload = stored->value.bytes;
         const auto &transition =
@@ -3256,10 +3378,12 @@ bool provider_location_repository_t::same_fence (const object_reservation_fence_
 }
 
 task_t<authority_compare_exchange_result_t> provider_location_repository_t::authority_conflict (
-  store_read_result_t current, std::optional<framework_error_kind_t> membership_failure)
+  const store_key_t &key,
+  store_read_result_t current,
+  std::optional<framework_error_kind_t> membership_failure)
 {
     if (const auto *found = std::get_if<store_found_t> (&current)) {
-        auto observed = co_await resolve_authority_async (*found);
+        auto observed = co_await resolve_authority_async (key, *found);
         co_return authority_compare_exchange_result_t{
           authority_conflict_t{std::move (observed.snapshot), membership_failure}};
     }
@@ -3483,9 +3607,7 @@ provider_location_repository_t::capacity_still_available (const capacity_changes
 }
 
 task_t<authority_compare_exchange_result_t>
-provider_location_repository_t::publish_retarget (const authority_key_t &authority,
-                                                  const store_key_t &authority_key,
-                                                  const store_version_t &authority_version,
+provider_location_repository_t::publish_retarget (const store_key_t &authority_key,
                                                   authority_snapshot_t target,
                                                   const placement_allocation_t &source,
                                                   stored_target_t descriptor,
@@ -3494,123 +3616,40 @@ provider_location_repository_t::publish_retarget (const authority_key_t &authori
                                                   std::chrono::steady_clock::time_point deadline)
 {
     const auto &placement = target.allocation.target;
-    aggregate_prepare_request_t reservation;
-    reservation.aggregate_generation = target.object_generation;
-    reservation.participants.push_back (
-      {authority, authority_version.value, authority_generation_transition_t::new_owner, {}, {}});
-    reservation.target_descriptor = {placement.mesh_name, descriptor.descriptor.rid};
-    reservation.target_descriptor_lifecycle_generation = placement.node_lifecycle_generation;
-    reservation.target_owner = placement.owner;
-    reservation.capacity_bundle = source.capacity_bundle;
-    const auto inventory = aggregate_inventory::build_tree (reservation.participants);
-    // The source version identifies the attempt and fences its final write.
-    const auto digest = runtime::sha256 (
-      to_bytes (encode_aggregate (reservation, aggregate_status::prepared, inventory).dump ()));
-    std::copy_n (digest.begin (), reservation.aggregate_id.value.size (),
-                 reservation.aggregate_id.value.begin ());
-    const aggregate_fence_t fence{
-      reservation.aggregate_id, reservation.aggregate_generation,
-      inventory_digest_t{unhex_array<32> (
-        inventory.root.at (location_record_fields::digestSha256).get<std::string> ())}};
-    const auto row_key = key_aggregate (fence);
-    auto prepared = encode_aggregate (reservation, aggregate_status::prepared, inventory);
-    const auto prepared_bytes = to_bytes (prepared.dump ());
-    if (!co_await write_inventory (fence, reservation.participants, inventory))
-        co_return co_await authority_conflict (co_await _store.read (authority_key));
-    store_version_t version;
     for (;;) {
         if (cancellation.stop_requested ())
             co_return co_await cancelled<authority_compare_exchange_result_t> ();
-        const auto current = co_await _store.read (row_key);
-        if (const auto *found = std::get_if<store_found_t> (&current)) {
-            if (found->value.bytes != prepared_bytes)
-                co_return co_await authority_conflict (co_await _store.read (authority_key));
-            version = found->value.version;
-            break;
-        }
-        store_write_request_t reserve{
-          {missing_condition (row_key), version_condition (authority_key, authority_version),
-           version_condition (descriptor.key, descriptor.provider_version),
-           owner_condition (placement.owner)},
-          {store_put_t{row_key, prepared_bytes, std::nullopt}}};
         capacity_changes_t capacity;
         if (!capacity.reserve (placement, source.capacity_bundle, descriptor.descriptor))
-            co_return co_await authority_conflict (co_await _store.read (authority_key));
-        capacity.append_to (reserve);
-        const auto result =
-          co_await write_async (std::move (reserve), nullptr, {}, "compare_exchange", deadline);
-        if (const auto *applied = std::get_if<store_write_applied_t> (&result)) {
-            version = {version_of (*applied, row_key)};
-            break;
-        }
-        if (!matches_store_version (co_await _store.read (row_key), std::nullopt))
-            continue;
-        const auto current_authority = co_await _store.read (authority_key);
-        if (!matches_store_version (current_authority, authority_version))
-            co_return co_await authority_conflict (current_authority);
-        auto qualified = co_await read_target_descriptor_async (placement);
-        if (!qualified
-            || !target_accepts (qualified->descriptor, source.object_kind, source.stable_type))
-            co_return co_await authority_conflict (current_authority);
-        if (qualified->provider_version == descriptor.provider_version) {
-            const auto available = co_await capacity_still_available (capacity);
-            if (!available)
-                co_return co_await authority_conflict (current_authority);
-        }
-        descriptor = std::move (*qualified);
-    }
-
-    prepared[location_record_fields::state] = aggregate_status::committed;
-    commit.conditions.push_back (version_condition (row_key, version));
-    commit.mutations.push_back (store_put_t{row_key, to_bytes (prepared.dump ()), std::nullopt});
-    capacity_changes_t capacity;
-    capacity.change (source.target, source.capacity_bundle, 0, -1);
-    capacity.change (placement, source.capacity_bundle, -1, 1);
-    capacity.append_to (commit);
-    for (;;) {
-        const auto qualified = co_await read_target_descriptor_async (placement, false);
-        if (!qualified || cancellation.stop_requested ()) {
-            (void) co_await abort_aggregate (fence);
-            co_return co_await authority_conflict (co_await _store.read (authority_key));
-        }
+            co_return co_await authority_conflict (authority_key,
+                                                   co_await _store.read (authority_key));
+        // Admission and the active capacity transfer share the authority CAS.
+        capacity.change (source.target, source.capacity_bundle, 0, -1);
+        capacity.change (placement, source.capacity_bundle, -1, 1);
         auto attempt = commit;
         attempt.conditions.push_back (
-          version_condition (qualified->key, qualified->provider_version));
-        const auto written = co_await await_result (
-          write_async (std::move (attempt), nullptr, {}, "compare_exchange", deadline));
-        if (const auto *applied =
-              written ? std::get_if<store_write_applied_t> (&written.value ()) : nullptr) {
+          version_condition (descriptor.key, descriptor.provider_version));
+        capacity.append_to (attempt);
+        const auto written =
+          co_await write_async (std::move (attempt), nullptr, {}, "compare_exchange", deadline);
+        if (const auto *applied = std::get_if<store_write_applied_t> (&written)) {
             target.store_now = applied->store_now;
             target.store_version = version_of (*applied, authority_key);
             co_return authority_compare_exchange_result_t{authority_stored_t{std::move (target)}};
         }
-        const auto durable = co_await _store.read (row_key);
-        const auto current = co_await _store.read (authority_key);
-        // A lost reply is resolved by the reservation's committed state
-        // and the target authority, independently of the shared counters.
-        if (matches_store_version (durable, version)) {
-            if (written && matches_store_version (current, authority_version)) {
-                const auto unchanged = co_await retarget_fences_unchanged (commit.conditions);
-                if (unchanged)
-                    continue;
-            }
-            (void) co_await abort_aggregate (fence);
-        } else if (const auto *stored = std::get_if<store_found_t> (&current);
-                   stored && stored->value.bytes == encode_authority (target)) {
-            const auto *record = std::get_if<store_found_t> (&durable);
-            if (record
-                && parse_json (record->value.bytes).value (location_record_fields::state, "")
-                     == aggregate_status::committed) {
-                target.store_version = stored->value.version.value;
-                target.store_now = stored->value.store_now;
-                co_return authority_compare_exchange_result_t{
-                  authority_stored_t{std::move (target)}};
-            }
-        }
-        if (!written)
-            co_return detail::result_access_t::failure<authority_compare_exchange_result_t> (
-              written.exception ());
-        co_return co_await authority_conflict (current);
+        if (!co_await retarget_fences_unchanged (commit.conditions))
+            co_return co_await authority_conflict (authority_key,
+                                                   co_await _store.read (authority_key));
+        auto refreshed = co_await read_target_descriptor_async (placement);
+        if (!refreshed
+            || !target_accepts (refreshed->descriptor, source.object_kind, source.stable_type))
+            co_return co_await authority_conflict (authority_key,
+                                                   co_await _store.read (authority_key));
+        if (refreshed->provider_version == descriptor.provider_version
+            && !co_await capacity_still_available (capacity))
+            co_return co_await authority_conflict (authority_key,
+                                                   co_await _store.read (authority_key));
+        descriptor = std::move (*refreshed);
     }
 }
 
@@ -3653,9 +3692,10 @@ bool provider_location_repository_t::batch_fits (const store_write_request_t &re
 task_t<authority_read_result_t>
 provider_location_repository_t::read_authority_value_async (std::string key)
 {
-    auto current = co_await _store.read (key_authority (key));
+    const auto row_key = key_authority (key);
+    auto current = co_await _store.read (row_key);
     if (const auto *found = std::get_if<store_found_t> (&current)) {
-        auto observed = co_await resolve_authority_async (*found);
+        auto observed = co_await resolve_authority_async (row_key, *found);
         co_return authority_read_result_t{std::move (observed.snapshot)};
     }
     co_return authority_read_result_t{

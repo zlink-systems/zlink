@@ -178,7 +178,7 @@ TEST (AuthorityAggregateRelocation, DISABLED_SpotWideSourceSealMatchesGolden)
             const auto *found = std::get_if<store_found_t> (&value);
             ASSERT_NE (found, nullptr);
             EXPECT_EQ (zlink::framework::detail::encode_hex (found->value.bytes),
-                       record.at (std::string (kind) + "Hex"));
+                       record.at (std::string (kind) + "Hex").get<std::string> ());
             EXPECT_EQ (entries.at (index).at (std::string (kind) + "Sha256"),
                        record.at (std::string (kind) + "Sha256"));
         }
