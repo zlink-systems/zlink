@@ -82,7 +82,7 @@ internal static class PerfMultiPubSubServer
             {
                 int waitMs = schedule.WaitMilliseconds(nowNs, endNs);
                 if (waitMs > 0)
-                    Thread.Sleep(waitMs);
+                    schedule.Sleep(waitMs);
                 continue;
             }
             using Message message = Message.Allocate(payloadSize);
@@ -110,8 +110,6 @@ internal static class PerfMultiPubSubServer
             caughtUpNs != 0
                 ? (caughtUpNs - schedule.EpochNs) / 1_000_000_000.0
                 : -1.0);
-        if (schedule.LateCount > 0)
-            WriteStdoutLine($"REFERENCE,dotnet,PUBSUB,{options.Transport},{size},sender_late,{schedule.LateCount}");
         return 0;
     }
 

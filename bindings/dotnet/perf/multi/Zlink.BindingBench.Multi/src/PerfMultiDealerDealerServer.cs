@@ -95,7 +95,7 @@ internal static class PerfMultiDealerDealerServer
         long pacedReceived = 0;
         if (!ReceiveActiveWindow(server, received, msgSize,
                 expectedRunId, PerfPhase.Latency, latSamples,
-                ref pacedReceived, latencyDurationSeconds + 0.5,
+                ref pacedReceived, latencyDurationSeconds + MultiSettleNs / 1_000_000_000.0,
                 clientCount, controlState))
             return (0.0, 0.0, 0.0, 0.0, 0, 0, 0);
 
@@ -120,7 +120,7 @@ internal static class PerfMultiDealerDealerServer
         long activeDeadlineTicks = Stopwatch.GetTimestamp()
             + (long)(Math.Max(0.5, durationSeconds) * Stopwatch.Frequency);
         if (expectedPhase == PerfPhase.Latency)
-            latSamples.PacedSampleStartNs = EpochNs() + 500_000_000UL;
+            latSamples.PacedSampleStartNs = EpochNs() + MultiSettleNs;
         poller.Add(server, PollEventFlags.PollIn, ServerSocketTag);
         poller.Add(activeTimer, ActiveDeadlineTag);
         activeTimer.Start(TimeSpan.FromSeconds(Math.Max(0.5, durationSeconds)),

@@ -6,7 +6,7 @@ using static PerfRunner;
 
 internal static class PerfMultiDealerDealerClient
 {
-    internal static async Task<int> Run(PerfOptions options)
+    internal static int Run(PerfOptions options)
     {
         int size = Math.Max(1, options.Size);
         int rcvTimeoutMs = ResolveMultiRcvTimeoutMs(options);
@@ -66,9 +66,9 @@ internal static class PerfMultiDealerDealerClient
                 return controlState.StopRequested ? 0 : 2;
             }
 
-            if (!await RunSendPhaseAsync(pollManager, activeClients, size,
+            if (!RunSendPhase(pollManager, activeClients, size,
                     durationSeconds, latencyDurationSeconds, readyTimeoutMs,
-                    controlState).ConfigureAwait(false))
+                    controlState))
                 return 2;
 
             WriteStdoutLine($"CLIENT_DONE,{size}");
@@ -81,52 +81,17 @@ internal static class PerfMultiDealerDealerClient
         }
     }
 
-    private static async Task<bool> RunSendPhaseAsync(PollManager pollManager, List<ISocket> activeClients, int msgSize,
+    private static bool RunSendPhase(PollManager pollManager, List<ISocket> activeClients, int msgSize,
         int durationSeconds, int latencyDurationSeconds, int readyTimeoutMs,
         RunnerControlState controlState)
     {
-        const uint runId = 1;
         long seq = 0;
-        long sent = 0;
-        int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);
-        long activeDeadlineTicks = Stopwatch.GetTimestamp()
-            + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
-
-        async Task SendLoopAsync(IDealerSocket socket)
-        {
-            while (!controlState.StopRequested
-                   && Stopwatch.GetTimestamp() < activeDeadlineTicks)
-            {
-                using Message message = Message.Allocate(payloadSize);
-                ulong currentSeq = unchecked((ulong)Interlocked.Increment(ref seq));
-                StampMetricHeader(message.AsSpan(), runId,
-                    PerfPhase.Active, msgSize, currentSeq, EpochNs());
-                SendSubmission submission = PerfSocketIo.SendMeasurementAsync(
-                    socket, message, SendFlags.None);
-                if (submission.Result == SubmitResult.Backpressured)
-                    await submission.Admitted.ConfigureAwait(false);
-                if (Stopwatch.GetTimestamp() < activeDeadlineTicks)
-                    Interlocked.Increment(ref sent);
-            }
-        }
-
-        var completionMasks = new PollEventFlags[activeClients.Count];
-        Array.Fill(completionMasks, PollEventFlags.PollCompletion);
-        // Transfer every socket to one public completion owner before any
-        // async send can encounter backpressure.
-        _ = PollSocketEvents(pollManager, activeClients,
-            completionMasks, 0);
-
-        var sendTasks = new Task[activeClients.Count];
-        for (int i = 0; i < activeClients.Count; i++)
-            sendTasks[i] = SendLoopAsync((IDealerSocket)activeClients[i]);
-        Task allSends = Task.WhenAll(sendTasks);
-        while (!allSends.IsCompleted)
-        {
-            _ = PollSocketEvents(pollManager, activeClients,
-                completionMasks, 50);
-        }
-        await allSends.ConfigureAwait(false);
+        _ = pollManager.PollSockets(activeClients,
+            PollEventFlags.PollCompletion, 0);
+        ulong activeEndNs = EpochNs() + (ulong)durationSeconds * 1_000_000_000UL;
+        Func<bool> stopRequested = () => controlState.StopRequested;
+        long sent = RunSendWindow(pollManager, activeClients, msgSize,
+            latencyDurationSeconds, null, activeEndNs, stopRequested, ref seq);
 
         // PERF_MULTI_TEST_POLICY § 1.3.1 / C
         // perf_multi_dealer_dealer_client.cpp sends one blocking wire-level
@@ -139,7 +104,7 @@ internal static class PerfMultiDealerDealerClient
                 return false;
         }
 
-        if (Volatile.Read(ref sent) <= 0
+        if (sent <= 0
             || !controlState.WaitForPhase("PHASE_PACED", readyTimeoutMs,
                 out long activeReceived)
             || activeReceived <= 0)
@@ -147,11 +112,9 @@ internal static class PerfMultiDealerDealerClient
 
         var schedule = new MultiPacedSchedule(
             MultiTargetRate(activeReceived, durationSeconds));
-        ulong endNs = schedule.EpochNs + (ulong)latencyDurationSeconds
-            * 1_000_000_000UL + 500_000_000UL;
-        RunPacedWindow(pollManager, activeClients, msgSize,
-            latencyDurationSeconds, schedule, endNs,
-            () => controlState.StopRequested, ref seq);
+        RunSendWindow(pollManager, activeClients, msgSize,
+            latencyDurationSeconds, schedule, schedule.EndNs(latencyDurationSeconds),
+            stopRequested, ref seq);
         for (int i = 0; i < activeClients.Count; i++)
         {
             if (!SendStopTokenBlocking((IDealerSocket)activeClients[i],
@@ -168,28 +131,41 @@ internal static class PerfMultiDealerDealerClient
         return true;
     }
 
-    internal static void RunPacedWindow(PollManager pollManager,
+    internal static long RunSendWindow(PollManager pollManager,
         List<ISocket> sockets, int msgSize, int latencyDurationSeconds,
-        MultiPacedSchedule schedule, ulong endNs, Func<bool> stopRequested,
+        MultiPacedSchedule? schedule, ulong endNs, Func<bool> stopRequested,
         ref long seq)
     {
         const uint runId = 1;
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);
         var admissions = new (Task? Admission, ulong DueNs)[sockets.Count];
         int pending = 0;
-        int next = 0;
+        long accepted = 0;
+        var rotation = new MultiSenderRotation(sockets.Count);
 
-        void ProgressAdmissions(int waitMs)
+        void RecordAccepted(ulong nowNs, ulong dueNs)
         {
+            schedule?.Accepted(nowNs, dueNs);
+            if (nowNs < endNs)
+                accepted++;
+        }
+
+        void ProgressAdmissions(int waitMs, bool measureWait = true)
+        {
+            long waitStart = measureWait && waitMs > 0 && schedule != null
+                ? Stopwatch.GetTimestamp() : 0;
             _ = pollManager.PollSockets(sockets,
                 PollEventFlags.PollCompletion, waitMs);
+            if (waitStart != 0)
+                schedule!.RecordPollWait(waitMs, waitStart);
+
             for (int i = 0; i < admissions.Length; i++)
             {
                 var (admission, dueNs) = admissions[i];
                 if (admission is not { IsCompleted: true })
                     continue;
                 admission.GetAwaiter().GetResult();
-                schedule.Accepted(EpochNs(), dueNs);
+                RecordAccepted(EpochNs(), dueNs);
                 admissions[i] = default;
                 pending--;
             }
@@ -198,53 +174,58 @@ internal static class PerfMultiDealerDealerClient
         ulong nowNs = EpochNs();
         while (!stopRequested() && nowNs < endNs)
         {
-            for (int i = 0; i < sockets.Count && pending < sockets.Count
-                 && nowNs < endNs && schedule.Due(nowNs) && !stopRequested(); i++)
+            bool submitted = false;
+            for (int visited = 0; visited < sockets.Count && pending < sockets.Count
+                 && nowNs < endNs && (schedule == null || schedule.Due(nowNs))
+                 && !stopRequested();)
             {
-                int index = next;
-                next = (next + 1) % sockets.Count;
+                int index = rotation.Index;
                 if (admissions[index].Admission != null)
-                    continue;
-
-                // During catch-up, reuse this socket until the next slot
-                // is in the future or its admission has to wait.
-                do
                 {
-                    using Message message = Message.Allocate(payloadSize);
-                    StampMetricHeader(message.AsSpan(), runId,
-                        MultiLatencySample(nowNs, schedule.EpochNs,
+                    rotation.Advance();
+                    visited++;
+                    continue;
+                }
+
+                using Message message = Message.Allocate(payloadSize);
+                StampMetricHeader(message.AsSpan(), runId,
+                    schedule == null ? PerfPhase.Active
+                        : MultiLatencySample(nowNs, schedule.EpochNs,
                             latencyDurationSeconds)
                             ? PerfPhase.Latency : PerfPhase.Warmup,
-                        msgSize, unchecked((ulong)++seq), nowNs);
-                    SendSubmission submission = PerfSocketIo.SendMeasurementAsync(
-                        (IDealerSocket)sockets[index], message, SendFlags.None);
-                    ulong dueNs = schedule.Submitted();
-                    nowNs = EpochNs();
-                    if (submission.Result == SubmitResult.Backpressured)
-                    {
-                        admissions[index] = (submission.Admitted, dueNs);
-                        pending++;
-                        break;
-                    }
-                    schedule.Accepted(nowNs, dueNs);
-                } while (nowNs < endNs && schedule.Due(nowNs) && !stopRequested());
+                    msgSize, unchecked((ulong)++seq), nowNs);
+                SendSubmission submission = PerfSocketIo.SendMeasurementAsync(
+                    (IDealerSocket)sockets[index], message, SendFlags.None);
+                ulong dueNs = schedule?.Submitted() ?? 0;
+                nowNs = EpochNs();
+                if (submission.Result == SubmitResult.Backpressured)
+                {
+                    admissions[index] = (submission.Admitted, dueNs);
+                    pending++;
+                    rotation.Advance();
+                    visited++;
+                    continue;
+                }
+
+                submitted = true;
+                RecordAccepted(nowNs, dueNs);
+                if (rotation.Accepted())
+                    visited++;
             }
 
-            // A single loop checks the clock even during sub-ms waits.
-            // Pending admission tasks are progressed by the public poller.
-            int waitMs = pending == sockets.Count
-                ? MultiPacedSchedule.MillisecondsUntil(nowNs, endNs)
-                : schedule.WaitMilliseconds(nowNs, endNs);
+            int waitMs = schedule?.PollWaitMilliseconds(nowNs, endNs, pending == sockets.Count)
+                ?? (submitted ? 0 : MultiPacedSchedule.MillisecondsUntil(nowNs, endNs));
             if (pending > 0)
                 ProgressAdmissions(waitMs);
             else if (waitMs > 0)
-                Thread.Sleep(waitMs);
+                schedule!.Sleep(waitMs);
 
             nowNs = EpochNs();
         }
 
         while (pending > 0)
-            ProgressAdmissions(50);
+            ProgressAdmissions(50, measureWait: false);
+        return accepted;
     }
 
     // Mirrors C send_stop_token(): blocking send with retry through

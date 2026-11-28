@@ -2256,7 +2256,9 @@ import sys
 for filename in sys.argv[1:]:
     for line in pathlib.Path(filename).read_text(
             encoding="utf-8", errors="replace").splitlines():
-        if line.startswith(("BENCH_DIAG,", "PACED_DIAG,", "REFERENCE,")):
+        if line.startswith(("BENCH_DIAG,", "PACED_DIAG,", "REFERENCE,",
+                            "PUBSUB_CATCHUP_PROGRESS,", "PUBSUB_CATCHUP_DIAG,",
+                            "PUBSUB_LATENCY_DIAG,")):
             print(line)
 PY
 )

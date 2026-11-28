@@ -243,9 +243,8 @@ internal static class PerfMultiSocketReqRep
         long sampleSeen = 0;
         double sampleSum = 0.0;
         uint rng = 0xA341316Cu;
-        long deadlineTicks = Stopwatch.GetTimestamp() + (long)(
-            (schedule == null ? durationSeconds : latencySeconds + 0.5)
-            * Stopwatch.Frequency);
+        long deadlineTicks = schedule?.EndTicks(latencySeconds)
+            ?? Stopwatch.GetTimestamp() + durationSeconds * Stopwatch.Frequency;
         ulong deadlineNs = EpochNsFromTimestamp(deadlineTicks);
         TimeSpan requestTimeout = ResolveReqRepTimeout();
         using var completionPoller = Zlink.CreatePoller();
@@ -398,11 +397,10 @@ internal static class PerfMultiSocketReqRep
         // Submit once per socket per turn, then explicitly progress both
         // admission and reply completions. This preserves continuous load
         // without letting one socket starve the completion owner.
-        int roundStart = 0;
+        var rotation = new MultiSenderRotation(slots.Count);
         while (Stopwatch.GetTimestamp() < deadlineTicks && !HasCompletionError())
         {
             bool submittedAny = false;
-            int start = roundStart;
             int attempts = 0;
             for (; attempts < slots.Count; attempts++)
             {
@@ -412,8 +410,8 @@ internal static class PerfMultiSocketReqRep
                     if (nowNs >= deadlineNs || !schedule.Due(nowNs))
                         break;
                 }
-                ClientSlot slot = schedule == null ? slots[attempts]
-                    : slots[(start + attempts) % slots.Count];
+                ClientSlot slot = slots[rotation.Index];
+                rotation.Advance();
                 if (slot.AdmissionPending)
                     continue;
                 try
@@ -434,18 +432,16 @@ internal static class PerfMultiSocketReqRep
                 }
             }
 
-            if (schedule != null && slots.Count > 0)
-                roundStart = (start + 1) % slots.Count;
-
-            int waitMs = 0;
-            if (!submittedAny)
-            {
-                waitMs = schedule != null && attempts < slots.Count
-                    ? schedule.WaitMilliseconds(EpochNs(), deadlineNs)
-                    : RemainingPollTimeoutMs(deadlineTicks);
-            }
+            ulong pollNowNs = EpochNs();
+            int waitMs = submittedAny ? 0
+                : schedule?.PollWaitMilliseconds(pollNowNs, deadlineNs, attempts == slots.Count)
+                    ?? MultiPacedSchedule.MillisecondsUntil(pollNowNs, deadlineNs);
+            long waitStart = waitMs > 0 && schedule != null
+                ? Stopwatch.GetTimestamp() : 0;
             _ = completionPoller.Wait(completionEvents,
                 TimeSpan.FromMilliseconds(waitMs));
+            if (waitStart != 0)
+                schedule!.RecordPollWait(waitMs, waitStart);
         }
 
         long drainDeadline = Stopwatch.GetTimestamp()

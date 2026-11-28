@@ -11,6 +11,43 @@ internal static partial class PerfRunner
     internal static readonly byte[] MultiStopToken = StopToken.Bytes;
 
     internal const int MaxStreamFrameBytes = 16 * 1024 * 1024;
+    internal const int MaxBurstPerSender = 64;
+    internal const ulong MultiSettleNs = 500_000_000UL;
+
+    internal struct MultiSenderRotation(int senderCount)
+    {
+        private int _accepted;
+        internal int Index { get; private set; }
+
+        internal void Advance()
+        {
+            if (++Index == senderCount)
+                Index = 0;
+            _accepted = 0;
+        }
+
+        internal bool Accepted()
+        {
+            if (++_accepted < MaxBurstPerSender)
+                return false;
+            Advance();
+            return true;
+        }
+    }
+
+    internal sealed class MultiPacedReplyTurn(Action submitDue)
+    {
+        private int _received;
+
+        internal void Received()
+        {
+            if (++_received == MaxBurstPerSender)
+            {
+                _received = 0;
+                submitDue();
+            }
+        }
+    }
 
     internal enum PerfPhase : byte
     {
@@ -52,34 +89,49 @@ internal static partial class PerfRunner
     internal static bool MultiLatencySample(ulong sentNs, ulong epochNs,
         int latencySeconds)
     {
-        ulong start = epochNs + 500_000_000UL;
+        ulong start = epochNs + MultiSettleNs;
         return sentNs >= start
             && sentNs < start + (ulong)latencySeconds * 1_000_000_000UL;
     }
 
     internal sealed class MultiPacedSchedule
     {
-        private const ulong RecheckBelowMs = 1;
         private const ulong MaxWaitMs = 50;
         private const ulong NsPerMs = 1_000_000UL;
 
         internal readonly double Rate;
         internal readonly ulong EpochNs;
+        private readonly long _epochTicks;
         private long _submittedCount;
+        private long _late1To2, _late2To5, _late5To15, _lateOver15;
+        private WaitStats _sleepWaits, _pollWaits;
 
         internal long AcceptedCount { get; private set; }
-        internal long LateCount { get; private set; }
+        internal long LateCount => _late1To2 + _late2To5 + _late5To15 + _lateOver15;
 
         internal MultiPacedSchedule(double rate)
         {
             Rate = rate;
-            EpochNs = PerfShared.EpochNs();
+            _epochTicks = Stopwatch.GetTimestamp();
+            EpochNs = PerfShared.EpochNsFromTimestamp(_epochTicks);
         }
 
         private ulong NextNs => EpochNs + (Rate > 0.0
             ? (ulong)(_submittedCount * 1_000_000_000.0 / Rate) : 0);
 
         internal bool Due(ulong nowNs) => Rate > 0.0 && nowNs >= NextNs;
+
+        internal ulong EndNs(int latencySeconds)
+            => PerfShared.EpochNsFromTimestamp(EndTicks(latencySeconds));
+
+        internal long EndTicks(int latencySeconds)
+            => _epochTicks + latencySeconds * Stopwatch.Frequency
+                + (long)MultiSettleNs * Stopwatch.Frequency / 1_000_000_000L;
+
+        internal int PollWaitMilliseconds(ulong nowNs, ulong endNs, bool allBlocked)
+            => allBlocked && Due(nowNs)
+                ? MillisecondsUntil(nowNs, endNs)
+                : WaitMilliseconds(nowNs, endNs);
 
         internal int WaitMilliseconds(ulong nowNs, ulong endNs)
             => MillisecondsUntil(nowNs, Math.Min(endNs, NextNs));
@@ -91,7 +143,7 @@ internal static partial class PerfRunner
 
             // Floor to ms and cap at 50 ms. Under 1 ms, recheck now.
             ulong ms = (deadlineNs - nowNs) / NsPerMs;
-            return ms < RecheckBelowMs ? 0 : (int)Math.Min(ms, MaxWaitMs);
+            return (int)Math.Min(ms, MaxWaitMs);
         }
 
         // The submit loop owns the sequence. Completion order can differ
@@ -105,9 +157,54 @@ internal static partial class PerfRunner
 
         internal void Accepted(ulong nowNs, ulong dueNs)
         {
-            if (nowNs > dueNs && nowNs - dueNs > 1_000_000UL)
-                LateCount++;
             AcceptedCount++;
+            if (nowNs <= dueNs)
+                return;
+            ulong lateNs = nowNs - dueNs;
+            if (lateNs > 15 * NsPerMs)
+                _lateOver15++;
+            else if (lateNs > 5 * NsPerMs)
+                _late5To15++;
+            else if (lateNs > 2 * NsPerMs)
+                _late2To5++;
+            else if (lateNs > NsPerMs)
+                _late1To2++;
+        }
+
+        internal void Sleep(int requestedMs)
+        {
+            long start = Stopwatch.GetTimestamp();
+            Thread.Sleep(requestedMs);
+            _sleepWaits.Record(requestedMs, Stopwatch.GetTimestamp() - start);
+        }
+
+        internal void RecordPollWait(int requestedMs, long startTicks)
+            => _pollWaits.Record(requestedMs, Stopwatch.GetTimestamp() - startTicks);
+
+        internal void PrintTimingDiag(string pattern, int msgSize)
+        {
+            WriteStdoutLine(FormattableString.Invariant($"PACED_DIAG,{pattern},{msgSize},late_1_to_2ms,{_late1To2},late_2_to_5ms,{_late2To5},late_5_to_15ms,{_late5To15},late_gt_15ms,{_lateOver15}"));
+            _sleepWaits.Print(pattern, msgSize, "sleep");
+            _pollWaits.Print(pattern, msgSize, "poll");
+        }
+
+        private struct WaitStats
+        {
+            private long _count, _requestedMs, _elapsedTicks, _maxElapsedTicks;
+
+            internal void Record(int requestedMs, long elapsedTicks)
+            {
+                _count++;
+                _requestedMs += requestedMs;
+                _elapsedTicks += elapsedTicks;
+                _maxElapsedTicks = Math.Max(_maxElapsedTicks, elapsedTicks);
+            }
+
+            internal readonly void Print(string pattern, int msgSize, string kind)
+            {
+                double ticksToMs = 1000.0 / Stopwatch.Frequency;
+                WriteStdoutLine(FormattableString.Invariant($"PACED_DIAG,{pattern},{msgSize},wait_kind,{kind},wait_count,{_count},requested_ms_total,{_requestedMs},elapsed_ms_total,{_elapsedTicks * ticksToMs:F3},elapsed_ms_max,{_maxElapsedTicks * ticksToMs:F3}"));
+            }
         }
     }
 
@@ -117,6 +214,7 @@ internal static partial class PerfRunner
         double catchUpSeconds = -1.0)
     {
         WriteStdoutLine(FormattableString.Invariant($"BENCH_DIAG,{pattern},{msgSize},active_sender_rate,{activeSends / (double)activeSeconds:G12},target_sender_rate,{schedule.Rate:G12},latency_sends,{schedule.AcceptedCount},late_sends_gt_1ms,{schedule.LateCount},received_rate,{activeReceived / (double)activeSeconds:G12},paced_received_rate,{pacedReceivedRate:G12},caught_up,{(caughtUp ? "yes" : "no")},catch_up_seconds,{catchUpSeconds:G12}"));
+        schedule.PrintTimingDiag(pattern, msgSize);
     }
 
     internal static int ResolveMultiSndTimeoutMs(PerfOptions options)

@@ -3,6 +3,11 @@
 using Systems.Zlink;
 using static PerfRunner;
 
+CheckRotation();
+CheckReplyTurn();
+CheckCatchUp();
+CheckSchedule();
+
 const int Size = 64;
 const int ExpectedHealthy = 4;
 var testTimeout = TimeSpan.FromSeconds(1);
@@ -75,7 +80,7 @@ var schedule = new MultiPacedSchedule(20_000);
 long seq = 0;
 try
 {
-    PerfMultiDealerDealerClient.RunPacedWindow(poller, senders,
+    PerfMultiDealerDealerClient.RunSendWindow(poller, senders,
         Size, 1, schedule, schedule.EpochNs + 250_000_000, () => false, ref seq);
 }
 finally
@@ -106,3 +111,77 @@ void Connect(IDealerSocket sender, IDealerSocket receiver, string endpoint, ulon
 bool Receive(IDealerSocket socket, Received message)
     => SpinWait.SpinUntil(() => socket.Recv(message, RecvFlags.DontWait),
         testTimeout);
+
+static void CheckRotation()
+{
+    var rotation = new MultiSenderRotation(3);
+    for (int sender = 0; sender < 3; sender++)
+    {
+        for (int send = 1; send <= 64; send++)
+        {
+            Require(rotation.Index == sender, "rotation left the sender early");
+            Require(rotation.Accepted() == (send == 64), "rotation did not yield at 64");
+        }
+    }
+
+    Require(rotation.Index == 0, "rotation did not wrap");
+    _ = rotation.Accepted();
+    rotation.Advance();
+    for (int send = 1; send < 64; send++)
+        Require(!rotation.Accepted(), "rotation carried a blocked sender's count forward");
+    Require(rotation.Accepted() && rotation.Index == 2, "rotation did not reset on yield");
+    Console.WriteLine("PASS 1 sender rotation at 64, wrap, and blocked yield");
+}
+
+static void CheckReplyTurn()
+{
+    int submissions = 0;
+    var turn = new MultiPacedReplyTurn(() => submissions++);
+    for (int reply = 1; reply <= 129; reply++)
+    {
+        turn.Received();
+        Require(submissions == reply / 64, "paced submission did not run at the reply boundary");
+    }
+    Console.WriteLine("PASS 4 paced submission on replies 64 and 128");
+}
+
+static void CheckCatchUp()
+{
+    const ulong start = 1_000_000_000;
+    var tracker = new PerfMultiPubSubClient.CatchUpTracker(2);
+    Require(!tracker.Observe(start, [90, 100], 100), "initial observation caught up");
+    Require(!tracker.Observe(start + 500_000_000, [150, 140], 150),
+        "a change in the slowest subscriber concealed its deficit");
+    Require(tracker.Observe(start + 1_000_000_000, [199, 190], 200),
+        "one message of observation quantization blocked catch-up");
+
+    tracker = new PerfMultiPubSubClient.CatchUpTracker(2);
+    Require(!tracker.Observe(start, [90, 100], 100), "initial observation caught up");
+    Require(!tracker.Observe(start + 200_000_000, [100, 140], 120),
+        "in-flight growth caught up");
+    Require(!tracker.Observe(start + 500_000_000, [140, 160], 150),
+        "window was not restarted after in-flight growth");
+    Require(tracker.Observe(start + 700_000_000, [150, 190], 170)
+        && tracker.WindowStartInFlight == 20, "stable nonzero in-flight did not catch up");
+    Console.WriteLine("PASS 5 lagging subscriber, in-flight restart, and one-message tolerance");
+}
+
+static void CheckSchedule()
+{
+    var schedule = new MultiPacedSchedule(100);
+    ulong epoch = schedule.EpochNs;
+    Require(schedule.Due(epoch) && schedule.Submitted() == epoch, "initial send missed the epoch");
+    ulong next = epoch + 10_000_000;
+    Require(!schedule.Due(next - 1) && schedule.Due(next), "shared interval drifted");
+    Require(schedule.WaitMilliseconds(epoch + 8_000_001, next) == 1, "wait was not floored");
+    Require(schedule.WaitMilliseconds(epoch + 9_000_001, next) == 0, "sub-ms wait did not recheck");
+    Require(MultiPacedSchedule.MillisecondsUntil(epoch, epoch + 51_000_000) == 50,
+        "wait exceeded 50 ms");
+    Console.WriteLine("PASS 2/3 shared epoch and wait rounding");
+}
+
+static void Require(bool condition, string message)
+{
+    if (!condition)
+        throw new InvalidOperationException(message);
+}

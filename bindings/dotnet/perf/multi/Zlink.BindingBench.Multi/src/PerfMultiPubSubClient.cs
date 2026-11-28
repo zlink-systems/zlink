@@ -73,9 +73,12 @@ internal static class PerfMultiPubSubClient
                 return 2;
 
             if (result.caughtUp && result.latencyCount > 0)
+            {
                 PrintResult(options.Pattern, options.Transport, size,
                     result.throughput, result.latencyNs,
                     result.latencyP95Ns, result.latencyP99Ns);
+                WriteStdoutLine(FormattableString.Invariant($"PUBSUB_LATENCY_DIAG,{size},latency_p50_ms,{result.latencyP50Ns / 1_000_000.0:F6}"));
+            }
             else
             {
                 string prefix = $"dotnet,PUBSUB,{options.Transport},{size}";
@@ -101,7 +104,7 @@ internal static class PerfMultiPubSubClient
 
     private static (double throughput, double latencyNs, double latencyP95Ns,
         double latencyP99Ns, long measureCount, long latencyCount,
-        long pacedReceived, bool caughtUp, double referenceP50,
+        long pacedReceived, bool caughtUp, double latencyP50Ns, double referenceP50,
         double referenceP99, long inflightFloor, double targetRate)
         RunMultiPubSubClientLoop(PollManager pollManager,
             List<ISocket> activeClients, int msgSize,
@@ -123,8 +126,7 @@ internal static class PerfMultiPubSubClient
         long measureCount = 0;
         double targetRate = 0.0;
         ulong pacedEpochNs = 0;
-        ulong drainStartNs = 0;
-        bool caughtUp = false;
+        var catchUp = new CatchUpTracker(activeClients.Count);
         long inflightFloor = long.MaxValue;
         ulong nextProgressNs = 0;
         bool phaseSucceeded = true;
@@ -156,7 +158,7 @@ internal static class PerfMultiPubSubClient
                     for (int i = 0; i < activeClients.Count; i++)
                     {
                         TopicMessage subscribed = messages[i];
-                        for (int turn = 0; turn < 64 && TrySubscribe(
+                        for (int turn = 0; turn < MaxBurstPerSender && TrySubscribe(
                                  (ISubSocket)activeClients[i], subscribed,
                                  RecvFlags.DontWait); turn++)
                         {
@@ -198,7 +200,7 @@ internal static class PerfMultiPubSubClient
                             AddLatencySample(referenceSamples,
                                 ref referenceSeen, ref referenceSum,
                                 latencySampleCap, ref referenceRng, header, nowNs);
-                            if (caughtUp && header.Phase == (uint)PerfPhase.Latency
+                            if (catchUp.CaughtUp && header.Phase == (uint)PerfPhase.Latency
                                 && header.SentTsNs > 0
                                 && nowNs >= header.SentTsNs)
                             {
@@ -210,31 +212,22 @@ internal static class PerfMultiPubSubClient
                         }
                     }
                     ulong tickNs = EpochNs();
-                    if (paced && pacedEpochNs != 0 && !caughtUp)
+                    if (paced && pacedEpochNs != 0 && !catchUp.CaughtUp
+                        && tickNs - pacedEpochNs <= (ulong)latencyDurationSeconds * 1_000_000_000UL)
                     {
-                        long scheduled = tickNs > pacedEpochNs
-                            ? (long)(targetRate * (tickNs - pacedEpochNs)
-                                / 1_000_000_000.0) : 0;
-                        long smallest = Smallest(pacedReceived);
-                        long inFlight = Math.Max(0, scheduled - smallest);
+                        double elapsed = (tickNs - pacedEpochNs) / 1_000_000_000.0;
+                        long scheduled = (long)(targetRate * elapsed);
+                        bool caughtUp = catchUp.Observe(tickNs, pacedReceived, scheduled);
                         if (tickNs >= nextProgressNs)
                         {
-                            inflightFloor = Math.Min(inflightFloor, inFlight);
-                            WriteStdoutLine(FormattableString.Invariant($"PUBSUB_CATCHUP_PROGRESS,{msgSize},{(tickNs - pacedEpochNs) / 1_000_000_000.0:G12},{inFlight},{smallest},{scheduled},{targetRate:G12}"));
+                            inflightFloor = Math.Min(inflightFloor, catchUp.InFlight);
+                            WriteStdoutLine(FormattableString.Invariant($"PUBSUB_CATCHUP_PROGRESS,{msgSize},{elapsed:G12},{catchUp.InFlight},{catchUp.MinReceived},{scheduled},{targetRate:G12}"));
                             nextProgressNs = tickNs + 1_000_000_000UL;
                         }
-                        if (inFlight > Math.Max(1.0, targetRate * 0.001))
-                            drainStartNs = 0;
-                        else if (drainStartNs == 0)
-                            drainStartNs = tickNs;
-                        else if (tickNs - drainStartNs >= 500_000_000UL
-                                 && tickNs <= pacedEpochNs
-                                     + (ulong)latencyDurationSeconds
-                                         * 1_000_000_000UL)
+                        if (caughtUp)
                         {
-                            caughtUp = true;
                             WriteStdoutLine($"PHASE_CATCHUP,{msgSize}");
-                            WriteStdoutLine(FormattableString.Invariant($"PUBSUB_CATCHUP_DIAG,{msgSize},{(tickNs - pacedEpochNs) / 1_000_000_000.0:G12},{inFlight}"));
+                            WriteStdoutLine(FormattableString.Invariant($"PUBSUB_CATCHUP_DIAG,{msgSize},{elapsed:G12},{catchUp.InFlight},window_start_in_flight,{catchUp.WindowStartInFlight}"));
                         }
                     }
                     done = controlState.TryGetPhase(donePhase, out _);
@@ -282,7 +275,8 @@ internal static class PerfMultiPubSubClient
         return (measureCount / (double)durationSeconds, latency.mean,
             latency.p95, latency.p99,
             phaseSucceeded ? measureCount : 0, sampleSeen,
-            Smallest(latencyReceived), caughtUp, referenceP50,
+            Smallest(latencyReceived), catchUp.CaughtUp, Percentile(samples, 0.50),
+            referenceP50,
             referenceP99, inflightFloor == long.MaxValue ? 0 : inflightFloor,
             targetRate);
 
@@ -302,6 +296,54 @@ internal static class PerfMultiPubSubClient
             int lo = (int)pos;
             int hi = Math.Min(lo + 1, sorted.Count - 1);
             return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+        }
+    }
+
+    internal sealed class CatchUpTracker(int subscriberCount)
+    {
+        private const ulong WindowNs = 500_000_000UL;
+        private const long ReceiveQuantum = 1;
+        private readonly long[] _windowReceived = new long[subscriberCount];
+        private ulong _windowStartNs;
+        private long _windowScheduled;
+
+        internal long MinReceived { get; private set; }
+        internal long InFlight { get; private set; }
+        internal long WindowStartInFlight { get; private set; }
+        internal bool CaughtUp { get; private set; }
+
+        internal bool Observe(ulong nowNs, ReadOnlySpan<long> received, long scheduled)
+        {
+            if (CaughtUp)
+                return true;
+
+            long smallest = received[0];
+            for (int i = 1; i < received.Length; i++)
+                smallest = Math.Min(smallest, received[i]);
+            MinReceived = smallest;
+            InFlight = Math.Max(0, scheduled - MinReceived);
+
+            if (_windowStartNs != 0 && InFlight <= WindowStartInFlight)
+            {
+                if (nowNs - _windowStartNs < WindowNs)
+                    return false;
+
+                // The slowest subscriber can change within the window.
+                long minimumDelta = received[0] - _windowReceived[0];
+                for (int i = 1; i < received.Length; i++)
+                    minimumDelta = Math.Min(minimumDelta, received[i] - _windowReceived[i]);
+                if (minimumDelta + ReceiveQuantum >= scheduled - _windowScheduled)
+                {
+                    CaughtUp = true;
+                    return true;
+                }
+            }
+
+            _windowStartNs = nowNs;
+            WindowStartInFlight = InFlight;
+            _windowScheduled = scheduled;
+            received.CopyTo(_windowReceived);
+            return false;
         }
     }
 
