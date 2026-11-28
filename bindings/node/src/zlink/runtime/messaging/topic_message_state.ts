@@ -70,11 +70,13 @@ export function replaceTopicMessageOwnedSinglePart(
   routingId: RoutingId | null = null
 ): void {
   const state = target as unknown as TopicMessageState;
-  let next = state._reusableSinglePart;
-  if (next === null) {
-    next = acquireMessageWrapper(data);
-  } else {
-    refillMessageWrapper(next, data);
+  const candidate = state._reusableSinglePart;
+  const next = candidate === null
+    ? acquireMessageWrapper(data)
+    : refillMessageWrapper(candidate, data);
+  if (candidate !== null && next !== candidate) {
+    state._reusableSinglePartSlots =
+      state._reusableSinglePartSlots.filter(slot => slot[0] !== candidate);
   }
 
   const previous = state.parts.length === 1 ? state.parts[0] : null;

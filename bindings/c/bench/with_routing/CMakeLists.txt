@@ -81,7 +81,8 @@ endif()
 # ============================================================================
 # libzmq benchmarks (build when libzmq_dist exists)
 # ============================================================================
-if(EXISTS "${RC_LIBZMQ_INCLUDE_DIR}/zmq.h" AND RC_LIBZMQ_LIBRARY)
+if(NOT ZLINK_C_BUILD_NATIVE_BENCHES_ONLY
+   AND EXISTS "${RC_LIBZMQ_INCLUDE_DIR}/zmq.h" AND RC_LIBZMQ_LIBRARY)
     message(STATUS "Found libzmq for router compare: ${RC_LIBZMQ_LIBRARY}")
 
     add_executable(bench_rc_zmq_server libzmq/bench_zmq_router_server.cpp)
@@ -105,14 +106,16 @@ if(EXISTS "${RC_LIBZMQ_INCLUDE_DIR}/zmq.h" AND RC_LIBZMQ_LIBRARY)
     set_target_properties(bench_rc_zmq_client PROPERTIES
         BUILD_RPATH "${RC_LIBZMQ_ROOT}/lib"
         INSTALL_RPATH "${RC_LIBZMQ_ROOT}/lib")
-else()
+elseif(NOT ZLINK_C_BUILD_NATIVE_BENCHES_ONLY)
     message(STATUS "libzmq not found in ${RC_LIBZMQ_ROOT}. libzmq benchmarks will be skipped.")
 endif()
 
 # ============================================================================
 # gRPC benchmarks (build when grpc_dist exists)
 # ============================================================================
-if(EXISTS "${RC_GRPC_INCLUDE_DIR}/grpcpp/grpcpp.h" AND EXISTS "${RC_PROTOC}" AND EXISTS "${RC_GRPC_CPP_PLUGIN}")
+if(NOT ZLINK_C_BUILD_NATIVE_BENCHES_ONLY
+   AND EXISTS "${RC_GRPC_INCLUDE_DIR}/grpcpp/grpcpp.h"
+   AND EXISTS "${RC_PROTOC}" AND EXISTS "${RC_GRPC_CPP_PLUGIN}")
     message(STATUS "Found gRPC for router compare: ${RC_GRPC_ROOT}")
 
     # Resolve gRPC link libraries via pkg-config (handles abseil deps)
@@ -193,6 +196,6 @@ if(EXISTS "${RC_GRPC_INCLUDE_DIR}/grpcpp/grpcpp.h" AND EXISTS "${RC_PROTOC}" AND
     set_target_properties(bench_rc_grpc_client PROPERTIES
         BUILD_RPATH "${RC_GRPC_LIB_DIR}"
         INSTALL_RPATH "${RC_GRPC_LIB_DIR}")
-else()
+elseif(NOT ZLINK_C_BUILD_NATIVE_BENCHES_ONLY)
     message(STATUS "gRPC dist not found in ${RC_GRPC_ROOT}. gRPC benchmarks will be skipped. Run setup_grpc_dist.sh to populate.")
 endif()

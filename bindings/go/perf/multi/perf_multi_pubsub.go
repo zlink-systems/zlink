@@ -1,12 +1,22 @@
 package main
 
 import (
-	"context"
+	"bufio"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	zlink "zlink.systems/zlink"
 	"zlink.systems/zlink/perf/internal/perfcommon"
+)
+
+// Match the limits of C's send_stop_token_bounded.
+const (
+	perfStopSendTimeoutMS   = 2000
+	perfStopSendMaxAttempts = 5
 )
 
 func runMultiPubSubServer(cfg multiConfig) {
@@ -30,65 +40,136 @@ func runMultiPubSubServer(cfg multiConfig) {
 	// (bindings/c/perf/multi/src/perf_multi_pubsub_server.cpp:316).
 	perfcommon.Must(ctx.RecalculateAutoHwm())
 
-	window := activeDeadline(cfg.duration)
-	payload := perfcommon.PreparePayload(cfg.msgSize)
-	autoHWMPrinted := false
-	for time.Now().Before(window.StopAt) {
-		if useMultiPubSubWindowMessage(cfg.transport, cfg.msgSize) {
-			_, err := perfcommon.SubmitMeasurement(publisher.Publish("bench"),
-				perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt), zlink.SendFlagsNone)
-			if err != nil {
-				if perfcommon.IsTransient(err) {
-					continue
-				}
-				perfcommon.Must(fmt.Errorf("multi pubsub publish size=%d clients=%d transport=%s: %w",
-					cfg.msgSize, cfg.clients, cfg.transport, err))
-			}
-			if !autoHWMPrinted {
-				// Snapshot after the first admitted application message so the
-				// attached pipe's applied byte HWM is visible.
-				perfcommon.PrintMultiSocketAutoHWMDetail(
-					publisher, nil, cfg.pattern, cfg.transport, "server", "endpoint", zlink.SocketTypePub, cfg.msgSize,
-				)
-				autoHWMPrinted = true
-			}
-			continue
+	publish := func(phase uint8) bool {
+		message := perfcommon.NewMessageWithSize(cfg.msgSize)
+		perfcommon.StampPayloadPhase(message.Data(), phase)
+		sent, err := perfcommon.SubmitMeasurement(publisher.Publish("bench"), message, zlink.SendFlagsNone)
+		if err != nil && !perfcommon.IsTransient(err) {
+			perfcommon.Must(fmt.Errorf("multi pubsub publish: %w", err))
 		}
-		perfcommon.StampWindowPayload(payload, window.ActiveAt)
-		msg := perfcommon.NewMessage(payload)
-		_, err = perfcommon.SubmitMeasurement(publisher.Publish("bench"), msg, zlink.SendFlagsNone)
+		return sent && err == nil
+	}
+	done := func(phase uint8) {
+		options := publisher.CommonOptions()
+		sendTimeout, err := options.SendTimeout()
+		perfcommon.Must(err)
+		publishMarker := func(marker *zlink.Message) (bool, error) {
+			return perfcommon.SubmitMeasurement(publisher.Publish("bench"), marker, zlink.SendFlagsNone)
+		}
+		err = publishMultiPubSubPhaseMarker(cfg.msgSize, phase, options.SetSendTimeout, publishMarker)
 		if err != nil {
-			if perfcommon.IsTransient(err) {
-				continue
-			}
-			perfcommon.Must(fmt.Errorf("multi pubsub publish size=%d clients=%d transport=%s: %w",
-				cfg.msgSize, cfg.clients, cfg.transport, err))
+			perfcommon.Must(fmt.Errorf("multi pubsub publish phase marker: %w", err))
 		}
-		if !autoHWMPrinted {
-			// Snapshot after the first admitted application message so the
-			// attached pipe's applied byte HWM is visible.
-			perfcommon.PrintMultiSocketAutoHWMDetail(
-				publisher, nil, cfg.pattern, cfg.transport, "server", "endpoint", zlink.SocketTypePub, cfg.msgSize,
-			)
-			autoHWMPrinted = true
+		perfcommon.Must(options.SetSendTimeout(sendTimeout))
+		flushControlLine("PHASE_DONE,%d,%d", cfg.msgSize, phase)
+	}
+	end := time.Now().Add(cfg.duration)
+	var activeSends uint64
+	for time.Now().Before(end) {
+		if publish(perfcommon.PhaseActive) && time.Now().Before(end) {
+			activeSends++
 		}
 	}
-	sendMultiPubSubStopToken(publisher)
-	// Keep the publisher/context open until the role runner sends STOP. The
-	// terminal publish must have time to flush to every subscriber while
-	// socket linger remains zero, matching the other multi-PUBSUB bindings.
-	waitForStopToken()
+	perfcommon.PrintMultiSocketAutoHWMDetail(
+		publisher, nil, cfg.pattern, cfg.transport, "server", "endpoint", zlink.SocketTypePub, cfg.msgSize,
+	)
+	done(perfcommon.PhaseActive)
+	received := readPhaseCount("PHASE_PACED", cfg.msgSize)
+	control := pubSubPhaseControl()
+	schedule := newMultiSchedule(time.Now(), received, cfg.duration)
+	latencyDuration := multiLatencyDuration(cfg.duration)
+	catchDeadline := schedule.epoch.Add(latencyDuration)
+	end = catchDeadline.Add(latencyDuration)
+	caughtUp := false
+	catchupSeconds := -1.0
+	for time.Now().Before(end) {
+		select {
+		case command := <-control:
+			if command.line == fmt.Sprintf("PHASE_CATCHUP,%d", cfg.msgSize) && !caughtUp && !command.when.After(catchDeadline) {
+				caughtUp = true
+				catchupSeconds = command.when.Sub(schedule.epoch).Seconds()
+				end = command.when.Add(latencyDuration)
+			}
+		default:
+		}
+		now := time.Now()
+		if !now.Before(end) {
+			break
+		}
+		if schedule.due(now) {
+			phase := perfcommon.PhaseWarmup
+			if caughtUp {
+				phase = perfcommon.PhaseLatency
+			}
+			if publish(phase) {
+				schedule.admit(schedule.reserve(), time.Now())
+			}
+		} else {
+			until := schedule.next()
+			if end.Before(until) {
+				until = end
+			}
+			time.Sleep(multiWait(now, until))
+		}
+	}
+	done(perfcommon.PhaseLatency)
+	prefix := fmt.Sprintf("PHASE_COMPLETE,%d,", cfg.msgSize)
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			perfcommon.Must(fmt.Errorf("multi pubsub completion timed out"))
+		case command := <-control:
+			if value, ok := strings.CutPrefix(command.line, prefix); ok {
+				paced, err := strconv.ParseUint(value, 10, 64)
+				perfcommon.Must(err)
+				schedule.print(cfg, activeSends, received, paced, caughtUp, catchupSeconds)
+				if schedule.late > 0 {
+					flushControlLine("REFERENCE,current,PUBSUB,%s,%d,sender_late,%d", cfg.transport, cfg.msgSize, schedule.late)
+				}
+				return
+			}
+		}
+	}
 }
 
-func useMultiPubSubWindowMessage(transport string, msgSize int) bool {
-	switch transport {
-	case "tls":
-		return msgSize <= 256
-	case "wss":
-		return msgSize == 64
-	default:
-		return false
+func publishMultiPubSubPhaseMarker(
+	msgSize int,
+	phase uint8,
+	setSendTimeout func(time.Duration) error,
+	publish func(*zlink.Message) (bool, error),
+) error {
+	if err := setSendTimeout(perfStopSendTimeoutMS * time.Millisecond); err != nil {
+		return err
 	}
+	for attempt := 0; attempt < perfStopSendMaxAttempts; attempt++ {
+		marker := perfcommon.NewMessageWithSize(perfcommon.MetricHeaderSize)
+		perfcommon.StampPhaseMarker(marker.Data(), msgSize, phase)
+		sent, err := perfcommon.SubmitMessage(marker, publish)
+		if err != nil && !perfcommon.IsTransient(err) {
+			return err
+		}
+		if sent && err == nil {
+			return nil
+		}
+	}
+	return syscall.ETIMEDOUT
+}
+
+type pubSubCommand struct {
+	line string
+	when time.Time
+}
+
+func pubSubPhaseControl() <-chan pubSubCommand {
+	commands := make(chan pubSubCommand, 2)
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			commands <- pubSubCommand{scanner.Text(), time.Now()}
+		}
+	}()
+	return commands
 }
 
 func runMultiPubSubClient(cfg multiConfig, endpoint string) perfcommon.Result {
@@ -144,7 +225,6 @@ func runMultiPubSubClient(cfg multiConfig, endpoint string) perfcommon.Result {
 	if !waitForStartToken(cfg.msgSize) {
 		return stats.Snapshot(cfg.duration, cfg.msgSize)
 	}
-	window := activeDeadline(cfg.duration)
 	poller, err := zlink.NewPoller()
 	perfcommon.Must(err)
 	defer poller.Close()
@@ -152,126 +232,151 @@ func runMultiPubSubClient(cfg multiConfig, endpoint string) perfcommon.Result {
 		perfcommon.Must(poller.AddSocket(sub, perfcommon.ZLinkPollIn, uintptr(i)))
 	}
 
-	// PUB delivery is lossy, so the active deadline is the required boundary;
-	// the wire stop token only allows an earlier wake after the sender closes.
-	phaseDone := false
-	activeObserved := false
 	events := make([]zlink.PollEvent, len(subs))
-	for !phaseDone {
-		remaining := time.Until(window.StopAt)
-		if remaining <= 0 {
-			break
-		}
-		wait := 100 * time.Millisecond
-		if remaining < wait {
-			wait = remaining
-		}
-		n, err := poller.Wait(events, wait)
-		if err != nil {
-			if perfcommon.IsTransient(err) {
-				continue
+	commands := pubSubPhaseControl()
+	activeCounts := make([]uint64, len(subs))
+	pacedCounts := make([]uint64, len(subs))
+	sampleCounts := make([]uint64, len(subs))
+	latencyDuration := multiLatencyDuration(cfg.duration)
+	var tracker multiCatchUp
+	reference := perfcommon.NewMultiStats()
+	inflightFloor := ^uint64(0)
+	var nextProgress time.Duration
+	var epochNs int64
+	caughtUp := false
+	receivePhase := func(phase uint8, duration time.Duration, schedule *multiSchedule) {
+		window := activeDeadline(duration)
+		limit := window.StopAt.Add(10 * time.Second)
+		lastPayload := window.ActiveAt
+		done := time.Time{}
+		stopped := make([]bool, len(subs))
+		stopCount := 0
+		for time.Now().Before(limit) {
+			select {
+			case command := <-commands:
+				if command.line == fmt.Sprintf("PHASE_DONE,%d,%d", cfg.msgSize, phase) {
+					done = command.when
+				}
+			default:
 			}
-			perfcommon.Must(fmt.Errorf("multi pubsub client poll: %w", err))
+			if !done.IsZero() && (stopCount == len(subs) || (time.Since(done) >= 50*time.Millisecond && time.Since(lastPayload) >= 50*time.Millisecond)) {
+				return
+			}
+			n, err := poller.Wait(events, 10*time.Millisecond)
+			if err != nil && !perfcommon.IsTransient(err) {
+				perfcommon.Must(err)
+			}
+			for _, event := range events[:n] {
+				index := int(event.Slot)
+				if event.Revents&perfcommon.ZLinkPollIn == 0 || index >= len(subs) {
+					continue
+				}
+				for range maxBurstPerSender {
+					ok, err := subs[index].Subscribe(received[index], zlink.RecvFlagsDontWait)
+					if err != nil && !perfcommon.IsTransient(err) {
+						perfcommon.Must(err)
+					}
+					if !ok || err != nil {
+						break
+					}
+					lastPayload = time.Now()
+					nowNs := perfcommon.MonotonicNowNs()
+					parts := received[index].Parts()
+					part, err := perfcommon.MeasurementPayload(parts)
+					perfcommon.Must(err)
+					payload := part.Data()
+					header, ok := perfcommon.DecodeMetricHeader(payload)
+					if !ok || header.Magic != perfcommon.MetricMagic || header.RunID != perfcommon.MetricRunID ||
+						header.MsgSize != uint32(cfg.msgSize) {
+						continue
+					}
+					if len(payload) == perfcommon.MetricHeaderSize && header.Sequence == 0 && header.SentTsNs == 0 {
+						if header.Phase == phase && !stopped[index] {
+							stopped[index] = true
+							stopCount++
+						}
+						continue
+					}
+					if schedule == nil {
+						if nowNs < window.StopAtNs && perfcommon.HasMetricHeaderPhase(payload, cfg.msgSize, perfcommon.PhaseActive) {
+							activeCounts[index]++
+						}
+						continue
+					}
+					if header.Phase != perfcommon.PhaseWarmup && header.Phase != perfcommon.PhaseLatency {
+						continue
+					}
+					sent, ok := perfcommon.SentTimestampNsFromBytesPhase(payload, cfg.msgSize, header.Phase)
+					if !ok {
+						continue
+					}
+					pacedCounts[index]++
+					if epochNs == 0 {
+						epochNs = sent
+					}
+					if sent > 0 && nowNs >= sent {
+						if !caughtUp {
+							reference.AddLatencyNs(float64(nowNs - sent))
+						} else if header.Phase == perfcommon.PhaseLatency {
+							sampleCounts[index]++
+							stats.AddLatencyNs(float64(nowNs - sent))
+						}
+					}
+				}
+			}
+			if schedule != nil && epochNs != 0 && !caughtUp {
+				elapsed := time.Duration(perfcommon.MonotonicNowNs() - epochNs)
+				scheduled := schedule.scheduled(elapsed)
+				if elapsed >= nextProgress {
+					minimum := minReceived(pacedCounts)
+					floor := scheduled - min(scheduled, minimum)
+					inflightFloor = min(inflightFloor, floor)
+					flushControlLine("PUBSUB_CATCHUP_PROGRESS,%d,%.6g,%d,%d,%d,%.6g",
+						cfg.msgSize, elapsed.Seconds(), floor, minimum, scheduled, schedule.rate)
+					nextProgress = elapsed + time.Second
+				}
+				if elapsed <= latencyDuration && tracker.observe(elapsed, pacedCounts, scheduled, schedule.rate) {
+					caughtUp = true
+					flushControlLine("PHASE_CATCHUP,%d", cfg.msgSize)
+					flushControlLine("PUBSUB_CATCHUP_DIAG,%d,%.6g,%d,window_start_in_flight,%d", cfg.msgSize, elapsed.Seconds(), tracker.inFlight, tracker.startInFlight)
+				}
+			}
 		}
-		if n == 0 {
-			continue
+		perfcommon.Must(fmt.Errorf("multi pubsub receive drain timed out"))
+	}
+	receivePhase(perfcommon.PhaseActive, cfg.duration, nil)
+	minimum := minReceived(activeCounts)
+	if minimum == 0 {
+		return stats.Snapshot(cfg.duration, cfg.msgSize)
+	}
+	flushControlLine("PHASE_DRAINED,%d,%d", cfg.msgSize, minimum)
+	schedule := newMultiSchedule(time.Time{}, minimum, cfg.duration)
+	receivePhase(perfcommon.PhaseLatency, 2*latencyDuration, schedule)
+	flushControlLine("PHASE_COMPLETE,%d,%d", cfg.msgSize, minReceived(sampleCounts))
+	result := stats.Snapshot(cfg.duration, cfg.msgSize)
+	var activeTotal uint64
+	for _, count := range activeCounts {
+		activeTotal += count
+	}
+	result.Throughput = float64(activeTotal) / cfg.duration.Seconds()
+	result.Bandwidth = result.Throughput * float64(cfg.msgSize) / 1e6
+	if result.Valid {
+		flushControlLine("PUBSUB_LATENCY_DIAG,%d,latency_p50_ms,%.6f", cfg.msgSize, result.LatencyP50Ns/1e6)
+	} else {
+		result.LatencyInvalid = "receiver_not_caught_up_by_deadline"
+		ref := reference.Snapshot(cfg.duration, cfg.msgSize)
+		if inflightFloor == ^uint64(0) {
+			inflightFloor = 0
 		}
-		drainMultiPubSubReady(subs, received, events[:n], stats, cfg.msgSize, window.StopAt, &phaseDone, &activeObserved)
+		key := fmt.Sprintf("REFERENCE,current,PUBSUB,%s,%d", cfg.transport, cfg.msgSize)
+		flushControlLine("%s,latency_ref_p50,%.6f", key, ref.LatencyP50Ns/1e6)
+		flushControlLine("%s,latency_ref_p99,%.6f", key, ref.LatencyP99Ns/1e6)
+		flushControlLine("%s,inflight_floor,%d", key, inflightFloor)
+		flushControlLine("%s,inflight_floor_ms,%.6f", key, float64(inflightFloor)/schedule.rate*1000)
 	}
-	if activeObserved && len(subs) > 0 {
-		perfcommon.PrintMultiSocketAutoHWMDetail(
-			subs[0], monitors[0], cfg.pattern, cfg.transport, "client", "endpoint", zlink.SocketTypeSub, cfg.msgSize,
-		)
-	}
+	perfcommon.PrintMultiSocketAutoHWMDetail(
+		subs[0], monitors[0], cfg.pattern, cfg.transport, "client", "endpoint", zlink.SocketTypeSub, cfg.msgSize,
+	)
 	flushControlLine("CLIENT_DONE,%d", cfg.msgSize)
-	return stats.Snapshot(cfg.duration, cfg.msgSize)
-}
-
-func drainMultiPubSubReady(
-	subs []*zlink.SubSocket,
-	received []*zlink.TopicMessage,
-	events []zlink.PollEvent,
-	stats *perfcommon.Stats,
-	msgSize int,
-	recvStopAt time.Time,
-	phaseDone *bool,
-	activeObserved *bool,
-) {
-	for _, event := range events {
-		if event.Revents&perfcommon.ZLinkPollIn == 0 {
-			continue
-		}
-		index := int(event.Slot)
-		if index < 0 || index >= len(subs) {
-			continue
-		}
-		drainMultiPubSubSocket(index, subs[index], received[index], stats, msgSize, recvStopAt, phaseDone, activeObserved)
-		if *phaseDone {
-			return
-		}
-	}
-}
-
-func drainMultiPubSubSocket(
-	index int,
-	socket *zlink.SubSocket,
-	received *zlink.TopicMessage,
-	stats *perfcommon.Stats,
-	msgSize int,
-	recvStopAt time.Time,
-	phaseDone *bool,
-	activeObserved *bool,
-) {
-	// Receive one complete publish per readiness event. The next poller wakeup
-	// continues draining queued whole messages.
-	ok, err := socket.Subscribe(received, zlink.RecvFlagsDontWait)
-	if err != nil {
-		if perfcommon.IsTransient(err) {
-			return
-		}
-		perfcommon.Must(fmt.Errorf("multi pubsub subscribe[%d]: %w", index, err))
-	}
-	if !ok {
-		return
-	}
-	if received.Topic() != "bench" {
-		perfcommon.Must(fmt.Errorf("multi pubsub unexpected metadata[%d]: topic=%q parts=%d", index, received.Topic(), len(received.Parts())))
-	}
-	parts := received.Parts()
-	if len(parts) == 1 && perfcommon.IsStopTokenMessage(parts[0]) {
-		*phaseDone = true
-		return
-	}
-	part, partErr := perfcommon.MeasurementPayload(parts)
-	if partErr != nil {
-		perfcommon.Must(fmt.Errorf("multi pubsub part[%d]: %w", index, partErr))
-	}
-	if !perfcommon.HasMetricHeaderPhase(part.Data(), msgSize, perfcommon.PhaseActive) {
-		return
-	}
-	now := time.Now()
-	if !now.Before(recvStopAt) {
-		return
-	}
-	stats.AddCount()
-	*activeObserved = true
-	if latencyNs, ok := perfcommon.LatencyNsFromMessageAt(
-		part, msgSize, perfcommon.PhaseActive, perfcommon.MonotonicNowNs()); ok {
-		stats.AddLatencySampleNs(latencyNs)
-	}
-}
-
-func sendMultiPubSubStopToken(publisher *zlink.PubSocket) {
-	for attempt := 0; attempt < perfcommon.StopTokenSendAttempts; attempt++ {
-		sent, err := perfcommon.SubmitPayload(perfcommon.StopToken, func(message *zlink.Message) (bool, error) {
-			return publisher.Publish("bench").Message(message).Flags(zlink.SendFlagsNone).Submit(context.Background())
-		})
-		if err == nil && sent {
-			return
-		}
-		if err != nil && !perfcommon.IsTransient(err) {
-			return
-		}
-		perfcommon.PollIdle(perfcommon.StopTokenSendBackoff)
-	}
+	return result
 }

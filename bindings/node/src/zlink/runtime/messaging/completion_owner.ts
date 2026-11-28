@@ -91,6 +91,18 @@ function submitError(result: number, nativeErrno: number, message: string): Subm
   );
 }
 
+function rejectedSubmitError(result: NativeSubmitResult, kind: CompletionKind): SubmitError | undefined {
+  if (result.result !== SubmitResult.Backpressured || result.completionId === 0n) {
+    return submitError(result.result, result.nativeErrno, `${kind} submit failed`);
+  }
+  if (isWouldBlock(result.nativeErrno)) return undefined;
+  return submitError(
+    SubmitResult.InternalError,
+    constants.errno.EPROTO!,
+    `backpressured ${kind} returned a wait token with non-EAGAIN errno`
+  );
+}
+
 function requestError(result: number, message: string): RequestError {
   return withRuntimeErrorMessage(new RequestError(result as RequestResult), message);
 }
@@ -312,20 +324,8 @@ export class CompletionOwner {
       return { result: SubmitResult.Ok, admitted: RESOLVED_SEND };
     }
 
-    if (result.result !== SubmitResult.Backpressured) {
-      throw submitError(
-        result.result,
-        result.nativeErrno,
-        'send submit failed'
-      );
-    }
-    if (!isWouldBlock(result.nativeErrno) || result.completionId === 0n) {
-      throw submitError(
-        SubmitResult.Backpressured,
-        result.nativeErrno,
-        'backpressured send did not return an EAGAIN wait token'
-      );
-    }
+    const failure = rejectedSubmitError(result, 'send');
+    if (failure) throw failure;
 
     if (this.publicOwner === null) {
       // Core owns the issued WRITABLE token until it is pulled or the socket
@@ -419,20 +419,8 @@ export class CompletionOwner {
       };
     }
 
-    if (result.result !== SubmitResult.Backpressured) {
-      throw submitError(
-        result.result,
-        result.nativeErrno,
-        'request submit failed'
-      );
-    }
-    if (!isWouldBlock(result.nativeErrno) || result.completionId === 0n) {
-      throw submitError(
-        SubmitResult.Backpressured,
-        result.nativeErrno,
-        'backpressured request did not return an EAGAIN wait token'
-      );
-    }
+    const failure = rejectedSubmitError(result, 'request');
+    if (failure) throw failure;
 
     let retryPayload: ReturnType<typeof normalizeOperationPayload>;
     try {
@@ -737,26 +725,14 @@ export class CompletionOwner {
       return;
     }
 
-    if (result.result === SubmitResult.Backpressured) {
-      if (!isWouldBlock(result.nativeErrno) || result.completionId === 0n) {
-        this.failEntry(entry, submitError(
-          SubmitResult.Backpressured,
-          result.nativeErrno,
-          `backpressured ${retry.kind} did not return an EAGAIN wait token`
-        ));
-        return;
-      }
-      if (entry.completionId !== 0n) this.byId.delete(entry.completionId);
-      entry.awaitWritable(result.completionId);
-      this.byId.set(result.completionId, entry);
+    const failure = rejectedSubmitError(result, retry.kind);
+    if (failure) {
+      this.failEntry(entry, failure);
       return;
     }
-
-    this.failEntry(entry, submitError(
-      result.result,
-      result.nativeErrno,
-      `${retry.kind} submit failed`
-    ));
+    if (entry.completionId !== 0n) this.byId.delete(entry.completionId);
+    entry.awaitWritable(result.completionId);
+    this.byId.set(result.completionId, entry);
   }
 
   private failEntry(entry: CompletionEntry<unknown>, error: unknown): void {

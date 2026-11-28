@@ -333,53 +333,55 @@ impl Drop for PollerStorage {
     }
 }
 
-pub fn poll(items: &mut [PollItem], timeout_ms: i64) -> Result<i32, ConfigError> {
-    const INLINE_POLL_ITEMS: usize = 16;
-    let mut inline = [ffi::zlink_pollitem_t {
-        socket: std::ptr::null_mut(),
-        fd: 0,
-        events: 0,
-        revents: 0,
-    }; INLINE_POLL_ITEMS];
-    let mut heap = Vec::new();
-    let raw: &mut [ffi::zlink_pollitem_t] = if items.len() <= INLINE_POLL_ITEMS {
-        for (dst, src) in inline.iter_mut().zip(items.iter()) {
-            *dst = ffi::zlink_pollitem_t {
-                socket: std::ptr::null_mut(),
-                fd: src.fd as ffi::zlink_fd_t,
-                events: src.events,
-                revents: src.revents,
-            };
-        }
-        &mut inline[..items.len()]
-    } else {
-        heap.extend(items.iter().map(|item| ffi::zlink_pollitem_t {
+impl PollerStorage {
+    pub(crate) fn poll(items: &mut [PollItem], timeout_ms: i64) -> Result<i32, ConfigError> {
+        const INLINE_POLL_ITEMS: usize = 16;
+        let mut inline = [ffi::zlink_pollitem_t {
             socket: std::ptr::null_mut(),
-            fd: item.fd as ffi::zlink_fd_t,
-            events: item.events,
-            revents: item.revents,
-        }));
-        heap.as_mut_slice()
-    };
-    let mut result = ffi::zlink_config_result_t::ZLINK_CONFIG_OK;
-    let rc = unsafe {
-        ffi::zlink_poll(
-            raw.as_mut_ptr(),
-            raw.len() as i32,
-            timeout_ms as std::ffi::c_long,
-            &mut result,
-        )
-    };
-    if rc < 0 {
-        return Err(ConfigError::new(
-            config_result_from_native(result),
-            last_errno(),
-        ));
+            fd: 0,
+            events: 0,
+            revents: 0,
+        }; INLINE_POLL_ITEMS];
+        let mut heap = Vec::new();
+        let raw: &mut [ffi::zlink_pollitem_t] = if items.len() <= INLINE_POLL_ITEMS {
+            for (dst, src) in inline.iter_mut().zip(items.iter()) {
+                *dst = ffi::zlink_pollitem_t {
+                    socket: std::ptr::null_mut(),
+                    fd: src.fd as ffi::zlink_fd_t,
+                    events: src.events,
+                    revents: src.revents,
+                };
+            }
+            &mut inline[..items.len()]
+        } else {
+            heap.extend(items.iter().map(|item| ffi::zlink_pollitem_t {
+                socket: std::ptr::null_mut(),
+                fd: item.fd as ffi::zlink_fd_t,
+                events: item.events,
+                revents: item.revents,
+            }));
+            heap.as_mut_slice()
+        };
+        let mut result = ffi::zlink_config_result_t::ZLINK_CONFIG_OK;
+        let rc = unsafe {
+            ffi::zlink_poll(
+                raw.as_mut_ptr(),
+                raw.len() as i32,
+                timeout_ms as std::ffi::c_long,
+                &mut result,
+            )
+        };
+        if rc < 0 {
+            return Err(ConfigError::new(
+                config_result_from_native(result),
+                last_errno(),
+            ));
+        }
+        for (idx, item) in items.iter_mut().enumerate() {
+            item.revents = raw[idx].revents;
+        }
+        Ok(rc)
     }
-    for (idx, item) in items.iter_mut().enumerate() {
-        item.revents = raw[idx].revents;
-    }
-    Ok(rc)
 }
 
 fn monitor_native_handle(monitor: &SocketMonitor) -> *mut c_void {

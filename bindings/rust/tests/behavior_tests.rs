@@ -13,7 +13,7 @@ use zlink::{
     StreamPacket, StreamRecvMode, SubscriptionEvent, TopicMessage,
 };
 
-const RECEIVE_TIMEOUT_MS: i32 = 5_000;
+const RECEIVE_TIMEOUT: Duration = Duration::from_millis(5_000);
 
 fn await_send(
     submission: Result<zlink::SendSubmission, zlink::SubmitError>,
@@ -24,10 +24,10 @@ fn await_send(
 #[test]
 fn pair_send_recv_roundtrip() {
     let ctx = Context::new().unwrap();
-    let server = ctx.pair_socket().unwrap();
+    let server = ctx.create_pair_socket().unwrap();
     server.bind("inproc://beh-pair").unwrap();
 
-    let client = ctx.pair_socket().unwrap();
+    let client = ctx.create_pair_socket().unwrap();
     client.connect("inproc://beh-pair").unwrap();
     let _completion_driver = test_support::CompletionPollerDriver::new(&client);
 
@@ -43,10 +43,10 @@ fn pair_send_recv_roundtrip() {
 #[test]
 fn pair_multipart_send_recv_grows_whole_message_buffer() {
     let ctx = Context::new().unwrap();
-    let a = ctx.pair_socket().unwrap();
+    let a = ctx.create_pair_socket().unwrap();
     a.bind("inproc://beh-pair-multi").unwrap();
 
-    let b = ctx.pair_socket().unwrap();
+    let b = ctx.create_pair_socket().unwrap();
     b.connect("inproc://beh-pair-multi").unwrap();
     let _completion_driver = test_support::CompletionPollerDriver::new(&b);
 
@@ -76,7 +76,7 @@ fn pair_multipart_send_recv_grows_whole_message_buffer() {
 #[test]
 fn pair_try_recv_empty() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     sock.bind("inproc://beh-pair-try").unwrap();
 
     let mut received = Received::empty();
@@ -87,10 +87,10 @@ fn pair_try_recv_empty() {
 #[test]
 fn dealer_router_roundtrip() {
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
     router.bind("inproc://beh-dr").unwrap();
 
-    let dealer = ctx.dealer_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     let rid = RoutingId::from(b"dealer-42");
     dealer.set_routing_id(&rid).unwrap();
     test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
@@ -126,8 +126,8 @@ fn dealer_router_roundtrip() {
 #[test]
 fn dealer_recv_reuse_keeps_ordinary_messages_non_replyable() {
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     let dealer_rid = RoutingId::from(b"dealer-recv-request-seq");
     dealer.set_routing_id(&dealer_rid).unwrap();
     router.bind("inproc://beh-dealer-request-seq").unwrap();
@@ -164,10 +164,10 @@ fn dealer_recv_reuse_keeps_ordinary_messages_non_replyable() {
 #[test]
 fn router_recv_preserves_routing_id_and_multipart_payload() {
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
     router.bind("inproc://beh-router-part").unwrap();
 
-    let dealer = ctx.dealer_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     let rid = RoutingId::from(b"dealer-part");
     dealer.set_routing_id(&rid).unwrap();
     test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
@@ -197,10 +197,10 @@ fn router_recv_preserves_routing_id_and_multipart_payload() {
 #[test]
 fn pub_sub_roundtrip() {
     let ctx = Context::new().unwrap();
-    let pub_sock = ctx.pub_socket().unwrap();
+    let pub_sock = ctx.create_pub_socket().unwrap();
     pub_sock.bind("inproc://beh-pubsub").unwrap();
 
-    let sub_sock = ctx.sub_socket().unwrap();
+    let sub_sock = ctx.create_sub_socket().unwrap();
     sub_sock.connect("inproc://beh-pubsub").unwrap();
     sub_sock.set_subscription("market.").unwrap();
     thread::sleep(Duration::from_millis(100));
@@ -221,10 +221,10 @@ fn pub_sub_roundtrip() {
 #[test]
 fn sub_receives_topics_beyond_inline_buffer() {
     let ctx = Context::new().unwrap();
-    let xpub = ctx.xpub_socket().unwrap();
+    let xpub = ctx.create_xpub_socket().unwrap();
     xpub.bind("inproc://beh-pubsub-long-topic").unwrap();
 
-    let sub_sock = ctx.sub_socket().unwrap();
+    let sub_sock = ctx.create_sub_socket().unwrap();
     sub_sock.connect("inproc://beh-pubsub-long-topic").unwrap();
     sub_sock.set_subscription("t").unwrap();
 
@@ -262,7 +262,7 @@ fn sub_receives_topics_beyond_inline_buffer() {
 #[test]
 fn sub_try_subscribe_empty() {
     let ctx = Context::new().unwrap();
-    let sub_sock = ctx.sub_socket().unwrap();
+    let sub_sock = ctx.create_sub_socket().unwrap();
     // Bind without a peer so this test covers empty non-blocking input
     // without introducing an unrelated unresolved inproc connection.
     sub_sock.bind("inproc://beh-sub-try").unwrap();
@@ -276,7 +276,7 @@ fn sub_try_subscribe_empty() {
 #[test]
 fn send_without_peer_retains_packet_until_writable_or_drop() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     sock.bind("inproc://beh-try-send").unwrap();
     let _completion_driver = test_support::CompletionPollerDriver::new(&sock);
     // With no peer, Core returns a wait token but keeps no payload. The Future
@@ -293,7 +293,7 @@ fn send_without_peer_retains_packet_until_writable_or_drop() {
 #[test]
 fn try_publish_explicit_outcome() {
     let ctx = Context::new().unwrap();
-    let pub_sock = ctx.pub_socket().unwrap();
+    let pub_sock = ctx.create_pub_socket().unwrap();
     pub_sock.bind("inproc://beh-try-pub").unwrap();
 
     let msg = Message::try_from(b"test").unwrap();
@@ -307,7 +307,7 @@ fn try_publish_explicit_outcome() {
 #[test]
 fn xpub_try_receive_subscription_event_empty() {
     let ctx = Context::new().unwrap();
-    let xpub = ctx.xpub_socket().unwrap();
+    let xpub = ctx.create_xpub_socket().unwrap();
     xpub.bind("inproc://beh-xpub-try").unwrap();
 
     let mut event = SubscriptionEvent::empty();
@@ -318,9 +318,9 @@ fn xpub_try_receive_subscription_event_empty() {
 #[test]
 fn xpub_receives_subscription_topics_beyond_inline_buffer() {
     let ctx = Context::new().unwrap();
-    let xpub = ctx.xpub_socket().unwrap();
+    let xpub = ctx.create_xpub_socket().unwrap();
     xpub.bind("inproc://beh-xpub-long-topic").unwrap();
-    let sub = ctx.sub_socket().unwrap();
+    let sub = ctx.create_sub_socket().unwrap();
     sub.connect("inproc://beh-xpub-long-topic").unwrap();
     let mut event = SubscriptionEvent::empty();
 
@@ -367,7 +367,7 @@ fn write_framed_packet(stream: &mut std::net::TcpStream, body: &[u8]) {
 fn stream_packet_output_resets_and_reuses_without_double_close() {
     let ctx = Context::new().unwrap();
     let endpoint = tcp_endpoint();
-    let stream = ctx.stream_socket().unwrap();
+    let stream = ctx.create_stream_socket().unwrap();
     stream
         .stream_options()
         .set_recv_mode(StreamRecvMode::Packet)
@@ -410,7 +410,7 @@ fn stream_packet_receive_propagates_message_init_failure() {
 
     let ctx = Context::new().unwrap();
     let endpoint = tcp_endpoint();
-    let stream = ctx.stream_socket().unwrap();
+    let stream = ctx.create_stream_socket().unwrap();
     stream
         .stream_options()
         .set_recv_mode(StreamRecvMode::Packet)
@@ -451,7 +451,7 @@ fn stream_packet_receive_propagates_message_init_failure() {
 #[test]
 fn stream_disconnect_rid_closes_accepted_client_and_returns_connect_not_found() {
     let ctx = Context::new().unwrap();
-    let stream = ctx.stream_socket().unwrap();
+    let stream = ctx.create_stream_socket().unwrap();
     stream
         .stream_options()
         .set_recv_mode(StreamRecvMode::Packet)
@@ -486,7 +486,7 @@ fn stream_disconnect_rid_closes_accepted_client_and_returns_connect_not_found() 
 fn stream_backpressure_retries_the_retained_packet_after_writable() {
     let ctx = Context::new().unwrap();
     let endpoint = tcp_endpoint();
-    let stream = ctx.stream_socket().unwrap();
+    let stream = ctx.create_stream_socket().unwrap();
     stream
         .stream_options()
         .set_recv_mode(zlink::StreamRecvMode::Raw)
@@ -499,7 +499,7 @@ fn stream_backpressure_retries_the_retained_packet_after_writable() {
         .unwrap();
     stream
         .common_options()
-        .set_receive_timeout(RECEIVE_TIMEOUT_MS)
+        .set_receive_timeout(Some(RECEIVE_TIMEOUT))
         .unwrap();
     stream.bind(&endpoint).unwrap();
     let endpoint = stream.last_endpoint().unwrap();
@@ -554,8 +554,8 @@ fn dealer_router_pull_receive_then_send() {
     let ctx = Context::new().unwrap();
     let endpoint = tcp_endpoint();
 
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     let rid = RoutingId::from(b"dealer-cb-test");
     dealer.set_routing_id(&rid).unwrap();
 
@@ -597,7 +597,7 @@ fn dealer_router_pull_receive_then_send() {
     // Dealer receives the reply sent from the router handle.
     dealer
         .common_options()
-        .set_receive_timeout(RECEIVE_TIMEOUT_MS)
+        .set_receive_timeout(Some(RECEIVE_TIMEOUT))
         .unwrap();
     let mut response = Received::empty();
     dealer.recv(&mut response, RecvFlags::NONE).unwrap();
@@ -609,8 +609,8 @@ fn pair_pull_receive_then_send() {
     let ctx = Context::new().unwrap();
     let endpoint = tcp_endpoint();
 
-    let server = ctx.pair_socket().unwrap();
-    let client = ctx.pair_socket().unwrap();
+    let server = ctx.create_pair_socket().unwrap();
+    let client = ctx.create_pair_socket().unwrap();
 
     let server_mon = SocketMonitor::open(&server).unwrap();
     let client_mon = SocketMonitor::open(&client).unwrap();
@@ -639,7 +639,7 @@ fn pair_pull_receive_then_send() {
     await_send(server.send().message(reply).submit()).unwrap();
     client
         .common_options()
-        .set_receive_timeout(RECEIVE_TIMEOUT_MS)
+        .set_receive_timeout(Some(RECEIVE_TIMEOUT))
         .unwrap();
     let mut response = Received::empty();
     client.recv(&mut response, RecvFlags::NONE).unwrap();

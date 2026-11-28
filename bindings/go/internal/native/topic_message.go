@@ -49,10 +49,7 @@ func (t *TopicMessage) FirstPart() (*Message, error) {
 	if t == nil {
 		return nil, newRecvError(RecvInvalidHandle, int(C.EFAULT))
 	}
-	if len(t.parts) == 0 {
-		return nil, newRecvError(RecvNotSupported, int(C.EINVAL))
-	}
-	return t.parts[0], nil
+	return firstMessagePart(t.parts)
 }
 
 func (t *TopicMessage) SinglePartOrError() (*Message, error) {

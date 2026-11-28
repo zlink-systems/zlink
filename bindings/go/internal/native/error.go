@@ -9,6 +9,7 @@ import "C"
 
 import (
 	"errors"
+	"fmt"
 	"syscall"
 
 	contracts "zlink.systems/zlink/contracts"
@@ -182,11 +183,15 @@ func configErrorFromCall[T resultCodeValue](result T, cerr error) error {
 }
 
 func validationError(format string, args ...any) error {
-	return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
+	return contracts.NewConfigError(ConfigInvalidArgument, int(C.EINVAL), func(int) string {
+		return fmt.Sprintf(format, args...)
+	})
 }
 
 func stateError(format string, args ...any) error {
-	return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
+	return contracts.NewConfigError(ConfigInvalidHandle, int(C.EFAULT), func(int) string {
+		return fmt.Sprintf(format, args...)
+	})
 }
 
 func configErrorFromErrno(errno int) error {

@@ -2,6 +2,15 @@
   "fixture": "zlink.framework.actor-destroy",
   "version": 1,
   "status": "draft",
+  "crossLanguageExpectedFailureReason": "Node v11 generation 카운터 혼합(#4522)",
+  "crossLanguageCells": {
+    "dotnet:java": "enabled",
+    "java:dotnet": "enabled",
+    "java:node": "expected-failure-before-4522",
+    "dotnet:node": "expected-failure-before-4522",
+    "node:java": "expected-failure-before-4522",
+    "node:dotnet": "expected-failure-before-4522"
+  },
   "contractSources": {
     "getOrCreate": { "section": "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md#65-create와-getorcreate의-차이", "startsWith": "`GetOrCreate`는 같은 type의 Ready Actor가 있으면" },
     "find": { "section": "framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md#66-find", "startsWith": "Manager의 `Find(ActorId)`는 Ready 상태인 current authority의" },

@@ -35,6 +35,8 @@ internal sealed class ReadySignalHostedService(
             "channel-server" => (ZLinkListenerKind.ClientServer, options.ChannelName),
             "channel-publisher" => (ZLinkListenerKind.Fanout, options.ChannelName),
             "route-server"
+            or "actor-destroy-owner"
+            or "actor-destroy-caller"
             or "entry-spot-source"
             or "entry-spot-target"
             or "user-spot-source"
@@ -62,6 +64,10 @@ internal sealed class ReadySignalHostedService(
         );
 
         Console.WriteLine($"READY:{payload}");
+
+        services
+            .GetService<ActorDestroyEvents>()
+            ?.Write("hostReady", ("pid", Environment.ProcessId));
 
         if (!string.IsNullOrWhiteSpace(readyFilePath))
             File.WriteAllText(readyFilePath, payload);

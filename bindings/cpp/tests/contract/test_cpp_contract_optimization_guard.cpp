@@ -57,7 +57,6 @@ void assert_public_contract_includes_only (const std::filesystem::path &root)
       "native_",
       "_access.hpp",
       "detail.hpp",
-      "operation_detail.hpp",
       "socket_handle.hpp",
       "request_progress.hpp",
     };

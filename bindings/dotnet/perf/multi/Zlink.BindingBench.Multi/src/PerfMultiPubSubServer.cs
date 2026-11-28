@@ -10,10 +10,9 @@ internal static class PerfMultiPubSubServer
     internal static int Run(PerfOptions options)
     {
         int size = Math.Max(1, options.Size);
-        int sndTimeoutMs = ResolveMultiSndTimeoutMs(options);
         int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
-        int clientCount = ResolveMultiClients(options);
         int durationSeconds = ResolveMultiDurationSeconds(options);
+        int latencyDurationSeconds = ResolveMultiLatencyDurationSeconds(options);
         string endpoint = MultiEndpointFor(options.Transport, "multi-pubsub",
             options);
 
@@ -28,8 +27,6 @@ internal static class PerfMultiPubSubServer
 
         server.Bind(endpoint);
         endpoint = server.Options.LastEndpoint;
-        RecalculateAutoHwm(ctx);
-        PrintAutoHwmSnapshot(server, "server", options.Transport, size);
         WriteStdoutLine($"READY,{endpoint}");
 
         if (!controlState.WaitForStart(readyTimeoutMs))
@@ -38,73 +35,132 @@ internal static class PerfMultiPubSubServer
                 Console.Error.WriteLine("multi_server_error:no_start");
             return controlState.StopRequested ? 0 : 2;
         }
+        ctx.RecalculateAutoHwm();
+        PrintAutoHwmSnapshot(server, "server", options.Transport, size);
 
         const uint runId = 1;
         ulong seq = 1;
         int payloadSize = Math.Max(size, PerfMetricHeaderSize);
+        long activeSends = 0;
 
         if (!RunPublishPhase(server, payloadSize,
                 runId, size, ref seq, PerfPhase.Active, durationSeconds,
-                controlState)
-            || !PublishStopToken(server, controlState))
+                controlState, ref activeSends)
+            || !PublishStopToken(server, size, runId,
+                PerfPhase.Active, controlState))
         {
             return 2;
         }
 
+        WriteStdoutLine($"PHASE_DONE,{size},1");
+        if (!controlState.WaitForPhase("PHASE_PACED", readyTimeoutMs,
+                out long activeReceived) || activeReceived <= 0)
+        {
+            if (!controlState.StopRequested)
+                Console.Error.WriteLine($"multi_server_error:pubsub_no_paced_gate:active_sends,{activeSends}");
+            return 2;
+        }
+
+        var schedule = new MultiPacedSchedule(
+            MultiTargetRate(activeReceived, durationSeconds));
+        ulong catchupDeadlineNs = schedule.EpochNs
+            + (ulong)latencyDurationSeconds * 1_000_000_000UL;
+        ulong phaseDeadlineNs = catchupDeadlineNs
+            + (ulong)latencyDurationSeconds * 1_000_000_000UL;
+        ulong caughtUpNs = 0;
+        while (!controlState.StopRequested && EpochNs() < phaseDeadlineNs)
+        {
+            ulong nowNs = EpochNs();
+            if (caughtUpNs == 0
+                && controlState.TryGetPhase("PHASE_CATCHUP",
+                    out ulong receiptNs)
+                && receiptNs <= catchupDeadlineNs)
+                caughtUpNs = receiptNs;
+            ulong endNs = caughtUpNs != 0
+                ? caughtUpNs + (ulong)latencyDurationSeconds
+                    * 1_000_000_000UL : phaseDeadlineNs;
+            if (nowNs >= endNs)
+                break;
+            if (!schedule.Due(nowNs))
+            {
+                int waitMs = schedule.WaitMilliseconds(nowNs, endNs);
+                if (waitMs > 0)
+                    schedule.Sleep(waitMs);
+                continue;
+            }
+            using Message message = Message.Allocate(payloadSize);
+            StampMetricHeader(message.AsSpan(), runId,
+                caughtUpNs != 0 && nowNs >= caughtUpNs
+                    ? PerfPhase.Latency : PerfPhase.Warmup,
+                size, seq++, nowNs);
+            if (!TryPublish(server, message))
+                return 2;
+            schedule.Accepted(EpochNs(), schedule.Submitted());
+        }
+        if (!PublishStopToken(server, size, runId,
+                PerfPhase.Latency, controlState))
+            return 2;
+        WriteStdoutLine($"PHASE_DONE,{size},3");
+        if (!controlState.WaitForPhase("PHASE_COMPLETE",
+                Math.Max(readyTimeoutMs,
+                    2 * latencyDurationSeconds * 1000 + 10_000),
+                out long pacedReceived))
+            return 2;
+        PrintMultiBenchDiag("PUBSUB", size, activeSends, durationSeconds,
+            schedule, activeReceived,
+            pacedReceived / (double)latencyDurationSeconds,
+            caughtUpNs != 0,
+            caughtUpNs != 0
+                ? (caughtUpNs - schedule.EpochNs) / 1_000_000_000.0
+                : -1.0);
         return 0;
     }
 
-    private static bool Publish(IPubSocket server, Message message)
+    private static bool TryPublish(IPubSocket server, Message message)
     {
-        Message? tail = PerfSocketIo.MeasurementPartCount == 2
+        using Message? tail = PerfSocketIo.MeasurementPartCount == 2
             ? Message.Allocate(0) : null;
-        try
-        {
-            var submit = server.TryPublish(Topic).Message(message);
-            if (tail != null)
-                submit = submit.Message(tail);
-            return submit.Flags(SendFlags.None).Submit();
-        }
-        finally
-        {
-            tail?.Dispose();
-        }
+        var submit = server.TryPublish(Topic).Message(message);
+        if (tail != null)
+            submit = submit.Message(tail);
+        return submit.Submit();
     }
 
-    private static bool PublishStopToken(IPubSocket server,
+    private static bool PublishStopToken(IPubSocket server, int size,
+        uint runId, PerfPhase phase,
         RunnerControlState controlState)
     {
-        // The active phase uses the same lossy PUB path as C. After the
-        // measured window, publish one blocking stop token and finish the
-        // server lifecycle. This matches the C runner's single successful
-        // stop-token send instead of extending the measured process lifetime.
-        while (!controlState.StopRequested)
+        // Match the C stop-token submit limits.
+        server.Options.SendTimeout = TimeSpan.FromSeconds(2);
+        for (int attempt = 0; attempt < 5 && !controlState.StopRequested; attempt++)
         {
             try
             {
-                using Message message = new(MultiStopToken.AsSpan());
-                if (server.TryPublish(Topic).Message(message)
-                        .Flags(SendFlags.None).Submit())
-                    return true;
+                using Message message = Message.Allocate(
+                    PerfMetricHeaderSize);
+                StampMetricHeader(message.AsSpan(), runId, phase,
+                    size, 0, 0);
+                using Message? tail = PerfSocketIo.MeasurementPartCount == 2
+                    ? Message.Allocate(0) : null;
+                var submit = server.Publish(Topic).Message(message);
+                if (tail != null)
+                    submit = submit.Message(tail);
+                submit.Flags(SendFlags.None).Submit();
+                return true;
             }
-            catch (ZlinkException ex) when (IsTransientStopPublishErrno(
-                                                ex.NativeErrno))
+            catch (ZlinkException ex) when (
+                PerfShared.IsTransientBackpressure(ex.NativeErrno))
             {
             }
         }
 
-        return true;
-    }
-
-    private static bool IsTransientStopPublishErrno(int errno)
-    {
-        return IsWouldBlock(errno) || IsInterrupted(errno) || errno == 110;
+        return false;
     }
 
     private static bool RunPublishPhase(IPubSocket server, int payloadSize,
         uint runId, int size,
         ref ulong seq, PerfPhase phase, int durationSeconds,
-        RunnerControlState controlState)
+        RunnerControlState controlState, ref long sendCount)
     {
         long deadlineTicks = Stopwatch.GetTimestamp()
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
@@ -114,8 +170,10 @@ internal static class PerfMultiPubSubServer
             using Message message = Message.Allocate(payloadSize);
             StampMetricHeader(message.AsSpan(), runId, phase, size, seq++,
                 EpochNs());
-            if (!Publish(server, message))
+            if (!TryPublish(server, message))
                 return false;
+            if (Stopwatch.GetTimestamp() < deadlineTicks)
+                sendCount++;
         }
 
         return true;

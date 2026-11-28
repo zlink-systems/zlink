@@ -9,6 +9,14 @@ import sys
 from collections import defaultdict
 from datetime import datetime
 
+# Go and Rust load this renderer by file path, so its own directory is not on
+# sys.path; resolve the sibling perf_metrics module from here.
+_PERF_DIR = os.path.dirname(os.path.abspath(__file__))
+if _PERF_DIR not in sys.path:
+    sys.path.insert(0, _PERF_DIR)
+
+from perf_metrics import resolve_multi_latency_duration  # noqa: E402
+
 
 METRIC_ORDER = {
     "bandwidth": 0,
@@ -216,10 +224,10 @@ def median_result_data_lines(lines, suite, runs):
             continue
         try:
             size_value = int(size)
-            metric_value = float(value)
+            metric_value = _parse_metric_value(value)
         except ValueError:
             continue
-        if not math.isfinite(metric_value):
+        if not isinstance(metric_value, str) and not math.isfinite(metric_value):
             continue
         rows[(pattern, transport, size_value)][metric].append(metric_value)
 
@@ -254,7 +262,7 @@ def _read_metric_case_files(metrics_path, cases_path):
             if size not in pattern_sizes[pattern]:
                 pattern_sizes[pattern].append(size)
             try:
-                rows[key][metric].append(float(value))
+                rows[key][metric].append(_parse_metric_value(value))
             except ValueError:
                 rows[key][metric].append(math.nan)
 
@@ -275,7 +283,14 @@ def _read_metric_case_files(metrics_path, cases_path):
     return rows, cases, patterns, pattern_transports, pattern_sizes
 
 
+def _parse_metric_value(value):
+    return value if value.startswith("invalid:") else float(value)
+
+
 def _median(values):
+    for value in values:
+        if isinstance(value, str):
+            return value
     usable = [value for value in values if not math.isnan(value)]
     if not usable:
         return math.nan
@@ -295,10 +310,14 @@ def _fmt_bandwidth(value, precision):
 
 
 def _fmt_latency_ms(value):
+    if isinstance(value, str):
+        return value
     return "N/A" if math.isnan(value) else f"{value:.3f} ms"
 
 
 def _fmt_metric(metric, value):
+    if isinstance(value, str):
+        return value
     precision = 6 if metric.startswith("latency") else 3
     return "N/A" if math.isnan(value) else f"{value:.{precision}f}"
 
@@ -513,7 +532,7 @@ def _git_commit():
         return "unknown"
 
 
-def _multi_effective_options(args, section):
+def _multi_effective_options(args, section, latency_duration):
     default_clients = os.environ.get("PERF_MULTI_DEFAULT_CLIENTS") or os.environ.get(
         "PERF_DEFAULT_CLIENTS", "100"
     )
@@ -523,9 +542,7 @@ def _multi_effective_options(args, section):
     service_clients = os.environ.get("PERF_SERVICE_CLIENTS") or "auto"
     monitor_hwm_bytes = (
         os.environ.get("PERF_MULTI_MONITOR_HWM_BYTES")
-        or os.environ.get("PERF_MULTI_MONITOR_HWM")
         or os.environ.get("PERF_MONITOR_HWM_BYTES")
-        or os.environ.get("PERF_MONITOR_HWM")
         or "4096000"
     )
     selected_patterns = [
@@ -562,6 +579,7 @@ def _multi_effective_options(args, section):
         f"- msg_sizes: {args.msg_sizes}",
         f"- routed_echo_per_socket_payload: {routed_echo_per_socket_payload}",
         f"- duration_seconds: {args.duration}",
+        f"- latency_duration_seconds: {latency_duration}",
         f"- clients: {args.clients}",
         f"- default_clients: {default_clients}",
         f"- default_stream_clients: {default_stream_clients}",
@@ -596,6 +614,11 @@ def _multi_effective_options(args, section):
 
 
 def render_multi_report(args):
+    try:
+        latency_duration = resolve_multi_latency_duration(args.duration)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
     rows, cases, patterns, pattern_transports, pattern_sizes = _read_metric_case_files(
         args.metrics, args.cases
     )
@@ -626,7 +649,7 @@ def render_multi_report(args):
             "",
         ]
     )
-    lines.extend(_multi_effective_options(args, "start"))
+    lines.extend(_multi_effective_options(args, "start", latency_duration))
 
     for pattern_index, pattern in enumerate(patterns):
         if pattern_index:
@@ -700,7 +723,7 @@ def render_multi_report(args):
             lines.extend(multi_auto_hwm_lines(pattern, pattern_sizes[pattern], auto_hwm_rows))
         lines.append("")
 
-    lines.extend(_multi_effective_options(args, "result"))
+    lines.extend(_multi_effective_options(args, "result", latency_duration))
     if result_lines:
         lines.append("## Result Data")
         lines.extend(result_lines)
@@ -764,7 +787,7 @@ def _read_result_rows_from_logs(tmp_dir):
                 if metric not in REQUIRED_METRICS:
                     continue
                 try:
-                    rows[(pattern, transport, int(size))][metric].append(float(value))
+                    rows[(pattern, transport, int(size))][metric].append(_parse_metric_value(value))
                 except ValueError:
                     continue
     return rows
@@ -796,7 +819,7 @@ def progress_case_row(args):
         print(missing_line)
         return 0
 
-    values = {metric: float(metrics[metric]) for metric in REQUIRED_METRICS}
+    values = {metric: _parse_metric_value(metrics[metric]) for metric in REQUIRED_METRICS}
     size = int(args.size)
     if args.suite == "single":
         print(_single_case_row(args.pattern, size, values))
