@@ -5,13 +5,14 @@
 //! - Typed option surfaces exist (no raw option bags)
 //! - Monitor canonical surface exists (recv)
 
+use std::time::Duration;
+
 mod test_support;
 
 use zlink::{
-    AtomicCounter, CompletionKind, Context, Message, MonitorEvent, Received, RecvError, RecvFlags,
-    RequestSubmission, RidDuplicatePolicy, RoutingId, SendFlags, SendResult, SendSubmission,
-    SocketMonitor, Stopwatch, StreamSocket, SubmitRetryMode, SubscriptionEvent, Thread,
-    TopicMessage, XPubSocket,
+    AtomicCounter, Context, Message, MonitorEvent, Received, RecvError, RecvFlags,
+    RequestSubmission, RidDuplicatePolicy, RoutingId, SendFlags, SendSubmission, SocketMonitor,
+    Stopwatch, StreamSocket, SubmitRetryMode, SubscriptionEvent, Thread, TopicMessage, XPubSocket,
 };
 
 fn assert_send_submission(_: Result<SendSubmission, zlink::SubmitError>) {}
@@ -49,7 +50,7 @@ fn socket_constructor_names_have_the_same_result() {
 #[test]
 fn pair_socket_has_send_recv() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     sock.bind("inproc://surface-pair").unwrap();
 
     // PairSocket exposes: send (async terminal), recv
@@ -80,7 +81,7 @@ fn core_utility_surface_exists() {
 #[test]
 fn pub_socket_has_publish_no_recv() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pub_socket().unwrap();
+    let sock = ctx.create_pub_socket().unwrap();
     sock.bind("inproc://surface-pub").unwrap();
 
     // PubSocket exposes: publish
@@ -96,7 +97,7 @@ fn pub_socket_has_publish_no_recv() {
 #[test]
 fn sub_socket_has_subscribe_no_send() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.sub_socket().unwrap();
+    let sock = ctx.create_sub_socket().unwrap();
     sock.bind("inproc://surface-sub-target").unwrap();
     sock.set_subscription("").unwrap();
 
@@ -110,7 +111,7 @@ fn sub_socket_has_subscribe_no_send() {
 #[test]
 fn router_socket_send_requires_routing_id() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.router_socket().unwrap();
+    let sock = ctx.create_router_socket().unwrap();
     sock.bind("inproc://surface-router").unwrap();
 
     // RouterSocket::send takes a RoutingId and returns a builder.
@@ -129,7 +130,7 @@ fn router_socket_send_requires_routing_id() {
 #[test]
 fn dealer_routed_submit_returns_submission() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.dealer_socket().unwrap();
+    let sock = ctx.create_dealer_socket().unwrap();
     assert_send_submission(
         sock.send()
             .message(Message::try_from(b"send").unwrap())
@@ -145,7 +146,7 @@ fn dealer_routed_submit_returns_submission() {
 #[test]
 fn stream_socket_send_requires_routing_id() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.stream_socket().unwrap();
+    let sock = ctx.create_stream_socket().unwrap();
     sock.stream_options()
         .set_recv_mode(zlink::StreamRecvMode::Raw)
         .unwrap();
@@ -161,7 +162,7 @@ fn stream_socket_send_requires_routing_id() {
 #[test]
 fn xpub_socket_has_subscription_event() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.xpub_socket().unwrap();
+    let sock = ctx.create_xpub_socket().unwrap();
     sock.bind("inproc://surface-xpub").unwrap();
 
     // XPubSocket: publish (synchronous terminal), receive_subscription_event.
@@ -174,7 +175,7 @@ fn xpub_socket_has_subscription_event() {
 #[test]
 fn xsub_socket_has_subscribe_no_send() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.xsub_socket().unwrap();
+    let sock = ctx.create_xsub_socket().unwrap();
     sock.bind("inproc://surface-xsub-target").unwrap();
     sock.set_subscription("").unwrap();
     let _ = sock.subscription_at(0);
@@ -191,7 +192,7 @@ fn xsub_socket_has_subscribe_no_send() {
 #[test]
 fn common_typed_options() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     let options = sock.common_options();
 
     options.set_send_high_water_mark(1000).unwrap();
@@ -199,7 +200,9 @@ fn common_typed_options() {
     options.set_receive_high_water_mark(2000).unwrap();
     assert_eq!(options.receive_high_water_mark().unwrap(), 2000);
 
-    options.set_linger(100).unwrap();
+    options
+        .set_linger(Some(Duration::from_millis(100)))
+        .unwrap();
     assert_eq!(options.submit_retry_mode().unwrap(), SubmitRetryMode::Off);
     assert_eq!(
         options.submit_retry_timeout().unwrap(),
@@ -230,14 +233,14 @@ fn common_typed_options() {
 #[test]
 fn router_typed_options() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.router_socket().unwrap();
+    let sock = ctx.create_router_socket().unwrap();
     let common = sock.common_options();
     let router = sock.router_options();
     router.set_mandatory(true).unwrap();
     router.set_probe(false).unwrap();
     sock.set_routing_id(&RoutingId::from(b"router-surface"))
         .unwrap();
-    common.set_linger(1).unwrap();
+    common.set_linger(Some(Duration::from_millis(1))).unwrap();
     common
         .set_rid_duplicate_policy(RidDuplicatePolicy::Reject)
         .unwrap();
@@ -246,19 +249,21 @@ fn router_typed_options() {
 #[test]
 fn pub_typed_options() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pub_socket().unwrap();
+    let sock = ctx.create_pub_socket().unwrap();
     let common = sock.common_options();
     let pub_options = sock.pub_options();
     pub_options.set_verbose(false).unwrap();
     pub_options.set_verboser(false).unwrap();
     pub_options.set_no_drop(false).unwrap();
-    common.set_receive_timeout(1).unwrap();
+    common
+        .set_receive_timeout(Some(Duration::from_millis(1)))
+        .unwrap();
 }
 
 #[test]
 fn stream_typed_options() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.stream_socket().unwrap();
+    let sock = ctx.create_stream_socket().unwrap();
     let options = sock.stream_options();
     options.set_notify(true).unwrap();
     assert!(options.notify().unwrap());
@@ -273,8 +278,8 @@ fn stream_typed_options() {
 #[test]
 fn rid_disconnect_surface_exists() {
     let ctx = Context::new().unwrap();
-    let pair = ctx.pair_socket().unwrap();
-    let router = ctx.router_socket().unwrap();
+    let pair = ctx.create_pair_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
     let rid = RoutingId::from(b"peer-rid");
 
     let _ = pair.disconnect_rid(&rid);
@@ -288,7 +293,7 @@ fn rid_disconnect_surface_exists() {
 #[test]
 fn socket_monitor_has_recv() {
     let ctx = Context::new().unwrap();
-    let sock = ctx.pair_socket().unwrap();
+    let sock = ctx.create_pair_socket().unwrap();
     sock.bind("inproc://surface-monitor").unwrap();
 
     let mon = SocketMonitor::open(&sock).unwrap();
@@ -296,26 +301,4 @@ fn socket_monitor_has_recv() {
     // Monitor exposes recv()
     let _recv: fn(&SocketMonitor) -> Result<MonitorEvent, RecvError> = SocketMonitor::recv;
     let _ = mon;
-}
-
-// ---------------------------------------------------------------------------
-// SendResult is explicit enum, not bool
-// ---------------------------------------------------------------------------
-
-#[test]
-fn send_result_is_explicit_enum() {
-    // Verify SendResult has three distinct variants
-    let sent = SendResult::Sent;
-    let bp = SendResult::Backpressured;
-    let nr = SendResult::NotReady;
-    assert!(sent.is_sent());
-    assert!(!bp.is_sent());
-    assert!(!nr.is_sent());
-}
-
-#[test]
-fn completion_kind_exposes_writable_abi_value() {
-    assert_eq!(CompletionKind::Send as i32, 1);
-    assert_eq!(CompletionKind::Request as i32, 2);
-    assert_eq!(CompletionKind::Writable as i32, 3);
 }

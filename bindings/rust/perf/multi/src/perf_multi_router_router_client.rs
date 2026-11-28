@@ -1,41 +1,9 @@
 #[path = "perf_common.rs"]
 mod common;
 
-use std::time::{Duration, Instant};
 use zlink::{
-    Message, POLLCOMPLETION, POLLIN, PollEvent, Poller, RecvFlags, RecvResult, RouterSocket,
-    RoutingId, SocketMonitor,
+    POLLCOMPLETION, POLLIN, Poller, RecvFlags, RecvResult, RouterSocket, RoutingId, SocketMonitor,
 };
-
-fn drain_socket(
-    socket: &RouterSocket,
-    msg_size: usize,
-    deadline: Instant,
-    latency: &mut common::LatencyStats,
-) -> bool {
-    let mut processed = false;
-    let mut received = zlink::Received::empty();
-    loop {
-        if Instant::now() >= deadline {
-            break;
-        }
-        match socket.recv(&mut received, RecvFlags::DONT_WAIT) {
-            Ok(true) => {
-                if Instant::now() >= deadline {
-                    break;
-                }
-                let data = common::message_payload(received.parts());
-                if common::record_active_rtt_latency(data, msg_size, latency) {
-                    processed = true;
-                }
-            }
-            Ok(false) => break,
-            Err(err) if err.code() == RecvResult::NoData => break,
-            Err(err) => panic!("recv failed: {err}"),
-        }
-    }
-    processed
-}
 
 fn main() {
     let args = common::MultiArgs::parse();
@@ -44,7 +12,6 @@ fn main() {
     let ctx = common::perf_client_context();
     let server_rid = RoutingId::from(b"perf-rr-server");
     let mut sockets: Vec<RouterSocket> = Vec::with_capacity(settings.clients);
-    let payload_size = args.msg_size.max(common::HEADER_SIZE);
     let mut monitors: Vec<SocketMonitor> = Vec::with_capacity(settings.clients);
 
     for index in 0..settings.clients {
@@ -74,80 +41,70 @@ fn main() {
     }
     ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
-    // Match dealer-router: submit once per socket per turn so receive and
-    // completion progress stays concurrent without echo-gated ping-pong.
     let poller = Poller::new().expect("poller");
-    for (index, sock) in sockets.iter().enumerate() {
+    for (index, socket) in sockets.iter().enumerate() {
         poller
-            .add_socket(sock, POLLIN | POLLCOMPLETION, index)
+            .add_socket(socket, POLLIN | POLLCOMPLETION, index)
             .expect("poller add");
     }
-    let mut poll_events = vec![PollEvent::default(); sockets.len().max(1)];
-
-    let mut latency = common::LatencyStats::new();
-    let deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
-    // C echo client (perf_multi_client_helpers.hpp): teardown window is
-    // max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS, 3 s per active second) because
-    // small messages can fill every per-client Core queue.
-    let drain_deadline = deadline
-        + common::resolve_multi_send_drain_timeout()
-            .max(Duration::from_secs(settings.duration_seconds.max(1) * 3));
-    let mut tasks = common::ConcurrentTasks::new(sockets.len());
-    let mut seqs = vec![1u64; sockets.len()];
-    while Instant::now() < deadline || (tasks.any_pending() && Instant::now() < drain_deadline) {
-        let mut submitted = false;
-        if Instant::now() < deadline {
-            for (slot, socket) in sockets.iter().enumerate() {
-                if tasks.is_pending(slot) {
-                    continue;
-                }
-                let mut msg = Message::with_size(payload_size).expect("msg");
-                common::encode_header(
-                    msg.data_mut(),
-                    common::PHASE_ACTIVE,
-                    args.msg_size as u32,
-                    seqs[slot],
-                );
-                seqs[slot] += 1;
-                submitted = true;
-                let submission = perf_submit_measurement_async!(socket.send(&server_rid), msg)
-                    .unwrap_or_else(|err| panic!("send failed: {err}"));
-                if submission.result == zlink::SubmitResult::Backpressured {
-                    tasks.insert(slot, submission.admitted);
-                }
-            }
-        }
-        let ready = tasks.poll_ready();
-        let mut progressed = !ready.is_empty();
-        for (_, result) in ready {
-            result.unwrap_or_else(|err| panic!("send failed: {err}"));
-        }
-        progressed |= submitted;
-        if Instant::now() >= deadline && !tasks.any_pending() {
-            break;
-        }
-        let wait_deadline = if Instant::now() < deadline {
-            deadline
-        } else {
-            drain_deadline
-        };
-        let wait_ms = if progressed {
-            0
-        } else {
-            common::poll_timeout_until(wait_deadline)
-        };
-        match poller.wait(&mut poll_events, wait_ms) {
-            Ok(event_count) => {
-                for event in &poll_events[..event_count] {
-                    if event.slot < sockets.len() && event.revents & POLLIN != 0 {
-                        drain_socket(&sockets[event.slot], args.msg_size, deadline, &mut latency);
-                    }
-                }
-            }
-            Err(err) => panic!("poller wait failed: {err}"),
-        }
-    }
-    assert!(!tasks.any_pending(), "send admission drain timed out");
+    let submit = |slot: usize, message| {
+        perf_submit_measurement_async!(sockets[slot].send(&server_rid), message).expect("send")
+    };
+    let receive = |slot: usize, received: &mut zlink::Received| match sockets[slot]
+        .recv(received, RecvFlags::DONT_WAIT)
+    {
+        Ok(received) => received,
+        Err(err) if err.code() == RecvResult::NoData => false,
+        Err(err) => panic!("recv failed: {err}"),
+    };
+    let active_seconds = settings.duration_seconds;
+    let latency_seconds = common::latency_seconds(active_seconds);
+    let drain_ns = (common::resolve_multi_send_drain_timeout().as_nanos() as u64)
+        .max(active_seconds * 3 * common::SECOND_NS);
+    let mut active = common::LatencyStats::new();
+    let (active_sends, _) = common::run_send_phase(
+        &args,
+        &poller,
+        sockets.len(),
+        drain_ns,
+        common::SendPhase {
+            echo: true,
+            end: common::now_ns() + active_seconds * common::SECOND_NS,
+            schedule: None,
+        },
+        submit,
+        receive,
+        &mut active,
+    );
+    let active_received = active.finish().count;
+    assert!(active_received > 0, "no active replies");
+    let mut paced = common::LatencyStats::new();
+    let mut schedule = common::Schedule::new(common::now_ns(), active_received, active_seconds);
+    let end = schedule.epoch + common::SETTLE_NS + latency_seconds * common::SECOND_NS;
+    let (_, paced_received) = common::run_send_phase(
+        &args,
+        &poller,
+        sockets.len(),
+        drain_ns,
+        common::SendPhase {
+            echo: true,
+            end,
+            schedule: Some(&mut schedule),
+        },
+        submit,
+        receive,
+        &mut paced,
+    );
+    let mut result = paced.finish();
+    schedule.print(
+        "ROUTER_ROUTER_SENDSEND",
+        args.msg_size,
+        (active_sends, active_received, active_seconds),
+        paced_received,
+        latency_seconds,
+        None,
+    );
+    result.count = active_received;
 
     if let Some(socket) = sockets.first() {
         common::print_multi_auto_hwm_detail(
@@ -164,6 +121,6 @@ fn main() {
         &args.transport,
         args.msg_size,
         settings.duration_seconds,
-        &latency.finish(),
+        &result,
     );
 }
