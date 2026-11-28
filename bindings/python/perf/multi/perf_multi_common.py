@@ -324,8 +324,22 @@ def resolve_multi_recv_timeout_ms():
     return _env_int("PERF_MULTI_RCVTIMEO_MS", 200)
 
 
-def resolve_multi_monitor_hwm_bytes(environment=None):
+def resolve_multi_monitor_hwm_bytes(environment=None, *, cli_value=None):
     environment = os.environ if environment is None else environment
+    for name in ("PERF_MULTI_MONITOR_HWM", "PERF_MONITOR_HWM"):
+        if name in environment:
+            raise SystemExit(f"{name} is unsupported. Use {name}_BYTES instead.")
+
+    if cli_value:
+        error = "--monitor-hwm-bytes must be a nonnegative integer"
+        try:
+            parsed = int(cli_value)
+        except ValueError as exc:
+            raise SystemExit(error) from exc
+        if parsed < 0:
+            raise SystemExit(error)
+        return parsed
+
     for name in ("PERF_MULTI_MONITOR_HWM_BYTES", "PERF_MONITOR_HWM_BYTES"):
         value = environment.get(name)
         if value in (None, ""):

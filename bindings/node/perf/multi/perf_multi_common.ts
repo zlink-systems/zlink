@@ -66,18 +66,19 @@ function resolveMultiConnectConcurrency(clientCount) {
   return clientCount >= 10000 ? 1024 : 128;
 }
 
-function resolveMultiMonitorHwm(environment = process.env) {
+function resolveMultiMonitorHwm(environment = process.env, explicit = undefined) {
   for (const name of ['PERF_MULTI_MONITOR_HWM', 'PERF_MONITOR_HWM']) {
-    const raw = environment[name];
-    if (raw === undefined || raw === '') {
-      continue;
-    }
-    const value = Number(raw);
-    if (Number.isSafeInteger(value) && value >= 0) {
-      return value;
+    if (environment[name] !== undefined) {
+      throw new Error(`${name} is obsolete. Use ${name}_BYTES.`);
     }
   }
-  return 4_096_000;
+  const raw = explicit ?? (environment.PERF_MULTI_MONITOR_HWM_BYTES
+    || environment.PERF_MONITOR_HWM_BYTES || '4096000');
+  const value = Number(raw);
+  if (!/^[0-9]+$/.test(String(raw)) || !Number.isSafeInteger(value)) {
+    throw new Error('--monitor-hwm-bytes must be a nonnegative safe integer');
+  }
+  return value;
 }
 
 function resolveMultiStreamClientCount(
