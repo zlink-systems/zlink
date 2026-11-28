@@ -2990,6 +2990,8 @@ export class ServiceStatefulRuntime {
           if (staged === undefined) {
             return this.enqueueInstanceSpot(ingress, message, payloadFrame!, metadataFrame);
           }
+          // The confirmation callback runs in a microtask after synchronous enqueue assigns queued.
+          let queued: RawServicePumpResult | undefined;
           const confirmed = Promise.resolve().then(async () => {
             if (queued !== 'application' || !(await staged.confirm())) return false;
             ingress.onAdmitted?.();
@@ -2997,7 +2999,7 @@ export class ServiceStatefulRuntime {
           });
           // The Spot gate reports a rejection, even if confirmation settles before dispatch.
           void confirmed.catch(() => undefined);
-          const queued: RawServicePumpResult = this.enqueueActivatedInstanceSpot(
+          queued = this.enqueueActivatedInstanceSpot(
             ingress,
             message,
             payloadFrame!,
