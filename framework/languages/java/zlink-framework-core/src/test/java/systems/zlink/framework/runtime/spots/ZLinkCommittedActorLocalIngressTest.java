@@ -24,13 +24,14 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinatorTestAccess;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinatorTestAccess.CommitInterceptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
-import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
@@ -50,7 +51,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiFunction;
 import java.util.function.Function;
 
 final class ZLinkCommittedActorLocalIngressTest {
@@ -284,9 +284,9 @@ final class ZLinkCommittedActorLocalIngressTest {
         var relocations = new InMemoryRelocationStore();
         var commits = List.of(new CompletableFuture<Void>(), new CompletableFuture<Void>());
         var releases = List.of(new CompletableFuture<Void>(), new CompletableFuture<Void>());
-        var order = new java.util.concurrent.ConcurrentHashMap<Object, Integer>();
+        var order = new ConcurrentHashMap<ZLinkAggregateFence, Integer>();
         var count = new AtomicInteger();
-        Function<Object, CompletableFuture<Void>> continuation =
+        Function<ZLinkAggregateFence, CompletableFuture<Void>> continuation =
                 key -> {
                     int index = order.computeIfAbsent(key, ignored -> count.getAndIncrement());
                     commits.get(index).complete(null);
@@ -414,53 +414,46 @@ final class ZLinkCommittedActorLocalIngressTest {
                                                     .map(CompletionStage::toCompletableFuture)
                                                     .toArray(CompletableFuture[]::new)));
             if (conflict) {
-                BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>>
-                        commitAfterSourcePreserve =
-                                (repository, arguments) -> {
-                                    observedRaw.complete(targetNode.actorLookup(ACTOR));
-                                    var fence = (ZLinkAggregateFence) arguments[0];
-                                    var cancellation = (ZLinkStoreCancellation) arguments[1];
-                                    String key = ZLinkAuthorityKeyCodec.actor(ACTOR);
-                                    // Inject the source winning the authority CAS before target
-                                    // commit.
-                                    return repository
-                                            .read(key, cancellation)
-                                            .thenCompose(
-                                                    read -> {
-                                                        var current =
-                                                                assertInstanceOf(
-                                                                        ZLinkAuthoritySnapshot
-                                                                                .class,
-                                                                        read);
-                                                        assertEquals(
-                                                                fence.aggregateId(),
-                                                                current.relocation()
-                                                                        .relocationId());
-                                                        return repository.compareExchange(
-                                                                key,
-                                                                new ZLinkAuthorityExpectFound(
-                                                                        current.storeVersion()),
-                                                                ZLinkAuthorityPut.relocation(
-                                                                        current.payload(),
-                                                                        current.relocation()
-                                                                                .phase("aborted")),
-                                                                cancellation);
-                                                    })
-                                            .thenCompose(
-                                                    written -> {
+                CommitInterceptor commitAfterSourcePreserve =
+                        (repository, fence, acceptedRequests, cancellation) -> {
+                            observedRaw.complete(targetNode.actorLookup(ACTOR));
+                            String key = ZLinkAuthorityKeyCodec.actor(ACTOR);
+                            // Inject the source winning the authority CAS before target commit.
+                            return repository
+                                    .read(key, cancellation)
+                                    .thenCompose(
+                                            read -> {
+                                                var current =
                                                         assertInstanceOf(
-                                                                ZLinkAuthorityStored.class,
-                                                                written);
-                                                        return repository.commitAggregate(
-                                                                fence, cancellation);
-                                                    });
-                                };
+                                                                ZLinkAuthoritySnapshot.class, read);
+                                                assertEquals(
+                                                        fence.aggregateId(),
+                                                        current.relocation().relocationId());
+                                                return repository.compareExchange(
+                                                        key,
+                                                        new ZLinkAuthorityExpectFound(
+                                                                current.storeVersion()),
+                                                        ZLinkAuthorityPut.relocation(
+                                                                current.payload(),
+                                                                current.relocation()
+                                                                        .phase("aborted")),
+                                                        cancellation);
+                                            })
+                                    .thenCompose(
+                                            written -> {
+                                                assertInstanceOf(
+                                                        ZLinkAuthorityStored.class, written);
+                                                return repository.commitAggregate(
+                                                        fence, acceptedRequests, cancellation);
+                                            });
+                        };
                 interceptCommit(node(source), commitAfterSourcePreserve);
                 interceptCommit(
                         targetNode,
-                        (repository, arguments) -> {
+                        (repository, fence, acceptedRequests, cancellation) -> {
                             observeTargetCleanup.run();
-                            return commitAfterSourcePreserve.apply(repository, arguments);
+                            return commitAfterSourcePreserve.commit(
+                                    repository, fence, acceptedRequests, cancellation);
                         });
             } else {
                 targetFactory =
@@ -576,40 +569,29 @@ final class ZLinkCommittedActorLocalIngressTest {
     }
 
     private static void holdCommitContinuation(
-            ZLinkInternalSpotNode node, Function<Object, CompletableFuture<Void>> continuation)
+            ZLinkInternalSpotNode node,
+            Function<ZLinkAggregateFence, CompletableFuture<Void>> continuation)
             throws Exception {
         interceptCommit(
                 node,
-                (repository, arguments) ->
+                (repository, fence, acceptedRequests, cancellation) ->
                         repository
-                                .commitAggregate(
-                                        (systems.zlink.framework.runtime.internal.locations
-                                                        .ZLinkAggregateFence)
-                                                arguments[0],
-                                        (systems.zlink.framework.runtime.internal.locations
-                                                        .ZLinkStoreCancellation)
-                                                arguments[1])
+                                .commitAggregate(fence, acceptedRequests, cancellation)
                                 .thenCompose(
                                         value ->
                                                 continuation
-                                                        .apply(arguments[0])
+                                                        .apply(fence)
                                                         .thenApply(ignored -> value)));
     }
 
-    private static void interceptCommit(
-            ZLinkInternalSpotNode node,
-            BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> commit)
+    private static void interceptCommit(ZLinkInternalSpotNode node, CommitInterceptor commit)
             throws Exception {
         Object endpoint =
                 systems.zlink.framework.runtime.binding.ZLinkJavaRawSpotNodeTestAccess
                         .relocationStagingIngressHandler(node);
         Object coordinator = ZLinkSpotRuntimeTestAccess.aggregateCoordinator(endpoint);
-        systems.zlink.framework.runtime.internal.locations
-                .ZLinkAggregateRelocationCoordinatorTestAccess.interceptCommit(
-                (systems.zlink.framework.runtime.internal.locations
-                                .ZLinkAggregateRelocationCoordinator)
-                        coordinator,
-                commit);
+        ZLinkAggregateRelocationCoordinatorTestAccess.interceptCommit(
+                (ZLinkAggregateRelocationCoordinator) coordinator, commit);
     }
 
     private static ZLinkInternalSpotNode node(ZLinkFrameworkRuntime host) throws Exception {

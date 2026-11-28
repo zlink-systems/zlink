@@ -16,6 +16,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAc
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
@@ -98,6 +99,83 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                 .prepareDirectJoin(goal, cancellation)
                 .thenCompose(
                         prepared -> executeSource(lane, goal, timeout, restoreDeadline, prepared));
+    }
+
+    @Override
+    public CompletionStage<Void> awaitTargetPublication(
+            ZLinkBackendActorRef actor, long deadlineNanos) {
+        Lane lane = lanes.get(actor.nodeRid());
+        return lane == null
+                ? CompletableFuture.completedFuture(null)
+                : awaitTargetPublication(lane, actor, deadlineNanos, null);
+    }
+
+    private CompletionStage<Void> awaitTargetPublication(
+            Lane lane, ZLinkBackendActorRef actor, long deadlineNanos, UUID missingAttempt) {
+        long remaining = deadlineNanos - System.nanoTime();
+        if (remaining <= 0) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                            "Prior relocation publication did not settle before the Join"
+                                    + " deadline."));
+        }
+        return lane.source()
+                .readActorAuthority(actor.actorId(), () -> System.nanoTime() - deadlineNanos >= 0)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
+                                    || snapshot.objectGeneration() != actor.generation()
+                                    || !snapshot.allocation()
+                                            .descriptor()
+                                            .rid()
+                                            .equals(actor.nodeRid())
+                                    || snapshot.relocation() == null
+                                    || !snapshot.relocation().targetPublicationPending()) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            var relocationId = snapshot.relocation().relocationId();
+                            if (relocationId.equals(missingAttempt)) {
+                                return CompletableFuture.failedFuture(
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                "Prior relocation has no local publication"
+                                                        + " attempt."));
+                            }
+                            var terminal = lane.client().targetPublication(relocationId);
+                            CompletionStage<Void> wait =
+                                    terminal.map(
+                                                    signal ->
+                                                            waitForPublication(
+                                                                    signal, deadlineNanos))
+                                            .orElseGet(
+                                                    () -> CompletableFuture.completedFuture(null));
+                            return wait.thenCompose(
+                                    ignored ->
+                                            awaitTargetPublication(
+                                                    lane, actor, deadlineNanos, relocationId));
+                        });
+    }
+
+    private static CompletableFuture<Void> waitForPublication(
+            CompletableFuture<Void> signal, long deadlineNanos) {
+        return signal.copy()
+                .orTimeout(
+                        Math.max(0L, deadlineNanos - System.nanoTime()),
+                        java.util.concurrent.TimeUnit.NANOSECONDS)
+                .exceptionallyCompose(
+                        failure -> {
+                            Throwable cause = unwrap(failure);
+                            if (cause instanceof java.util.concurrent.TimeoutException) {
+                                return CompletableFuture.failedFuture(
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                                "Prior relocation publication did not settle before"
+                                                        + " the Join deadline.",
+                                                cause));
+                            }
+                            return CompletableFuture.failedFuture(cause);
+                        });
     }
 
     private CompletionStage<Submission> executeSource(

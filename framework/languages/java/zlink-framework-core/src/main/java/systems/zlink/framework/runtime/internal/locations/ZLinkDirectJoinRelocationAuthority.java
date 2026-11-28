@@ -30,24 +30,6 @@ public final class ZLinkDirectJoinRelocationAuthority {
 
     private final ZLinkLocationRepository authority;
 
-    /** Immutable Actor tenure accepted from the committed Location row. */
-    public record CommittedActorTenure(
-            ZLinkBackendActorRef actor,
-            long targetNodeGeneration,
-            long authorityOwnerGeneration,
-            long ownerLeaseGeneration) {
-        public CommittedActorTenure {
-            Objects.requireNonNull(actor, "actor");
-            if (actor.generation() <= 0
-                    || targetNodeGeneration == 0
-                    || authorityOwnerGeneration <= 0
-                    || ownerLeaseGeneration <= 0) {
-                throw new IllegalArgumentException(
-                        "committed Actor tenure generations must be positive");
-            }
-        }
-    }
-
     public ZLinkDirectJoinRelocationAuthority(ZLinkLocationRepository authority) {
         this.authority = Objects.requireNonNull(authority, "authority");
     }
@@ -269,96 +251,6 @@ public final class ZLinkDirectJoinRelocationAuthority {
                                                                                                             .fence()));
                                                                 });
                                             });
-                        });
-    }
-
-    public CompletionStage<CommittedActorTenure> commitPrepared(
-            UUID aggregateId, long aggregateGeneration, ZLinkBackendActorRef actor) {
-        Objects.requireNonNull(actor, "actor");
-        return authority
-                .commitAggregate(new ZLinkAggregateFence(aggregateId, aggregateGeneration), NEVER)
-                .thenCompose(
-                        result ->
-                                result == ZLinkAggregateCommitResult.COMMITTED
-                                                || result
-                                                        == ZLinkAggregateCommitResult
-                                                                .ALREADY_COMMITTED
-                                        ? readCommittedTenure(
-                                                aggregateId, aggregateGeneration, actor)
-                                        : CompletableFuture.failedFuture(
-                                                new IllegalStateException(
-                                                        "direct Join relocation aggregate commit"
-                                                                + " failed: "
-                                                                + result)));
-    }
-
-    private CompletionStage<CommittedActorTenure> readCommittedTenure(
-            UUID aggregateId, long aggregateGeneration, ZLinkBackendActorRef actor) {
-        return authority
-                .read(ZLinkAuthorityKeyCodec.actor(actor.actorId()), NEVER)
-                .thenCompose(
-                        result -> {
-                            if (!(result instanceof ZLinkAuthoritySnapshot snapshot)
-                                    || snapshot.objectGeneration() != actor.generation()) {
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "direct Join Actor authority is missing after"
-                                                        + " commit"));
-                            }
-                            var publication =
-                                    ZLinkAuthorityRelocation.publication(
-                                            snapshot, aggregateGeneration);
-                            if (publication == null
-                                    || !publication.aggregateId().equals(aggregateId)
-                                    || publication.aggregateGeneration() != aggregateGeneration
-                                    || !publication.targetOwnerId().equals(snapshot.ownerId())
-                                    || publication.targetOwnerLeaseGeneration()
-                                            != snapshot.ownerLeaseGeneration()
-                                    || !publication
-                                            .targetNodeRid()
-                                            .equals(snapshot.allocation().descriptor().rid())
-                                    || publication.targetNodeGeneration()
-                                            != snapshot.allocation()
-                                                    .descriptorLifecycleGeneration()) {
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "direct Join canonical owner fence differs after"
-                                                        + " commit"));
-                            }
-                            var payload =
-                                    new ZLinkActorAuthorityPayloadCodec()
-                                            .decode(publication.applicationPayload())
-                                            .orElse(null);
-                            if (payload == null
-                                    || !payload.actorId().equals(actor.actorId())
-                                    || !payload.ownerId().equals(snapshot.ownerId())
-                                    || payload.ownerLeaseGeneration()
-                                            != snapshot.ownerLeaseGeneration()
-                                    || !payload.meshName()
-                                            .equals(snapshot.allocation().descriptor().meshName())
-                                    || !payload.nodeRid()
-                                            .equals(snapshot.allocation().descriptor().rid())
-                                    || payload.nodeGeneration()
-                                            != snapshot.allocation().descriptorLifecycleGeneration()
-                                    || snapshot.allocation().objectKind()
-                                            != ZLinkPlacementObjectKind.ACTOR) {
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "direct Join Actor authority owner differs after"
-                                                        + " commit"));
-                            }
-                            //  The direct-transfer manifest is the handoff root; its
-                            //  relocation identity is validated in loadPrepared, so a
-                            //  committed tenure needs no store read-back here.
-                            return CompletableFuture.completedFuture(
-                                    new CommittedActorTenure(
-                                            new ZLinkBackendActorRef(
-                                                    snapshot.allocation().descriptor().rid(),
-                                                    actor.actorId(),
-                                                    snapshot.objectGeneration()),
-                                            snapshot.allocation().descriptorLifecycleGeneration(),
-                                            snapshot.authorityOwnerGeneration(),
-                                            snapshot.ownerLeaseGeneration()));
                         });
     }
 

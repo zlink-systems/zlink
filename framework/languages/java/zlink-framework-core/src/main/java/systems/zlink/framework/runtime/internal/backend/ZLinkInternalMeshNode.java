@@ -506,18 +506,9 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
                 new UnsupportedOperationException("Message Follow notification is unavailable"));
     }
 
-    default void setRelocationReplyRelayHandler(RelocationReplyRelayHandler handler) {
-        // Alternate backends may not support command 33/46 dispatch.
-    }
-
-    /**
-     * Sends one canonical command 33 record plus its application payload and returns the exact
-     * command 46 closed acknowledgement. The landing node is the relocation source that owns the
-     * reply capability; it may differ from the request-source fence carried in {@code
-     * expectedSource}.
-     */
+    /** Sends command 33 to the original requester and awaits its authenticated command 46. */
     default CompletionStage<byte[]> requestRelocationReplyRelay(
-            RoutingId landingNodeRid,
+            RoutingId requesterNodeRid,
             ZLinkServiceRelocationWireCodec.RequestSourceFence expectedSource,
             byte[] command33,
             List<byte[]> payload,
@@ -861,12 +852,6 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     @FunctionalInterface
     interface MessageFollowHandler {
         void handle(RoutingId sourceNodeRid, ZLinkServiceMessageFollowWireCodec.Notice notice);
-    }
-
-    @FunctionalInterface
-    interface RelocationReplyRelayHandler {
-        CompletionStage<byte[]> handle(
-                RoutingId targetNodeRid, byte[] command33, List<byte[]> payload);
     }
 
     @FunctionalInterface

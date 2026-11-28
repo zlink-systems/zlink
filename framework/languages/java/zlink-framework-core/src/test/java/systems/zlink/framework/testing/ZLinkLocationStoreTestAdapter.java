@@ -175,7 +175,12 @@ public abstract class ZLinkLocationStoreTestAdapter implements ZLinkLocationRepo
 
     @Override
     public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
-            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
+            ZLinkAggregateFence fence,
+            java.util.List<
+                            systems.zlink.framework.runtime.internal.locations
+                                    .ZLinkRelocationReplyRow>
+                    acceptedReplies,
+            ZLinkStoreCancellation cancellation) {
         return unsupported();
     }
 

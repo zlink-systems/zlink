@@ -474,7 +474,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             nodeRegistration.entrySpotId(),
                             repository,
                             coordinator,
-                            unusedRelocationTarget()));
+                            ZLinkSpotRuntimeTestAccess.unusedRelocationTarget()));
             targetMachine.set(
                     new ZLinkCanonicalRelocationStateMachine(
                             targetTransport,
@@ -840,30 +840,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                                         throw new UnsupportedOperationException(method.getName());
                             };
                         });
-    }
-
-    private static ZLinkSpotRetireControl.TargetEndpoint unusedRelocationTarget() {
-        return new ZLinkSpotRetireControl.TargetEndpoint() {
-            private CompletionStage<Void> unused() {
-                return CompletableFuture.failedFuture(
-                        new AssertionError("source owner must not run target relocation"));
-            }
-
-            @Override
-            public CompletionStage<Void> stage(ZLinkSpotRetireControl.StageRequest request) {
-                return unused();
-            }
-
-            @Override
-            public CompletionStage<Void> publish(ZLinkSpotRetireControl.StageRequest request) {
-                return unused();
-            }
-
-            @Override
-            public CompletionStage<Void> abort(ZLinkSpotRetireControl.StageRequest request) {
-                return unused();
-            }
-        };
     }
 
     private static final class ActorTargetBackend

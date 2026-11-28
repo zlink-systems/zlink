@@ -10,6 +10,15 @@ import systems.zlink.framework.actors.*;
 import systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
+import systems.zlink.framework.locationprovider.ZLinkStoreKey;
+import systems.zlink.framework.locationprovider.ZLinkStorePut;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
+import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
+import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.*;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
@@ -26,6 +35,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAggregatePrepareR
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRow;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
@@ -41,6 +51,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.net.Socket;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -64,6 +75,8 @@ final class ZLinkRelocationObservationPublicTest {
     private static CompletableFuture<ZLinkSessionContext> connected;
     private static CompletableFuture<String> relayed;
     private static volatile Consumer<String> captureObserver = ignored -> {};
+    private static volatile java.util.function.Function<String, CompletionStage<Void>> captureGate =
+            ignored -> CompletableFuture.completedFuture(null);
 
     @Test
     void boundSessionRelaySurvivesActualUserSpotRelocation() throws Exception {
@@ -208,6 +221,159 @@ final class ZLinkRelocationObservationPublicTest {
                             "after-relocation", relayed.get(WAIT.toSeconds(), TimeUnit.SECONDS));
                 }
             }
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void capturedActorRequestReturnsTerminalToOriginalRequesterAcrossDeferredCrossNodeJoin(
+            boolean remoteRequester) throws Exception {
+        var locations = new ReplyTerminalGate();
+        var relocations = new InMemoryRelocationStore();
+        var captured = new CompletableFuture<Void>();
+        var releaseCapture = new CompletableFuture<Void>();
+        var actorId = "relocating-request-actor";
+        joined = new CompletableFuture<>();
+        try (var source =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options("reply-source", locations, relocations, null))) {
+            awaitReady(source);
+            await(source.spotManager().getOrCreate("reply-room", "room").submit());
+            await(source.actorManager().create(actorId, "player").submit());
+            assertEquals(
+                    "scheduled",
+                    await(
+                            source.actorClient()
+                                    .requestToActor(actorId, new Join("reply-room"))
+                                    .timeout(WAIT)
+                                    .submit(String.class)));
+            assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, await(joined));
+            joined = new CompletableFuture<>();
+            var sourceEndpoint =
+                    source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+            try (var target =
+                    ZLinkFrameworkRuntimeTestAccess.start(
+                            options("reply-target", locations, relocations, sourceEndpoint))) {
+                awaitReady(target);
+                var targetEndpoint =
+                        target.listenerStatus(ZLinkListenerKind.ROUTE_MESH, MESH).endpoint();
+                try (var destination =
+                        ZLinkFrameworkRuntimeTestAccess.start(
+                                options(
+                                        "reply-join-destination",
+                                        locations,
+                                        relocations,
+                                        targetEndpoint,
+                                        objects ->
+                                                objects.addSpotFactory(
+                                                        "join-only",
+                                                        Room.class,
+                                                        factory -> factory.disableRelocation())))) {
+                    awaitReady(destination);
+                    await(
+                            destination
+                                    .spotManager()
+                                    .getOrCreate("reply-join-only", "join-only")
+                                    .submit());
+                    try (var sourceReady =
+                                    observe(
+                                            source.routeMeshRuntime().observe(MESH, 8),
+                                            state ->
+                                                    state.isReady()
+                                                            && state.readyPeerCount()
+                                                                    >= (remoteRequester ? 2 : 1));
+                            var destinationReady =
+                                    observe(
+                                            destination.routeMeshRuntime().observe(MESH, 8),
+                                            state ->
+                                                    state.isReady()
+                                                            && state.readyPeerCount()
+                                                                    >= (remoteRequester ? 2 : 1))) {
+                        await(sourceReady.result);
+                        await(destinationReady.result);
+                        captureGate =
+                                id -> {
+                                    if (id.equals(actorId) && captured.complete(null)) {
+                                        return releaseCapture;
+                                    }
+                                    return CompletableFuture.completedFuture(null);
+                                };
+                        var first = source.relocate(relocationOptions());
+                        try {
+                            await(captured);
+                            var reply =
+                                    (remoteRequester ? destination : source)
+                                            .actorClient()
+                                            .requestToActor(actorId, new Join("reply-join-only"))
+                                            .timeout(WAIT)
+                                            .submit(String.class);
+                            await(reply.admitted());
+                            releaseCapture.complete(null);
+                            assertEquals(
+                                    ZLinkFrameworkRelocationOutcome.RELOCATED,
+                                    await(first).outcome());
+                            assertEquals("scheduled", await(reply));
+                            await(locations.terminalWrite);
+                            assertInstanceOf(
+                                    ZLinkActorJoinCompletion.Accepted.class, await(joined));
+                            var authority =
+                                    assertInstanceOf(
+                                            systems.zlink.framework.runtime.internal.locations
+                                                    .ZLinkAuthoritySnapshot.class,
+                                            await(
+                                                    new systems.zlink.framework.runtime.internal
+                                                                    .locations
+                                                                    .ZLinkProviderLocationRepository(
+                                                                    locations)
+                                                            .read(
+                                                                    ZLinkAuthorityKeyCodec.actor(
+                                                                            actorId),
+                                                                    () -> false)));
+                            assertEquals(
+                                    RoutingId.from("reply-join-destination"),
+                                    authority.allocation().descriptor().rid());
+                        } finally {
+                            releaseCapture.complete(null);
+                            locations.releaseWrite.complete(null);
+                            captureGate = ignored -> CompletableFuture.completedFuture(null);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static final class ReplyTerminalGate implements ZLinkLocationStore {
+        private final ZLinkInMemoryLocationStore delegate = new ZLinkInMemoryLocationStore();
+        private final CompletableFuture<Void> terminalWrite = new CompletableFuture<>();
+        private final CompletableFuture<Void> releaseWrite = new CompletableFuture<>();
+
+        @Override
+        public CompletionStage<ZLinkStoreReadResult> read(
+                ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
+            return delegate.read(key, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreWriteResult> write(
+                ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+            for (var mutation : request.mutations()) {
+                if (mutation instanceof ZLinkStorePut put
+                        && put.key().value().startsWith("$zlink/relocation-reply/")
+                        && new String(put.bytes(), StandardCharsets.UTF_8)
+                                .contains("\"state\":\"terminalReceived\"")) {
+                    terminalWrite.complete(null);
+                    return releaseWrite.thenCompose(
+                            ignored -> delegate.write(request, cancellation));
+                }
+            }
+            return delegate.write(request, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreScanResult> scan(
+                ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
+            return delegate.scan(request, cancellation);
         }
     }
 
@@ -899,7 +1065,8 @@ final class ZLinkRelocationObservationPublicTest {
                         result.toString());
                 assertTrue(
                         readSpotTimerRegistration(target),
-                        "the target can independently register the same key with a different handler");
+                        "the target can independently register the same key with a different"
+                                + " handler");
             }
         }
     }
@@ -940,7 +1107,8 @@ final class ZLinkRelocationObservationPublicTest {
                                                 registrations,
                                                 () ->
                                                         fail(
-                                                                "the legacy object must block before target lookup"))
+                                                                "the legacy object must block"
+                                                                        + " before target lookup"))
                                         .toCompletableFuture()
                                         .join());
         return assertInstanceOf(RelocationBlockedException.class, failure.getCause()).reason();
@@ -1022,18 +1190,21 @@ final class ZLinkRelocationObservationPublicTest {
                                 try {
                                     if (method.getName().equals("commitAggregate")) {
                                         var fence = (ZLinkAggregateFence) arguments[0];
+                                        @SuppressWarnings("unchecked")
+                                        var replyRows =
+                                                (List<ZLinkRelocationReplyRow>) arguments[1];
+                                        var cancellation =
+                                                (systems.zlink.framework.runtime.internal.locations
+                                                                .ZLinkStoreCancellation)
+                                                        arguments[2];
                                         return beforeCommit
                                                 .get()
                                                 .thenCompose(
                                                         ignored ->
                                                                 delegate.commitAggregate(
                                                                         fence,
-                                                                        (systems.zlink.framework
-                                                                                        .runtime
-                                                                                        .internal
-                                                                                        .locations
-                                                                                        .ZLinkStoreCancellation)
-                                                                                arguments[1]))
+                                                                        replyRows,
+                                                                        cancellation))
                                                 .thenApply(
                                                         committed -> {
                                                             afterCommit.accept(committed);
@@ -1064,7 +1235,7 @@ final class ZLinkRelocationObservationPublicTest {
 
     private static DefaultZLinkFrameworkOptions options(
             String rid,
-            ZLinkInMemoryLocationStore locations,
+            ZLinkLocationStore locations,
             InMemoryRelocationStore relocations,
             String peer) {
         return options(rid, locations, relocations, peer, true);
@@ -1072,7 +1243,7 @@ final class ZLinkRelocationObservationPublicTest {
 
     private static DefaultZLinkFrameworkOptions options(
             String rid,
-            ZLinkInMemoryLocationStore locations,
+            ZLinkLocationStore locations,
             InMemoryRelocationStore relocations,
             String peer,
             boolean hostsRooms) {
@@ -1088,7 +1259,7 @@ final class ZLinkRelocationObservationPublicTest {
 
     private static DefaultZLinkFrameworkOptions options(
             String rid,
-            ZLinkInMemoryLocationStore locations,
+            ZLinkLocationStore locations,
             InMemoryRelocationStore relocations,
             String peer,
             Consumer<ZLinkMeshObjectServerBuilder> factories) {
@@ -1197,7 +1368,7 @@ final class ZLinkRelocationObservationPublicTest {
         public CompletionStage<byte[]> capture(
                 Player actor, ZLinkRelocationCancellation cancellation) {
             captureObserver.accept(actor.context().actorId());
-            return CompletableFuture.completedFuture(new byte[0]);
+            return captureGate.apply(actor.context().actorId()).thenApply(ignored -> new byte[0]);
         }
 
         @Override
@@ -1343,6 +1514,7 @@ final class ZLinkRelocationObservationPublicTest {
         @Override
         public void configure() {
             context.handlers().addHandler(LeaveHandler.class);
+            context.handlers().addHandler(RelocatedJoinHandler.class);
             context.handlers().addHandler(ProbeHandler.class);
         }
 
@@ -1359,6 +1531,16 @@ final class ZLinkRelocationObservationPublicTest {
         public CompletionStage<String> handle(
                 Lobby spot, Player actor, ZLinkMessageContext context, Join request) {
             actor.context().joinSpot(request.spotId()).defer();
+            return CompletableFuture.completedFuture("scheduled");
+        }
+    }
+
+    public static final class RelocatedJoinHandler
+            implements ZLinkSpotActorRequestHandler<Room, Player, Join, String> {
+        @Override
+        public CompletionStage<String> handle(
+                Room spot, Player actor, ZLinkMessageContext context, Join request) {
+            actor.context().joinSpot(request.spotId()).timeout(WAIT).defer();
             return CompletableFuture.completedFuture("scheduled");
         }
     }

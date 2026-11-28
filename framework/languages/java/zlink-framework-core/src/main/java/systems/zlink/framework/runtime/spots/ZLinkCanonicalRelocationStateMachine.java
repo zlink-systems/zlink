@@ -30,6 +30,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseFound;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationReplyRow;
 import systems.zlink.framework.runtime.internal.locations.ZLinkSpotTypeCapacityDelta;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
@@ -91,6 +92,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<Fence, SourceAttempt> sources = new HashMap<>();
     final Map<Fence, TargetAttempt> targets = new HashMap<>();
+    private final Map<UUID, ReplyRetention> replyRetention = new HashMap<>();
     private final Map<Fence, TerminalTarget> terminalTargets = new HashMap<>();
     private final AtomicInteger openSourceQuiescenceWindows = new AtomicInteger();
     private Runnable sourceQuiescenceChanged = () -> {};
@@ -103,6 +105,16 @@ final class ZLinkCanonicalRelocationStateMachine
     AttemptCounts attemptCountsForTest() {
         return inStateLane(
                 () -> new AttemptCounts(sources.size(), targets.size(), terminalTargets.size()));
+    }
+
+    @Override
+    public Optional<CompletableFuture<Void>> targetPublication(UUID relocationId) {
+        return inStateLane(
+                () ->
+                        targets.entrySet().stream()
+                                .filter(entry -> entry.getKey().id().equals(relocationId))
+                                .map(entry -> entry.getValue().terminal())
+                                .findFirst());
     }
 
     @Override
@@ -1016,7 +1028,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                                 attempt,
                                                 new ZLinkFrameworkException(
                                                         ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                        "canonical relocation target was superseded"))),
+                                                        "canonical relocation target was"
+                                                                + " superseded"))),
                         "temporary_queue")
                 .thenCompose(
                         ignored ->
@@ -1616,39 +1629,15 @@ final class ZLinkCanonicalRelocationStateMachine
                                                 ignored ->
                                                         target.stageRelayedRecord(request, record));
                             }
-                            return chain;
+                            return chain.thenCompose(ignored -> attempt.prepared())
+                                    .thenCompose(
+                                            prepared ->
+                                                    commitAndPublishTarget(
+                                                            attempt,
+                                                            prepared,
+                                                            request,
+                                                            verifiedBatch));
                         })
-                .thenCompose(ignored -> attempt.prepared())
-                .thenCompose(prepared -> commitUntilSettled(attempt, prepared))
-                .thenApply(
-                        published -> {
-                            //  S2 — target owner CAS confirmed.
-                            attempt.committed(published);
-                            attempt.committedNanos(System.nanoTime());
-                            return published;
-                        })
-                .thenCompose(ignored -> attempt.request())
-                .thenCompose(
-                        request ->
-                                coordinator
-                                        .advancePublished(
-                                                request.participants().stream()
-                                                        .map(
-                                                                participant ->
-                                                                        new ZLinkAggregateRelocationCoordinator
-                                                                                .ExpectedParticipant(
-                                                                                participant
-                                                                                        .authorityKey(),
-                                                                                participant
-                                                                                        .objectGeneration(),
-                                                                                participant
-                                                                                        .sourceAuthorityOwnerGeneration()))
-                                                        .toList(),
-                                                ZLinkAggregateFence.markerlessRelocation(
-                                                        request.fence().aggregateId()),
-                                                "activating",
-                                                OPEN)
-                                        .thenCompose(ignored -> target.publish(request)))
                 .thenApply(
                         ignored -> {
                             //  S3 — application dispatch opened on the target.
@@ -1672,6 +1661,131 @@ final class ZLinkCanonicalRelocationStateMachine
                         });
         return publication;
     }
+
+    private CompletionStage<Void> commitAndPublishTarget(
+            TargetAttempt attempt,
+            ZLinkAggregateRelocationCoordinator.Prepared prepared,
+            ZLinkSpotRetireControl.StageRequest request,
+            List<byte[]> verifiedBatch) {
+        ZLinkTargetRelocationReplies completions;
+        try {
+            completions =
+                    target.prepareCompletions(
+                            request,
+                            verifiedBatch,
+                            work -> delayScheduler.schedule(STORE_RETRY_DELAY, work));
+        } catch (ZLinkFrameworkException failure) {
+            if (failure.kind() != ZLinkFrameworkErrorKind.INTERNAL_FAILURE) throw failure;
+            return coordinator.abort(prepared).thenCompose(ignored -> failed(failure));
+        }
+        var participants =
+                request.participants().stream()
+                        .map(
+                                participant ->
+                                        new ZLinkAggregateRelocationCoordinator.ExpectedParticipant(
+                                                participant.authorityKey(),
+                                                participant.objectGeneration(),
+                                                participant.sourceAuthorityOwnerGeneration()))
+                        .toList();
+        return commitUntilSettled(attempt, prepared, completions)
+                .exceptionallyCompose(
+                        failure -> {
+                            var cause = unwrap(failure);
+                            if (cause instanceof ZLinkFrameworkException framework
+                                    && framework.kind()
+                                            == ZLinkFrameworkErrorKind.INTERNAL_FAILURE) {
+                                return coordinator
+                                        .abort(prepared)
+                                        .thenCompose(ignored -> failed(cause));
+                            }
+                            return failed(cause);
+                        })
+                .thenCompose(
+                        published -> {
+                            attempt.committed(published);
+                            attempt.committedNanos(System.nanoTime());
+                            if (!completions.acceptedRows().isEmpty()) {
+                                inStateLane(
+                                        () ->
+                                                replyRetention.put(
+                                                        prepared.fence().aggregateId(),
+                                                        new ReplyRetention(
+                                                                prepared.request().targetOwner(),
+                                                                Instant.MIN)));
+                            }
+                            return coordinator
+                                    .advancePublished(
+                                            participants, prepared.fence(), "activating", OPEN)
+                                    .thenCompose(ignored -> target.publish(request, completions));
+                        });
+    }
+
+    CompletionStage<Void> renewReplyRows(Instant storeNow) {
+        var due =
+                inStateLane(
+                        () ->
+                                replyRetention.entrySet().stream()
+                                        .filter(entry -> !entry.getValue().due().isAfter(storeNow))
+                                        .map(entry -> Map.entry(entry.getKey(), entry.getValue()))
+                                        .toList());
+        CompletionStage<Void> renewal = CompletableFuture.completedFuture(null);
+        for (var entry : due) {
+            renewal =
+                    renewal.thenCompose(
+                            ignored -> renewReplyRows(entry.getKey(), entry.getValue(), storeNow));
+        }
+        return renewal;
+    }
+
+    private CompletionStage<Void> renewReplyRows(
+            UUID id, ReplyRetention retention, Instant storeNow) {
+        if (!coordinator.isTargetLeaseValid(retention.writer())) {
+            inStateLane(() -> replyRetention.remove(id, retention));
+            return CompletableFuture.completedFuture(null);
+        }
+        return locations
+                .readActiveRelocationReplies(id, OPEN)
+                .thenCompose(
+                        rows -> {
+                            if (rows.isEmpty()) {
+                                inStateLane(() -> replyRetention.remove(id, retention));
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            CompletionStage<Void> writes = CompletableFuture.completedFuture(null);
+                            Instant next = storeNow.plus(ZLinkRelocationReplyRow.ACTIVE_RETENTION);
+                            for (var stored : rows) {
+                                if (stored.renewAfter().isAfter(storeNow)) {
+                                    if (stored.renewAfter().isBefore(next))
+                                        next = stored.renewAfter();
+                                    continue;
+                                }
+                                writes =
+                                        writes.thenCompose(
+                                                ignored ->
+                                                        locations
+                                                                .updateRelocationReply(
+                                                                        stored.row().accepted(),
+                                                                        OPEN)
+                                                                .thenAccept(updated -> {}));
+                                Instant renewed =
+                                        storeNow.plus(ZLinkRelocationReplyRow.RENEWAL_THRESHOLD);
+                                if (renewed.isBefore(next)) next = renewed;
+                            }
+                            Instant nextDue = next;
+                            return writes.thenRun(
+                                    () ->
+                                            inStateLane(
+                                                    () ->
+                                                            replyRetention.replace(
+                                                                    id,
+                                                                    retention,
+                                                                    new ReplyRetention(
+                                                                            retention.writer(),
+                                                                            nextDue))));
+                        });
+    }
+
+    private record ReplyRetention(ZLinkLocationOwnerToken writer, Instant due) {}
 
     private void retainTerminalTarget(Fence fence, TargetAttempt attempt) {
         var prepare = attempt.prepare();
@@ -1724,10 +1838,12 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private CompletionStage<ZLinkAggregateRelocationCoordinator.Published> commitUntilSettled(
-            TargetAttempt attempt, ZLinkAggregateRelocationCoordinator.Prepared prepared) {
+            TargetAttempt attempt,
+            ZLinkAggregateRelocationCoordinator.Prepared prepared,
+            ZLinkTargetRelocationReplies completions) {
         CompletableFuture<ZLinkAggregateRelocationCoordinator.Published> result =
                 new CompletableFuture<>();
-        commitUntilSettled(attempt, prepared, result);
+        commitUntilSettled(attempt, prepared, completions, result);
         return result;
     }
 
@@ -1741,9 +1857,10 @@ final class ZLinkCanonicalRelocationStateMachine
     private void commitUntilSettled(
             TargetAttempt attempt,
             ZLinkAggregateRelocationCoordinator.Prepared prepared,
+            ZLinkTargetRelocationReplies completions,
             CompletableFuture<ZLinkAggregateRelocationCoordinator.Published> result) {
         coordinator
-                .commit(prepared, OPEN)
+                .commit(prepared, completions.acceptedRows(), OPEN)
                 .whenComplete(
                         (published, failure) -> {
                             if (failure == null) {
@@ -1756,8 +1873,11 @@ final class ZLinkCanonicalRelocationStateMachine
                                             ZLinkAggregateRelocationCoordinator
                                                     .AuthorityConflictException
                                     || cause instanceof ZLinkFrameworkException framework
-                                            && framework.kind()
-                                                    == ZLinkFrameworkErrorKind.DATA_LOST) {
+                                            && (framework.kind()
+                                                            == ZLinkFrameworkErrorKind.DATA_LOST
+                                                    || framework.kind()
+                                                            == ZLinkFrameworkErrorKind
+                                                                    .INTERNAL_FAILURE)) {
                                 result.completeExceptionally(cause);
                                 return;
                             }
@@ -1778,7 +1898,10 @@ final class ZLinkCanonicalRelocationStateMachine
                                                         STORE_RETRY_DELAY,
                                                         () ->
                                                                 commitUntilSettled(
-                                                                        attempt, prepared, result));
+                                                                        attempt,
+                                                                        prepared,
+                                                                        completions,
+                                                                        result));
                                             });
                         });
     }
@@ -1982,7 +2105,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                             != localNodeGeneration) {
                                 return failed(
                                         new IllegalStateException(
-                                                "Actor relocation target does not own the PerActor Spot shell"));
+                                                "Actor relocation target does not own the PerActor"
+                                                        + " Spot shell"));
                             }
                             var committed = ZLinkAuthorityRelocation.publication(shell, 0);
                             if (committed == null) {
@@ -2211,7 +2335,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                                     || binding.participantId()
                                                             > participants.size())
                                                 throw new IllegalArgumentException(
-                                                        "Session binding participant is outside inventory");
+                                                        "Session binding participant is outside"
+                                                                + " inventory");
                                             var participant =
                                                     participants.get(
                                                             Math.toIntExact(
@@ -2219,7 +2344,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                             if (participant.objectKind()
                                                     != ZLinkPlacementObjectKind.ACTOR.value())
                                                 throw new IllegalArgumentException(
-                                                        "Session binding participant is not an Actor");
+                                                        "Session binding participant is not an"
+                                                                + " Actor");
                                             return new ZLinkSpotRetireControl.SessionRouteFence(
                                                     participant.objectId(),
                                                     participant.objectGeneration(),

@@ -36,6 +36,8 @@ final class ZLinkInMemoryAuthorityStore {
     private final Map<String, ReservationState> reservations = new HashMap<>();
     private final Map<ZLinkCreationOperationIdentity, ZLinkCreationOperationTerminal>
             creationTerminals = new HashMap<>();
+    private final Map<systems.zlink.framework.locationprovider.ZLinkStoreKey, Reply>
+            relocationReplies = new HashMap<>();
     private final Map<UUID, AggregateState> aggregates = new HashMap<>();
     private final Map<String, byte[]> membershipMutations = new HashMap<>();
     private final Map<AllocationCounterKey, CapacityCounter> actorAllocationCounters =
@@ -274,6 +276,15 @@ final class ZLinkInMemoryAuthorityStore {
 
     private ZLinkFrameworkErrorKind spotMembershipFailure(
             byte[] previousPayload, byte[] payload, AggregateState owningAggregate) {
+        return spotMembershipFailure(previousPayload, payload, owningAggregate, null, null);
+    }
+
+    private ZLinkFrameworkErrorKind spotMembershipFailure(
+            byte[] previousPayload,
+            byte[] payload,
+            AggregateState owningAggregate,
+            Set<String> authorities,
+            Set<String> owners) {
         var actor = new ZLinkActorAuthorityPayloadCodec().decode(payload);
         if (actor.isEmpty()) return null;
         var membership = actor.get();
@@ -289,12 +300,17 @@ final class ZLinkInMemoryAuthorityStore {
             return ZLinkFrameworkErrorKind.UNAVAILABLE;
         if (membership.currentSpotKind()
                 != systems.zlink.framework.spots.ZLinkSpotKind.USER.value()) return null;
-        Row target = rows.get(ZLinkAuthorityKeyCodec.spot(membership.currentSpotId()));
+        String targetKey = ZLinkAuthorityKeyCodec.spot(membership.currentSpotId());
+        Row target = rows.get(targetKey);
         if (target == null) return ZLinkFrameworkErrorKind.NOT_FOUND;
         if (target.objectGeneration != membership.currentSpotGeneration()
                 || !ownerLeaseIsLive.test(target.owner)
                 || participantIsPrepared(ZLinkAuthorityKeyCodec.spot(membership.currentSpotId())))
             return ZLinkFrameworkErrorKind.UNAVAILABLE;
+        if (authorities != null) {
+            authorities.add(targetKey);
+            owners.add(target.owner.ownerId());
+        }
         return new ZLinkServiceAuthorityPayloadCodec()
                         .decode(target.payload)
                         .filter(
@@ -939,8 +955,11 @@ final class ZLinkInMemoryAuthorityStore {
                                                                         .equals(authorityKey)));
     }
 
-    public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
-            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
+    CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
+            ZLinkAggregateFence fence,
+            List<ZLinkRelocationReplyRow> acceptedReplies,
+            ZLinkStoreCancellation cancellation) {
+        var replies = List.copyOf(acceptedReplies);
         return inStateLane(
                 () -> {
                     AggregateState state = aggregates.get(fence.aggregateId());
@@ -959,6 +978,9 @@ final class ZLinkInMemoryAuthorityStore {
                     if (!aggregateStateIsCurrent(state.request, fence)) {
                         return completed(ZLinkAggregateCommitResult.STALE);
                     }
+                    var membershipKeys = new HashSet<String>();
+                    var ownerKeys = new HashSet<String>();
+                    ownerKeys.add(state.request.targetOwner().ownerId());
                     for (var participant : state.request.participants()) {
                         var actor =
                                 new ZLinkActorAuthorityPayloadCodec()
@@ -995,7 +1017,9 @@ final class ZLinkInMemoryAuthorityStore {
                         if (spotMembershipFailure(
                                         rows.get(participant.authorityKey()).payload,
                                         participant.authorityPayload(),
-                                        state)
+                                        state,
+                                        membershipKeys,
+                                        ownerKeys)
                                 != null) return completed(ZLinkAggregateCommitResult.STALE);
                     }
                     int ownerGenerationCount =
@@ -1011,7 +1035,56 @@ final class ZLinkInMemoryAuthorityStore {
                             || !hasCounterRoom(revision, state.request.participants().size())) {
                         return completed(ZLinkAggregateCommitResult.GENERATION_EXHAUSTED);
                     }
-                    for (ZLinkAggregateParticipant participant : state.request.participants()) {
+                    var now = clock.instant();
+                    var requestKeys =
+                            new HashSet<systems.zlink.framework.locationprovider.ZLinkStoreKey>();
+                    var participantKeys =
+                            state.request.participants().stream()
+                                    .map(ZLinkAggregateParticipant::authorityKey)
+                                    .collect(java.util.stream.Collectors.toSet());
+                    relocationReplies.values().removeIf(reply -> !reply.expiresAt().isAfter(now));
+                    for (var row : replies) {
+                        if (!row.relocationId().equals(fence.aggregateId())
+                                || !row.state().equals(ZLinkRelocationReplyRow.ACCEPTED)
+                                || !row.writer().equals(state.request.targetOwner())
+                                || !participantKeys.contains(row.objectKey())
+                                || !requestKeys.add(row.key())
+                                || relocationReplies.containsKey(row.key())) {
+                            return CompletableFuture.failedFuture(
+                                    new ZLinkAggregateRelocationCoordinator
+                                            .RelocationDataLostException(
+                                            "Accepted relocation reply does not match the commit"
+                                                    + " fence."));
+                        }
+                    }
+                    int capacityKeys =
+                            ZLinkCapacityCounters.aggregateCommit(
+                                            state.request,
+                                            index ->
+                                                    rows.get(
+                                                                    state.request
+                                                                            .participants()
+                                                                            .get(index)
+                                                                            .authorityKey())
+                                                            .allocation)
+                                    .size();
+                    if (1L
+                                    + ownerKeys.size()
+                                    + membershipKeys.size()
+                                    + capacityKeys
+                                    + requestKeys.size()
+                            > ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS) {
+                        return CompletableFuture.failedFuture(
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                                        "Relocation commit exceeds the Location Store batch"
+                                                + " bounds."));
+                    }
+                    for (var row : replies) {
+                        relocationReplies.put(row.key(), new Reply(row, now.plus(row.retention())));
+                    }
+                    for (int index = 0; index < state.request.participants().size(); index++) {
+                        var participant = state.request.participants().get(index);
                         Row current = rows.get(participant.authorityKey());
                         boolean changesOwner =
                                 participant.ownerTransition()
@@ -1057,6 +1130,66 @@ final class ZLinkInMemoryAuthorityStore {
                     return completed(ZLinkAggregateCommitResult.COMMITTED);
                 });
     }
+
+    CompletionStage<ZLinkRelocationReplyRow> updateRelocationReply(ZLinkRelocationReplyRow update) {
+        return inStateLane(
+                () -> {
+                    Instant now = clock.instant();
+                    var current = relocationReplies.get(update.key());
+                    if (current == null || !current.expiresAt().isAfter(now)) {
+                        relocationReplies.remove(update.key());
+                        return CompletableFuture.failedFuture(
+                                new ZLinkAggregateRelocationCoordinator.RelocationDataLostException(
+                                        "Accepted relocation reply row is missing."));
+                    }
+                    var next = update.transition(current.row(), now, current.expiresAt());
+                    if (next == null) return completed(current.row());
+                    if (!ownerLeaseIsLive.test(update.writer())) {
+                        return CompletableFuture.failedFuture(
+                                new ZLinkAggregateRelocationCoordinator.RelocationDataLostException(
+                                        "Relocation reply writer lease ended."));
+                    }
+                    relocationReplies.put(
+                            update.key(), new Reply(next, now.plus(next.retention())));
+                    return completed(next);
+                });
+    }
+
+    CompletionStage<Optional<ZLinkRelocationReplyRow>> readRelocationReply(
+            UUID relocationId, ZLinkRelocationReplyRow.Source source, String operationId) {
+        return inStateLane(
+                () -> {
+                    var key = ZLinkRelocationReplyRow.key(relocationId, source, operationId);
+                    var reply = relocationReplies.get(key);
+                    if (reply == null || !reply.expiresAt().isAfter(clock.instant())) {
+                        relocationReplies.remove(key);
+                        return completed(Optional.empty());
+                    }
+                    return completed(Optional.of(reply.row()));
+                });
+    }
+
+    CompletionStage<List<ZLinkRelocationReplyRow.Stored>> readActiveRelocationReplies(
+            UUID relocationId) {
+        return inStateLane(
+                () -> {
+                    Instant now = clock.instant();
+                    relocationReplies.values().removeIf(reply -> !reply.expiresAt().isAfter(now));
+                    return completed(
+                            relocationReplies.values().stream()
+                                    .filter(
+                                            reply ->
+                                                    reply.row().relocationId().equals(relocationId)
+                                                            && !reply.row().terminal())
+                                    .map(
+                                            reply ->
+                                                    new ZLinkRelocationReplyRow.Stored(
+                                                            reply.row(), reply.expiresAt()))
+                                    .toList());
+                });
+    }
+
+    private record Reply(ZLinkRelocationReplyRow row, Instant expiresAt) {}
 
     public CompletionStage<ZLinkAggregateAbortResult> abortAggregate(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {

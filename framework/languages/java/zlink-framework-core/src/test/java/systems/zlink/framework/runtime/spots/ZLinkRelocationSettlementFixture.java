@@ -675,7 +675,17 @@ final class ZLinkRelocationSettlementFixture {
         }
 
         @Override
-        public CompletionStage<Void> publish(ZLinkSpotRetireControl.StageRequest request) {
+        public ZLinkTargetRelocationReplies prepareCompletions(
+                ZLinkSpotRetireControl.StageRequest request,
+                List<byte[]> verifiedBatch,
+                java.util.function.Consumer<Runnable> resubmit) {
+            return ZLinkSpotRuntimeTestAccess.noAcceptedRelocationRequests(request, resubmit);
+        }
+
+        @Override
+        public CompletionStage<Void> publish(
+                ZLinkSpotRetireControl.StageRequest request,
+                ZLinkTargetRelocationReplies completions) {
             published.incrementAndGet();
             publishedEvent.complete(null);
             return CompletableFuture.completedFuture(null);

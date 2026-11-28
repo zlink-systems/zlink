@@ -1276,7 +1276,8 @@ final class ZLinkProviderAuthorityRepository {
                                                             != null) {
                                                 throw new ZLinkFrameworkException(
                                                         ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                        "Ended authority requires relocation recovery");
+                                                        "Ended authority requires relocation"
+                                                                + " recovery");
                                             }
                                         }
                                         return provider.read(sourceKey, cancellation)
@@ -2345,21 +2346,24 @@ final class ZLinkProviderAuthorityRepository {
     }
 
     CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
-            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
+            ZLinkAggregateFence fence,
+            List<ZLinkRelocationReplyRow> acceptedReplies,
+            ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(fence, "fence");
         Objects.requireNonNull(cancellation, "cancellation");
         var completion = new CompletableFuture<ZLinkAggregateCommitResult>();
-        completeAggregateCommit(fence, cancellation, completion);
+        completeAggregateCommit(fence, List.copyOf(acceptedReplies), cancellation, completion);
         return completion;
     }
 
     private void completeAggregateCommit(
             ZLinkAggregateFence fence,
+            List<ZLinkRelocationReplyRow> acceptedReplies,
             ZLinkStoreCancellation cancellation,
             CompletableFuture<ZLinkAggregateCommitResult> completion) {
         CompletionStage<Optional<ZLinkAggregateCommitResult>> attempt;
         try {
-            attempt = readAggregateCommitAttempt(fence, cancellation);
+            attempt = readAggregateCommitAttempt(fence, acceptedReplies, cancellation);
         } catch (RuntimeException failure) {
             completion.completeExceptionally(failure);
             return;
@@ -2375,13 +2379,18 @@ final class ZLinkProviderAuthorityRepository {
                                 .execute(
                                         () ->
                                                 completeAggregateCommit(
-                                                        fence, cancellation, completion));
+                                                        fence,
+                                                        acceptedReplies,
+                                                        cancellation,
+                                                        completion));
                     }
                 });
     }
 
     private CompletionStage<Optional<ZLinkAggregateCommitResult>> readAggregateCommitAttempt(
-            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
+            ZLinkAggregateFence fence,
+            List<ZLinkRelocationReplyRow> acceptedReplies,
+            ZLinkStoreCancellation cancellation) {
         ZLinkStoreKey marker = aggregateKey(fence);
         var opaqueCancellation = adapt(cancellation);
         return provider.read(marker, opaqueCancellation)
@@ -2449,8 +2458,16 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                 .STALE));
                                                                     }
                                                                     var mutations =
-                                                                            aggregateCapacityMutations(
-                                                                                    request, rows);
+                                                                            ZLinkCapacityCounters
+                                                                                    .aggregateCommit(
+                                                                                            request,
+                                                                                            index ->
+                                                                                                    decode(
+                                                                                                                    rows.get(
+                                                                                                                                    index)
+                                                                                                                            .value()
+                                                                                                                            .bytes())
+                                                                                                            .allocation());
                                                                     mutations.add(
                                                                             new ZLinkStorePut(
                                                                                     marker,
@@ -2458,10 +2475,12 @@ final class ZLinkProviderAuthorityRepository {
                                                                                             AGGREGATE_COMMITTED,
                                                                                             request),
                                                                                     null));
-                                                                    return write(
-                                                                                    new ZLinkStoreWriteRequest(
-                                                                                            conditions,
-                                                                                            mutations),
+                                                                    return writeAggregateCommit(
+                                                                                    fence,
+                                                                                    request,
+                                                                                    acceptedReplies,
+                                                                                    conditions,
+                                                                                    mutations,
                                                                                     opaqueCancellation)
                                                                             .thenCompose(
                                                                                     result -> {
@@ -2491,21 +2510,201 @@ final class ZLinkProviderAuthorityRepository {
                         });
     }
 
-    private List<ZLinkStoreMutation> aggregateCapacityMutations(
-            ZLinkAggregatePrepareRequest request, List<LoadedParticipant> rows) {
-        var deltas = new ZLinkCapacityCounters();
-        var target = request.targetDescriptor();
-        deltas.change(target, request.capacityBundle(), -1, 0);
-        for (int index = 0; index < rows.size(); index++) {
-            if (request.participants().get(index).ownerTransition()
-                    != ZLinkAuthorityGenerationTransition.NEW_OWNER) continue;
-            var allocation = decode(rows.get(index).value().bytes()).allocation();
-            deltas.change(allocation.descriptor(), allocation.capacityBundle(), 0, -1);
-            deltas.change(target, allocation.capacityBundle(), 0, 1);
+    private CompletionStage<ZLinkStoreWriteResult> writeAggregateCommit(
+            ZLinkAggregateFence fence,
+            ZLinkAggregatePrepareRequest request,
+            List<ZLinkRelocationReplyRow> acceptedReplies,
+            List<ZLinkStoreCondition> conditions,
+            List<ZLinkStoreMutation> mutations,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        var keys = new java.util.HashSet<ZLinkStoreKey>();
+        var participants =
+                request.participants().stream()
+                        .map(ZLinkAggregateParticipant::authorityKey)
+                        .collect(java.util.stream.Collectors.toSet());
+        for (var row : acceptedReplies) {
+            if (!row.relocationId().equals(fence.aggregateId())
+                    || !row.state().equals(ZLinkRelocationReplyRow.ACCEPTED)
+                    || !row.writer().equals(request.targetOwner())
+                    || !participants.contains(row.objectKey())
+                    || !keys.add(row.key())) {
+                return failed(
+                        new ZLinkAggregateRelocationCoordinator.RelocationDataLostException(
+                                "Accepted relocation reply does not match the commit fence."));
+            }
+            conditions.add(new ZLinkStoreMissingCondition(row.key()));
+            mutations.add(
+                    new ZLinkStorePut(
+                            row.key(), row.encode(), ZLinkRelocationReplyRow.ACTIVE_RETENTION));
         }
-        List<ZLinkStoreMutation> mutations = new ArrayList<>();
-        deltas.appendTo(mutations);
-        return mutations;
+        return completed(null)
+                .thenCompose(
+                        ignored ->
+                                write(
+                                        new ZLinkStoreWriteRequest(conditions, mutations),
+                                        cancellation))
+                .exceptionallyCompose(
+                        failure -> {
+                            var cause = unwrapReplyWrite(failure);
+                            return failed(
+                                    cause instanceof IllegalArgumentException
+                                            ? new ZLinkFrameworkException(
+                                                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                                                    "Relocation commit exceeds the Location Store"
+                                                            + " batch bounds.",
+                                                    cause)
+                                            : cause);
+                        });
+    }
+
+    CompletionStage<ZLinkRelocationReplyRow> updateRelocationReply(
+            ZLinkRelocationReplyRow update, ZLinkStoreCancellation cancellation) {
+        return updateRelocationReply(update, adapt(cancellation), null);
+    }
+
+    private CompletionStage<ZLinkRelocationReplyRow> updateRelocationReply(
+            ZLinkRelocationReplyRow update,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
+            Throwable uncertainWrite) {
+        var key = update.key();
+        return provider.read(key, cancellation)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkStoreReadFound found)) {
+                                return failed(
+                                        new ZLinkAggregateRelocationCoordinator
+                                                .RelocationDataLostException(
+                                                "Accepted relocation reply row is missing."));
+                            }
+                            var value = found.value();
+                            var current = ZLinkRelocationReplyRow.decode(key, value.bytes());
+                            var next =
+                                    update.transition(current, value.storeNow(), value.expiresAt());
+                            if (next == null) return completed(current);
+                            if (uncertainWrite != null) return failed(uncertainWrite);
+                            var conditions = new ArrayList<ZLinkStoreCondition>();
+                            conditions.add(new ZLinkStoreVersionCondition(key, value.version()));
+                            return requireLiveOwner(update.writer(), conditions, cancellation)
+                                    .thenCompose(
+                                            live -> {
+                                                if (!live) {
+                                                    return failed(
+                                                            new ZLinkFrameworkException(
+                                                                    ZLinkFrameworkErrorKind
+                                                                            .DATA_LOST,
+                                                                    "Relocation reply writer lease"
+                                                                            + " ended."));
+                                                }
+                                                return completed(null)
+                                                        .thenCompose(
+                                                                ignored ->
+                                                                        write(
+                                                                                new ZLinkStoreWriteRequest(
+                                                                                        conditions,
+                                                                                        List.of(
+                                                                                                new ZLinkStorePut(
+                                                                                                        key,
+                                                                                                        next
+                                                                                                                .encode(),
+                                                                                                        next
+                                                                                                                .retention()))),
+                                                                                cancellation))
+                                                        .handle(
+                                                                (result, failure) ->
+                                                                        new ReplyWrite(
+                                                                                result, failure))
+                                                        .thenCompose(
+                                                                outcome -> {
+                                                                    if (outcome.result()
+                                                                            instanceof
+                                                                            ZLinkStoreWriteApplied) {
+                                                                        return completed(next);
+                                                                    }
+                                                                    return updateRelocationReply(
+                                                                            update,
+                                                                            cancellation,
+                                                                            outcome.failure()
+                                                                                            == null
+                                                                                    ? new ZLinkFrameworkException(
+                                                                                            ZLinkFrameworkErrorKind
+                                                                                                    .UNAVAILABLE,
+                                                                                            "Relocation"
+                                                                                                    + " reply"
+                                                                                                    + " row CAS"
+                                                                                                    + " conflicted.")
+                                                                                    : unwrapReplyWrite(
+                                                                                            outcome
+                                                                                                    .failure()));
+                                                                });
+                                            });
+                        });
+    }
+
+    private record ReplyWrite(ZLinkStoreWriteResult result, Throwable failure) {}
+
+    private static Throwable unwrapReplyWrite(Throwable cause) {
+        while (cause instanceof java.util.concurrent.CompletionException
+                && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        return cause;
+    }
+
+    CompletionStage<Optional<ZLinkRelocationReplyRow>> readRelocationReply(
+            UUID relocationId,
+            ZLinkRelocationReplyRow.Source source,
+            String operationId,
+            ZLinkStoreCancellation cancellation) {
+        var key = ZLinkRelocationReplyRow.key(relocationId, source, operationId);
+        return provider.read(key, adapt(cancellation))
+                .thenApply(
+                        read ->
+                                read instanceof ZLinkStoreReadFound found
+                                        ? Optional.of(
+                                                ZLinkRelocationReplyRow.decode(
+                                                        key, found.value().bytes()))
+                                        : Optional.empty());
+    }
+
+    CompletionStage<List<ZLinkRelocationReplyRow.Stored>> readActiveRelocationReplies(
+            UUID relocationId, ZLinkStoreCancellation cancellation) {
+        return scanActiveReplies(
+                ZLinkRelocationReplyRow.prefix(relocationId),
+                null,
+                new ArrayList<>(),
+                adapt(cancellation));
+    }
+
+    private CompletionStage<List<ZLinkRelocationReplyRow.Stored>> scanActiveReplies(
+            String prefix,
+            ZLinkStoreScanCursor cursor,
+            List<ZLinkRelocationReplyRow.Stored> rows,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        return provider.scan(new ZLinkStoreScanRequest(prefix, cursor, 1_000), cancellation)
+                .thenCompose(
+                        result -> {
+                            if (!(result instanceof ZLinkStoreScanPageResult pageResult)) {
+                                return failed(
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                "Relocation reply snapshot expired."));
+                            }
+                            var page = pageResult.value();
+                            for (var item : page.items()) {
+                                var row =
+                                        ZLinkRelocationReplyRow.decode(
+                                                item.key(), item.value().bytes());
+                                if (!row.terminal()) {
+                                    rows.add(
+                                            new ZLinkRelocationReplyRow.Stored(
+                                                    row, item.value().expiresAt()));
+                                }
+                            }
+                            return page.nextCursor() == null
+                                    ? completed(List.copyOf(rows))
+                                    : scanActiveReplies(
+                                            prefix, page.nextCursor(), rows, cancellation);
+                        });
     }
 
     private CompletionStage<Optional<ZLinkAggregateCommitResult>> retryAggregateCommit(
@@ -2898,13 +3097,15 @@ final class ZLinkProviderAuthorityRepository {
                                                             .version()
                                                             .equals(item.value().version()))
                                                         throw new ZLinkConfigurationException(
-                                                                "v11 aggregate changed during conversion: "
+                                                                "v11 aggregate changed during"
+                                                                        + " conversion: "
                                                                         + item.key().value());
                                                     if (!(read
                                                             instanceof
                                                             ZLinkStoreReadFound capacity))
                                                         throw new ZLinkConfigurationException(
-                                                                "Missing v11 capacity for aggregate "
+                                                                "Missing v11 capacity for aggregate"
+                                                                        + " "
                                                                         + item.key().value());
                                                     var row =
                                                             projected == null
@@ -4075,13 +4276,6 @@ final class ZLinkProviderAuthorityRepository {
                         result -> {
                             if (!(result instanceof ZLinkStoreWriteApplied applied)) {
                                 AuthorityRecord initial = decode(found.value().bytes());
-                                if (next != null
-                                        && next.relocation() != null
-                                        && next.relocation()
-                                                .publishesCompletionAfter(initial.relocation())) {
-                                    return read(authorityKey, cancellation)
-                                            .thenApply(ZLinkAuthorityConflict::new);
-                                }
                                 return canRebuild(
                                                 key,
                                                 found.value().version().value(),
@@ -4645,6 +4839,8 @@ final class ZLinkProviderAuthorityRepository {
                     markerNode.has("relocation")
                             ? new ZLinkAuthorityRelocation(markerNode.get("relocation"))
                             : null);
+        } catch (ZLinkAggregateRelocationCoordinator.RelocationDataLostException failure) {
+            throw failure;
         } catch (IOException | RuntimeException failure) {
             throw new IllegalStateException("Location Store authority record is invalid", failure);
         }

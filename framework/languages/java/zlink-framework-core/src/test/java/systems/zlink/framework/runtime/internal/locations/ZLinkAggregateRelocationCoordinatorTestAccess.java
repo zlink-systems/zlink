@@ -4,9 +4,9 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletionStage;
-import java.util.function.BiFunction;
 
 public final class ZLinkAggregateRelocationCoordinatorTestAccess {
     private ZLinkAggregateRelocationCoordinatorTestAccess() {}
@@ -26,14 +26,12 @@ public final class ZLinkAggregateRelocationCoordinatorTestAccess {
     }
 
     public static void interceptCommit(
-            ZLinkAggregateRelocationCoordinator coordinator,
-            BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> interceptor) {
+            ZLinkAggregateRelocationCoordinator coordinator, CommitInterceptor interceptor) {
         handler(coordinator).commit = Objects.requireNonNull(interceptor, "interceptor");
     }
 
     public static void interceptRead(
-            ZLinkAggregateRelocationCoordinator coordinator,
-            BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> interceptor) {
+            ZLinkAggregateRelocationCoordinator coordinator, ReadInterceptor interceptor) {
         handler(coordinator).read = Objects.requireNonNull(interceptor, "interceptor");
     }
 
@@ -41,25 +39,47 @@ public final class ZLinkAggregateRelocationCoordinatorTestAccess {
         return (InterceptingHandler) Proxy.getInvocationHandler(coordinator.authorityStore);
     }
 
+    @FunctionalInterface
+    public interface CommitInterceptor {
+        CompletionStage<ZLinkAggregateCommitResult> commit(
+                ZLinkLocationRepository repository,
+                ZLinkAggregateFence fence,
+                List<ZLinkRelocationReplyRow> acceptedReplies,
+                ZLinkStoreCancellation cancellation);
+    }
+
+    @FunctionalInterface
+    public interface ReadInterceptor {
+        CompletionStage<ZLinkAuthorityReadResult> read(
+                ZLinkLocationRepository repository,
+                String key,
+                ZLinkStoreCancellation cancellation);
+    }
+
     private static final class InterceptingHandler implements InvocationHandler {
         private final ZLinkLocationRepository delegate;
-        private volatile BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> commit;
-
-        private volatile BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> read;
+        private volatile CommitInterceptor commit;
+        private volatile ReadInterceptor read;
 
         private InterceptingHandler(ZLinkLocationRepository delegate) {
             this.delegate = Objects.requireNonNull(delegate, "delegate");
         }
 
         @Override
+        @SuppressWarnings("unchecked")
         public Object invoke(Object proxy, Method method, Object[] arguments) throws Throwable {
             var current = commit;
             if (current != null && method.getName().equals("commitAggregate")) {
-                return current.apply(delegate, arguments);
+                return current.commit(
+                        delegate,
+                        (ZLinkAggregateFence) arguments[0],
+                        (List<ZLinkRelocationReplyRow>) arguments[1],
+                        (ZLinkStoreCancellation) arguments[2]);
             }
             var readInterceptor = read;
             if (readInterceptor != null && method.getName().equals("read")) {
-                return readInterceptor.apply(delegate, arguments);
+                return readInterceptor.read(
+                        delegate, (String) arguments[0], (ZLinkStoreCancellation) arguments[1]);
             }
             try {
                 return method.invoke(delegate, arguments);

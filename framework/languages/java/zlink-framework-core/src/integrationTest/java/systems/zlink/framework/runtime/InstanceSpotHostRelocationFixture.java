@@ -26,7 +26,6 @@ import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotClosingContext;
-import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 import systems.zlink.framework.spots.ZLinkSpotRelocationAdapter;
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 
@@ -47,7 +46,7 @@ abstract class InstanceSpotHostRelocationFixture {
     static final Duration DEADLINE = Duration.ofSeconds(10);
     static final String AUTHORITY = ZLinkAuthorityKeyCodec.spot(SPOT_ID);
 
-    private ZLinkInMemoryLocationStore store;
+    ZLinkInMemoryLocationStore store;
     private final boolean traceMessageFlow;
     ZLinkProviderLocationRepository authorityStore;
 
@@ -67,7 +66,7 @@ abstract class InstanceSpotHostRelocationFixture {
         Room.sourceContext = new CompletableFuture<>();
         Room.closingEntered = new CompletableFuture<>();
         Room.releaseClose = CompletableFuture.completedFuture(null);
-        Room.followHandlers = List.of();
+        Room.additionalHandlers = List.of();
         Room.restoreEntered = new CompletableFuture<>();
         Room.releaseRestore = CompletableFuture.completedFuture(null);
     }
@@ -175,7 +174,7 @@ abstract class InstanceSpotHostRelocationFixture {
     }
 
     public static final class Room implements ZLinkInstanceSpot {
-        static List<Class<? extends ZLinkSpotPacketHandler<Room, ?>>> followHandlers;
+        static List<Class<?>> additionalHandlers;
         static CompletableFuture<ZLinkInstanceSpotContext> sourceContext;
         static CompletableFuture<Void> closingEntered;
         static CompletableFuture<Void> releaseClose;
@@ -198,7 +197,7 @@ abstract class InstanceSpotHostRelocationFixture {
         @Override
         public void configure() {
             context.handlers().addPacket(Echo.class);
-            followHandlers.forEach(context.handlers()::addPacket);
+            additionalHandlers.forEach(context.handlers()::addPacket);
         }
 
         @Override

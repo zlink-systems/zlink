@@ -182,8 +182,17 @@ final class ZLinkSpotWideAuthorityFenceTest {
                             }
 
                             @Override
+                            public ZLinkTargetRelocationReplies prepareCompletions(
+                                    ZLinkSpotRetireControl.StageRequest request,
+                                    List<byte[]> verifiedBatch,
+                                    java.util.function.Consumer<Runnable> resubmit) {
+                                throw new AssertionError("PREPARE alone cannot reserve replies");
+                            }
+
+                            @Override
                             public CompletionStage<Void> publish(
-                                    ZLinkSpotRetireControl.StageRequest request) {
+                                    ZLinkSpotRetireControl.StageRequest request,
+                                    ZLinkTargetRelocationReplies replies) {
                                 throw new AssertionError("PREPARE alone cannot publish the target");
                             }
 

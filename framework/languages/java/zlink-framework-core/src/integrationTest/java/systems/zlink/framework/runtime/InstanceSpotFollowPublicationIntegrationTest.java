@@ -19,11 +19,9 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitResult;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinatorTestAccess;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
-import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceRouteFence;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceSpotFollow;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.SpotRouteFence;
@@ -66,7 +64,7 @@ final class InstanceSpotFollowPublicationIntegrationTest extends InstanceSpotHos
         handledMessages.clear();
         followHandled = new CompletableFuture<>();
         secondHandled = new CompletableFuture<>();
-        Room.followHandlers = List.of(FollowHandler.class, SecondFollowHandler.class);
+        Room.additionalHandlers = List.of(FollowHandler.class, SecondFollowHandler.class);
         var committed = new CompletableFuture<ZLinkAggregateCommitResult>();
         var release = new CompletableFuture<Void>();
         var construction =
@@ -111,11 +109,9 @@ final class InstanceSpotFollowPublicationIntegrationTest extends InstanceSpotHos
                                 ZLinkSpotRuntimeTestAccess.aggregateCoordinator(ingress);
                 ZLinkAggregateRelocationCoordinatorTestAccess.interceptCommit(
                         coordinator,
-                        (repository, arguments) ->
+                        (repository, fence, acceptedReplies, cancellation) ->
                                 repository
-                                        .commitAggregate(
-                                                (ZLinkAggregateFence) arguments[0],
-                                                (ZLinkStoreCancellation) arguments[1])
+                                        .commitAggregate(fence, acceptedReplies, cancellation)
                                         .thenCompose(
                                                 result -> {
                                                     committed.complete(result);
@@ -228,9 +224,8 @@ final class InstanceSpotFollowPublicationIntegrationTest extends InstanceSpotHos
         var releaseRead = new CompletableFuture<Void>();
         ZLinkAggregateRelocationCoordinatorTestAccess.interceptRead(
                 coordinator,
-                (repository, arguments) -> {
-                    var key = (String) arguments[0];
-                    var read = repository.read(key, (ZLinkStoreCancellation) arguments[1]);
+                (repository, key, cancellation) -> {
+                    var read = repository.read(key, cancellation);
                     return AUTHORITY.equals(key) && readEntered.complete(null)
                             ? read.thenCombine(releaseRead, (result, ignored) -> result)
                             : read;

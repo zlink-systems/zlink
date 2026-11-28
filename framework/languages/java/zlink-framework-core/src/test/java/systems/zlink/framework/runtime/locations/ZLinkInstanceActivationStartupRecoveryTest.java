@@ -355,9 +355,12 @@ final class ZLinkInstanceActivationStartupRecoveryTest {
                         new Class<?>[] {ZLinkRelocationStore.class},
                         (proxy, method, arguments) ->
                                 switch (method.getName()) {
-                                    case "get" ->
-                                            CompletableFuture.completedFuture(
-                                                    new ZLinkRelocationFound(envelope));
+                                    case "get" -> {
+                                        Instant now = Instant.now();
+                                        yield CompletableFuture.completedFuture(
+                                                new ZLinkRelocationFound(
+                                                        envelope, now.plusSeconds(60), now));
+                                    }
                                     case "delete" -> {
                                         events.add("delete");
                                         yield CompletableFuture.completedFuture(

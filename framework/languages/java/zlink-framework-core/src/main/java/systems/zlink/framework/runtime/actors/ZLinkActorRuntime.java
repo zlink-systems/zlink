@@ -52,7 +52,6 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
-import systems.zlink.framework.runtime.internal.locations.ZLinkDirectJoinRelocationAuthority;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
@@ -448,6 +447,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         actorJoinRelocationPort = Objects.requireNonNull(port, "port");
     }
 
+    CompletionStage<Void> awaitActorTargetPublication(
+            ZLinkBackendActorRef actor, long deadlineNanos) {
+        var port = actorJoinRelocationPort;
+        return port == null
+                ? CompletableFuture.completedFuture(null)
+                : port.awaitTargetPublication(actor, deadlineNanos);
+    }
+
     CompletionStage<ZLinkActorJoinRelocationPort.Submission> relocateActorJoin(
             ZLinkActorJoinRelocationPort.Goal goal, Duration timeout) {
         locations.ensureOwnerAdmissionOpen();
@@ -511,20 +518,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 applicationState,
                 acceptedJournal,
                 rawReply);
-    }
-
-    public CompletionStage<ZLinkDirectJoinRelocationAuthority.CommittedActorTenure>
-            commitDeferredJoinRelocation(ZLinkActorSpotRoutePackets.TransferRequest request) {
-        ZLinkDirectJoinRelocation relocation = directJoinRelocation;
-        if (request.relocationManifest() == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        if (relocation == null) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkConfigurationException(
-                            "direct Actor Join relocation authority is unavailable"));
-        }
-        return relocation.commitPrepared(request.relocationManifest(), request.actorRef());
     }
 
     public CompletionStage<DeferredJoinRelocationRoot> loadDeferredJoinRelocation(
@@ -2473,7 +2466,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                             throw new ZLinkFrameworkException(
                                                                     ZLinkFrameworkErrorKind
                                                                             .UNAVAILABLE,
-                                                                    "Actor is sealed for relocation: "
+                                                                    "Actor is sealed for"
+                                                                            + " relocation: "
                                                                             + actorId);
                                                         }
                                                         context.state.closeDestroyAdmission(
@@ -3622,8 +3616,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                                         ZLinkFrameworkErrorKind
                                                                                 .UNAVAILABLE,
                                                                         target == null
-                                                                                ? "Message Follow has no current first-target route"
-                                                                                : "Message Follow loop detected"));
+                                                                                ? "Message Follow"
+                                                                                        + " has no"
+                                                                                        + " current"
+                                                                                        + " first-target"
+                                                                                        + " route"
+                                                                                : "Message Follow"
+                                                                                        + " loop"
+                                                                                        + " detected"));
                                                     }
                                                     return spotNode.forwardMessageFollowActor(
                                                             header, target, parts);
@@ -4903,7 +4903,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                     null,
                                     CompletableFuture.failedFuture(
                                             new IllegalStateException(
-                                                    "relocation source Actor context is unavailable: "
+                                                    "relocation source Actor context is"
+                                                            + " unavailable: "
                                                             + actorId)))
                             : new RelocationSourceCheck(actor, context, null);
                 });

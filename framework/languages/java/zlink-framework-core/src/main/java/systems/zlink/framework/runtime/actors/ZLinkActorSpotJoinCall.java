@@ -266,7 +266,9 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                             ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "Actor join deadline elapsed before admission"));
         }
-        return executeAfterPredecessor(operationId, deadlineNanos);
+        return services.actors()
+                .awaitActorTargetPublication(context.actorRef(), deadlineNanos)
+                .thenCompose(ignored -> executeAfterPredecessor(operationId, deadlineNanos));
     }
 
     private CompletionStage<ZLinkActorJoinOutcome> executeAfterPredecessor(

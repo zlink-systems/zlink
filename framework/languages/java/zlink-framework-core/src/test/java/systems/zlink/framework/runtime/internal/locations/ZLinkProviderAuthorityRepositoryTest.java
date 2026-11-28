@@ -21,6 +21,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locationprovider.ZLinkStorePut;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadMissing;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
@@ -245,7 +246,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
-    void markerMaterializationAndCommitPreserveRelocationCompletion() throws Exception {
+    void markerMaterializationAndCommitPreserveRelocationFence() throws Exception {
         var id = java.util.UUID.fromString("0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6");
         var fixture = preparedFixture(1, id, 7);
         var json = new com.fasterxml.jackson.databind.ObjectMapper();
@@ -260,7 +261,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 vector ->
                                         vector.path("name")
                                                 .asText()
-                                                .equals("activated-with-completion"))
+                                                .equals("relocation-only-prepared"))
                         .findFirst()
                         .orElseThrow()
                         .path("aggregate")
@@ -320,7 +321,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 fixture.repository()
-                        .commitAggregate(new ZLinkAggregateFence(id, 7), () -> false)
+                        .commitAggregate(
+                                new ZLinkAggregateFence(id, 7), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
         var committed =
@@ -330,7 +332,6 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 .toCompletableFuture()
                                 .join();
         assertEquals(relocation.phase("committed"), committed.relocation());
-        assertEquals(value.path("completion"), committed.relocation().json().path("completion"));
         assertInstanceOf(
                 ZLinkAuthorityStored.class,
                 fixture.repository()
@@ -440,7 +441,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                 vector ->
                                         vector.path("name")
                                                 .asText()
-                                                .equals("activated-with-completion"))
+                                                .equals("relocation-only-prepared"))
                         .findFirst()
                         .orElseThrow()
                         .path("aggregate")
@@ -502,7 +503,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 fixture.repository()
-                        .commitAggregate(new ZLinkAggregateFence(id, 7), () -> false)
+                        .commitAggregate(
+                                new ZLinkAggregateFence(id, 7), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
         var committed =
@@ -2397,14 +2399,14 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 repository
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
         assertFalse(provider.failCommitOnce);
         assertEquals(
                 ZLinkAggregateCommitResult.ALREADY_COMMITTED,
                 repository
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
         assertEquals(
@@ -2623,7 +2625,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
             assertEquals(
                     ZLinkAggregateCommitResult.COMMITTED,
                     repository
-                            .commitAggregate(prepared.fence(), () -> false)
+                            .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                             .toCompletableFuture()
                             .join());
             var published =
@@ -3425,6 +3427,287 @@ final class ZLinkProviderAuthorityRepositoryTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0, 1, 3})
+    void targetCommitCreatesTheAcceptedReplyRows(int requests) {
+        var clock = new ZLinkProviderCreationTerminalTest.StoreClock();
+        var fixture =
+                preparedFixture(
+                        1,
+                        new UUID(0, 42),
+                        1,
+                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                        new ZLinkInMemoryProviderLocationStore(clock));
+        var prepared = prepareReplyFixture(fixture);
+        var rows = replyRows(fixture, requests);
+        assertEquals(
+                ZLinkAggregateCommitResult.COMMITTED,
+                fixture.repository()
+                        .commitAggregate(prepared.fence(), rows, () -> false)
+                        .toCompletableFuture()
+                        .join());
+        for (var row : rows) {
+            var found =
+                    assertInstanceOf(
+                            ZLinkStoreReadFound.class,
+                            fixture.store()
+                                    .read(row.key(), () -> false)
+                                    .toCompletableFuture()
+                                    .join());
+            assertEquals(
+                    ZLinkRelocationReplyRow.ACCEPTED,
+                    ZLinkRelocationReplyRow.decode(row.key(), found.value().bytes()).state());
+            assertEquals(
+                    Duration.ofHours(24),
+                    Duration.between(found.value().storeNow(), found.value().expiresAt()));
+        }
+        assertTrue(
+                new ZLinkProviderLocationRepository(fixture.store())
+                        .readPendingRelocationReplies(prepared.fence().aggregateId(), () -> false)
+                        .toCompletableFuture()
+                        .join()
+                        .isEmpty());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"2048, 6", "1750, 800"})
+    void oversizedReplyCommitLeavesOwnerAndRowsUnchanged(int count, int ownerLength) {
+        var fixture =
+                preparedFixture(
+                        1, new UUID(0, 42), 1, ZLinkAuthorityGenerationTransition.NEW_OWNER);
+        var prepared = prepareReplyFixture(fixture);
+        var rows = replyRows(fixture, count, "x".repeat(ownerLength));
+        var failure =
+                assertThrows(
+                        java.util.concurrent.CompletionException.class,
+                        () ->
+                                fixture.repository()
+                                        .commitAggregate(prepared.fence(), rows, () -> false)
+                                        .toCompletableFuture()
+                                        .join());
+        assertEquals(
+                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+        assertInstanceOf(
+                ZLinkStoreReadMissing.class,
+                fixture.store()
+                        .read(rows.getFirst().key(), () -> false)
+                        .toCompletableFuture()
+                        .join());
+        assertTrue(
+                fixture.repository()
+                        .readAggregateProgress(prepared.fence(), () -> false)
+                        .toCompletableFuture()
+                        .join()
+                        .isEmpty());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(
+            strings = {
+                ZLinkRelocationReplyRow.TERMINAL_RECEIVED,
+                ZLinkRelocationReplyRow.ALREADY_TERMINAL,
+                ZLinkRelocationReplyRow.SOURCE_LEASE_EXPIRED
+            })
+    void persistsThenExpiresOneTerminalAfterALostCasResponse(String terminal) {
+        var clock = new ZLinkProviderCreationTerminalTest.StoreClock();
+        var fixture =
+                preparedFixture(
+                        1,
+                        new UUID(0, 42),
+                        1,
+                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                        new ZLinkInMemoryProviderLocationStore(clock));
+        var prepared = prepareReplyFixture(fixture);
+        var rows = replyRows(fixture, 2);
+        assertEquals(
+                ZLinkAggregateCommitResult.COMMITTED,
+                fixture.repository()
+                        .commitAggregate(prepared.fence(), rows, () -> false)
+                        .toCompletableFuture()
+                        .join());
+        var original = rows.getFirst();
+        var result =
+                new ZLinkRelocationReplyRow(
+                        original.relocationId(),
+                        original.objectKey(),
+                        original.source(),
+                        original.operationId(),
+                        original.replyRouteId(),
+                        original.writer(),
+                        ZLinkRelocationReplyRow.PENDING,
+                        new byte[] {1, 2, 3});
+        var dropped = new LostReplyWriteStore(fixture.store());
+        var repository = new ZLinkProviderAuthorityRepository(dropped);
+        var stored =
+                repository.updateRelocationReply(result, () -> false).toCompletableFuture().join();
+        assertEquals(1, dropped.writes);
+        assertEquals(ZLinkRelocationReplyRow.PENDING, stored.state());
+        assertArrayEquals(result.reply(), stored.reply());
+        assertEquals(
+                1,
+                new ZLinkProviderLocationRepository(dropped)
+                        .readPendingRelocationReplies(result.relocationId(), () -> false)
+                        .toCompletableFuture()
+                        .join()
+                        .size());
+        var next =
+                repository
+                        .updateRelocationReply(result.withState(terminal), () -> false)
+                        .toCompletableFuture()
+                        .join();
+        assertEquals(terminal, next.state());
+        assertArrayEquals(result.reply(), next.reply());
+        var duplicate =
+                repository
+                        .updateRelocationReply(
+                                result.withState(ZLinkRelocationReplyRow.TERMINAL_RECEIVED),
+                                () -> false)
+                        .toCompletableFuture()
+                        .join();
+        assertEquals(terminal, duplicate.state());
+        assertEquals(2, dropped.writes);
+        assertTrue(
+                new ZLinkProviderLocationRepository(dropped)
+                        .readPendingRelocationReplies(result.relocationId(), () -> false)
+                        .toCompletableFuture()
+                        .join()
+                        .isEmpty());
+        clock.advance(Duration.ofMinutes(5).minusNanos(1));
+        assertInstanceOf(
+                ZLinkStoreReadFound.class,
+                fixture.store().read(result.key(), () -> false).toCompletableFuture().join());
+        clock.advance(Duration.ofNanos(1));
+        assertInstanceOf(
+                ZLinkStoreReadMissing.class,
+                fixture.store().read(result.key(), () -> false).toCompletableFuture().join());
+        assertInstanceOf(
+                ZLinkStoreReadFound.class,
+                fixture.store()
+                        .read(rows.getLast().key(), () -> false)
+                        .toCompletableFuture()
+                        .join());
+    }
+
+    @Test
+    void activeRowsRenewWithStoreTimeAndRejectAnExpiredWriter() {
+        var clock = new ZLinkProviderCreationTerminalTest.StoreClock();
+        var fixture =
+                preparedFixture(
+                        1,
+                        new UUID(0, 42),
+                        1,
+                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                        new ZLinkInMemoryProviderLocationStore(clock));
+        var prepared = prepareReplyFixture(fixture);
+        var rows = replyRows(fixture, 2);
+        assertEquals(
+                ZLinkAggregateCommitResult.COMMITTED,
+                fixture.repository()
+                        .commitAggregate(prepared.fence(), rows, () -> false)
+                        .toCompletableFuture()
+                        .join());
+        var lease = new ZLinkProviderOwnerLeaseRepository(fixture.store());
+        lease.renew(fixture.request().targetOwner(), Duration.ofHours(24))
+                .toCompletableFuture()
+                .join();
+        var row = rows.getFirst();
+        clock.advance(Duration.ofHours(12));
+        fixture.repository().updateRelocationReply(row, () -> false).toCompletableFuture().join();
+        var found =
+                assertInstanceOf(
+                        ZLinkStoreReadFound.class,
+                        fixture.store().read(row.key(), () -> false).toCompletableFuture().join());
+        assertEquals(
+                Duration.ofHours(24),
+                Duration.between(found.value().storeNow(), found.value().expiresAt()));
+        clock.advance(Duration.ofHours(12));
+        var failure =
+                assertThrows(
+                        java.util.concurrent.CompletionException.class,
+                        () ->
+                                fixture.repository()
+                                        .updateRelocationReply(row, () -> false)
+                                        .toCompletableFuture()
+                                        .join());
+        assertEquals(
+                ZLinkFrameworkErrorKind.DATA_LOST,
+                assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+        assertInstanceOf(
+                ZLinkStoreReadMissing.class,
+                fixture.store()
+                        .read(rows.getLast().key(), () -> false)
+                        .toCompletableFuture()
+                        .join());
+    }
+
+    private static final class LostReplyWriteStore implements ZLinkLocationStore {
+        private final ZLinkLocationStore delegate;
+        private int writes;
+
+        LostReplyWriteStore(ZLinkLocationStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreReadResult> read(
+                ZLinkStoreKey key,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            return delegate.read(key, cancellation);
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreWriteResult> write(
+                ZLinkStoreWriteRequest request,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            var application = delegate.write(request, cancellation);
+            return ++writes == 1
+                    ? application.thenCompose(
+                            ignored ->
+                                    CompletableFuture.failedFuture(
+                                            new java.io.IOException("row CAS response lost")))
+                    : application;
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreScanResult> scan(
+                ZLinkStoreScanRequest request,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            return delegate.scan(request, cancellation);
+        }
+    }
+
+    private static ZLinkAggregatePrepared prepareReplyFixture(AggregateFixture fixture) {
+        return assertInstanceOf(
+                ZLinkAggregatePrepared.class,
+                fixture.repository()
+                        .prepareAggregate(fixture.request(), () -> false)
+                        .toCompletableFuture()
+                        .join());
+    }
+
+    private static List<ZLinkRelocationReplyRow> replyRows(AggregateFixture fixture, int count) {
+        return replyRows(fixture, count, "source");
+    }
+
+    private static List<ZLinkRelocationReplyRow> replyRows(
+            AggregateFixture fixture, int count, String owner) {
+        var request = fixture.request();
+        return java.util.stream.IntStream.rangeClosed(1, count)
+                .mapToObj(
+                        index ->
+                                new ZLinkRelocationReplyRow(
+                                        request.aggregateId(),
+                                        request.participants().getFirst().authorityKey(),
+                                        new ZLinkRelocationReplyRow.Source(owner, "1", "01", "1"),
+                                        "%032x".formatted(index),
+                                        Integer.toString(index),
+                                        request.targetOwner(),
+                                        ZLinkRelocationReplyRow.ACCEPTED,
+                                        null))
+                .toList();
+    }
+
     @Test
     void aggregateIssuesTheLastAvailableGenerationIndependentlyForEachId() throws Exception {
         var fixture =
@@ -3447,7 +3730,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 fixture.repository()
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
 
@@ -4035,6 +4318,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         .commitAggregate(
                                 new ZLinkAggregateFence(
                                         request.aggregateId(), request.aggregateGeneration()),
+                                java.util.List.of(),
                                 () -> false)
                         .toCompletableFuture()
                         .join();
@@ -4047,6 +4331,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         .commitAggregate(
                                 new ZLinkAggregateFence(
                                         request.aggregateId(), request.aggregateGeneration()),
+                                java.util.List.of(),
                                 () -> false)
                         .toCompletableFuture()
                         .join());
@@ -4154,7 +4439,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
         assertEquals(
                 ZLinkAggregateCommitResult.COMMITTED,
                 repository
-                        .commitAggregate(prepared.fence(), () -> false)
+                        .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                         .toCompletableFuture()
                         .join());
         assertEquals(conflictCount, store.conflictsReturned);
@@ -4488,7 +4773,16 @@ final class ZLinkProviderAuthorityRepositoryTest {
 
     private static AggregateFixture preparedFixture(
             int count, UUID id, long generation, ZLinkAuthorityGenerationTransition transition) {
-        var store = new ZLinkInMemoryProviderLocationStore();
+        return preparedFixture(
+                count, id, generation, transition, new ZLinkInMemoryProviderLocationStore());
+    }
+
+    private static AggregateFixture preparedFixture(
+            int count,
+            UUID id,
+            long generation,
+            ZLinkAuthorityGenerationTransition transition,
+            ZLinkLocationStore store) {
         var owner =
                 assertInstanceOf(
                                 ZLinkOwnerLeaseClaimed.class,

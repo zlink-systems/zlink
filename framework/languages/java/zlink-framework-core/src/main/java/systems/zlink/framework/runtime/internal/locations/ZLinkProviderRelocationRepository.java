@@ -131,7 +131,8 @@ public final class ZLinkProviderRelocationRepository implements ZLinkRelocationS
                 .thenApply(
                         result ->
                                 result instanceof ZLinkBlobFound found
-                                        ? new ZLinkRelocationFound(found.bytes())
+                                        ? new ZLinkRelocationFound(
+                                                found.bytes(), found.expiresAt(), found.storeNow())
                                         : new ZLinkRelocationMissing());
     }
 

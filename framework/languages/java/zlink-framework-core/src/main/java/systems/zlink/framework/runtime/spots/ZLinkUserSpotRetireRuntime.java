@@ -72,6 +72,16 @@ public final class ZLinkUserSpotRetireRuntime {
         }
     }
 
+    static void requireReleasedPublication(
+            systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot snapshot) {
+        if (snapshot.relocation() != null && snapshot.relocation().targetPublicationPending()) {
+            throw new RelocationBlockedException(
+                    ZLinkFrameworkRelocationReason.OPERATION_IN_PROGRESS,
+                    "Authority has an in-progress relocation publication: "
+                            + snapshot.relocation().relocationId());
+        }
+    }
+
     /**
      * A relocation whose settled unit authority leaves the host split — some units committed on the
      * target while others stayed on the source — or whose source owner lease expired before the
@@ -287,7 +297,6 @@ public final class ZLinkUserSpotRetireRuntime {
                             spots.dispatchErrors);
             machines.add(relocationClient);
             new ZLinkCanonicalRelocationTransitionOwner(relocationClient).install(node);
-            node.setRelocationReplyRelayHandler(target::relayCanonicalReply);
             node.spotNode().setRelocationStagingIngressHandler(target);
             if (relocatesSpots) {
                 configured.put(
@@ -385,6 +394,13 @@ public final class ZLinkUserSpotRetireRuntime {
      * (S4) and its cutover retransmission window — the source-local SafeToShutdown condition (spec
      * 30 §11).
      */
+    public CompletionStage<Void> renewReplyRows(Instant storeNow) {
+        return CompletableFuture.allOf(
+                stateMachines.stream()
+                        .map(machine -> machine.renewReplyRows(storeNow).toCompletableFuture())
+                        .toArray(CompletableFuture[]::new));
+    }
+
     public boolean relocationSourceQuiescent() {
         return stateMachines.stream()
                 .allMatch(ZLinkCanonicalRelocationStateMachine::sourceQuiescent);
@@ -455,7 +471,8 @@ public final class ZLinkUserSpotRetireRuntime {
                                                 throw new RelocationBlockedException(
                                                         ZLinkFrameworkRelocationReason
                                                                 .OPERATION_IN_PROGRESS,
-                                                        "Relocation workload changed during host preflight");
+                                                        "Relocation workload changed during host"
+                                                                + " preflight");
                                             }
                                             return onPreflightPassed.get();
                                         },

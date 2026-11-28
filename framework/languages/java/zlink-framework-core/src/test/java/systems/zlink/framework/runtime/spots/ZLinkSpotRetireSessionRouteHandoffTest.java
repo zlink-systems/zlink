@@ -235,7 +235,7 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
                                 sessionPeer,
                                 Duration.ofSeconds(3),
                                 ignored -> CompletableFuture.completedFuture(null));
-                var controlTarget = ZLinkSpotRetireControl.install(peer, endpoint);
+                var controlTarget = ZLinkSpotRetireControl.install(peer, endpoint, Runnable::run);
                 byte[] ready =
                         controlTarget
                                 .handle(
@@ -257,7 +257,7 @@ final class ZLinkSpotRetireSessionRouteHandoffTest {
                                 .toCompletableFuture()
                                 .get(10, TimeUnit.SECONDS);
                 targetCoordinator
-                        .commit(targetPrepared, NEVER)
+                        .commit(targetPrepared, List.of(), NEVER)
                         .toCompletableFuture()
                         .get(10, TimeUnit.SECONDS);
                 targetCommitted.set(true);

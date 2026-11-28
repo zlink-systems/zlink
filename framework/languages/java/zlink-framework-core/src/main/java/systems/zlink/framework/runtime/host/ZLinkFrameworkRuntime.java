@@ -621,7 +621,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                             systems.zlink.framework.runtime.internal.locations
                                                             .ZLinkLocationRepository
                                                     locationStore
-                                    && this.registration.relocationStore() != null
                             ? construction
                                     .spotRetireRuntimeFactory()
                                     .create(
@@ -816,9 +815,17 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 return CompletableFuture.completedFuture(null);
             }
             if (admissionWasOpen && state != ZLinkFrameworkRuntimeState.PREPARING) {
-                return state == ZLinkFrameworkRuntimeState.SERVING && this.objectDescriptors != null
-                        ? publishRecordedOptionChange()
-                        : CompletableFuture.completedFuture(null);
+                var publication =
+                        state == ZLinkFrameworkRuntimeState.SERVING
+                                        && this.objectDescriptors != null
+                                ? publishRecordedOptionChange()
+                                : CompletableFuture.<Void>completedFuture(null);
+                return spotRetire == null
+                        ? publication
+                        : publication.thenCompose(
+                                ignored ->
+                                        spotRetire.renewReplyRows(
+                                                locationRuntime.ownerLeaseRenewedAt()));
             }
             return state == ZLinkFrameworkRuntimeState.PREPARING
                     ? preparing.get()
@@ -1644,7 +1651,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                         : CompletableFuture.failedFuture(
                                                 new RelocationBlockedException(
                                                         toPublicRelocationReason(reason),
-                                                        "Host relocation target preflight failed")));
+                                                        "Host relocation target preflight"
+                                                                + " failed")));
     }
 
     private CompletionStage<Void> validateRelocationTargetPopulation(

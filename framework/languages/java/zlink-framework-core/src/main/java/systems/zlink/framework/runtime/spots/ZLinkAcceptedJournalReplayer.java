@@ -10,6 +10,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -90,40 +91,61 @@ final class ZLinkAcceptedJournalReplayer
             ZLinkSerialExecutionQueue.QueuedRecord queued,
             CompletionStage<Void> terminal,
             java.util.function.Consumer<CompletionStage<Void>> observe) {
-        if (!laneId.startsWith("actor:"))
-            return ZLinkUserSpotAggregateStagingOwner.JournalReplayer.super.prepareReplay(
-                    laneId, queued, terminal, observe);
-        var record = ZLinkActorAcceptedJournal.decode(queued.payload());
-        requireActorLane(laneId, record);
-        var dispatched = new CompletableFuture<Optional<byte[]>>();
+        if (laneId.equals("spot") || laneId.startsWith("timer:")) {
+            var record = ZLinkSpotAcceptedJournal.decode(queued.payload());
+            return prepareDispatch(
+                    () -> spotDispatch.dispatch(record),
+                    (reply, failure) ->
+                            replyRelay.completeSpot(record, queued.sequence(), reply, failure),
+                    terminal,
+                    observe);
+        }
+        if (laneId.startsWith("actor:")) {
+            var record = ZLinkActorAcceptedJournal.decode(queued.payload());
+            requireActorLane(laneId, record);
+            return prepareDispatch(
+                    () -> actorDispatch.dispatch(record),
+                    (reply, failure) ->
+                            replyRelay.completeActor(record, queued.sequence(), reply, failure),
+                    terminal,
+                    observe);
+        }
+        return ZLinkUserSpotAggregateStagingOwner.JournalReplayer.super.prepareReplay(
+                laneId, queued, terminal, observe);
+    }
+
+    private static <T> Supplier<CompletionStage<Void>> prepareDispatch(
+            Supplier<CompletionStage<T>> dispatch,
+            BiFunction<T, Throwable, CompletionStage<Void>> relay,
+            CompletionStage<Void> terminal,
+            Consumer<CompletionStage<Void>> observe) {
+        var dispatched = new CompletableFuture<T>();
         observe.accept(
                 terminal.handle(
                                 (ignored, failure) -> {
-                                    if (failure != null)
-                                        return relayActorOutcome(
-                                                record,
-                                                queued.sequence(),
-                                                CompletableFuture.failedFuture(unwrap(failure)));
-                                    // Commit completes a transferred, unstarted Entry without
-                                    // running its supplier.
-                                    // The next FIFO owner also owns its reply; this owner has no
-                                    // dispatch outcome.
-                                    if (!dispatched.isDone())
-                                        return CompletableFuture.<Void>completedFuture(null);
-                                    return relayActorOutcome(record, queued.sequence(), dispatched);
+                                    if (failure != null) {
+                                        return complete(
+                                                () ->
+                                                        CompletableFuture.failedFuture(
+                                                                unwrap(failure)),
+                                                relay);
+                                    }
+                                    // A transferred, unstarted entry completes without running its
+                                    // supplier.
+                                    // Its next FIFO owner owns the reply.
+                                    return dispatched.isDone()
+                                            ? complete(() -> dispatched, relay)
+                                            : CompletableFuture.<Void>completedFuture(null);
                                 })
-                        .thenCompose(result -> result));
-        return () -> {
-            var execution =
-                    ZLinkHandlerStages.fromStageSupplier(() -> actorDispatch.dispatch(record));
-            return execution
-                    .whenComplete(
-                            (reply, failure) -> {
-                                if (failure == null) dispatched.complete(reply);
-                                else dispatched.completeExceptionally(unwrap(failure));
-                            })
-                    .thenApply(reply -> null);
-        };
+                        .thenCompose(stage -> stage));
+        return () ->
+                ZLinkHandlerStages.fromStageSupplier(dispatch)
+                        .whenComplete(
+                                (reply, failure) -> {
+                                    if (failure == null) dispatched.complete(reply);
+                                    else dispatched.completeExceptionally(unwrap(failure));
+                                })
+                        .thenApply(reply -> null);
     }
 
     private static void requireActorLane(String laneId, ZLinkActorAcceptedJournal.Record record) {

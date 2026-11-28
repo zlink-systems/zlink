@@ -348,7 +348,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private volatile ZLinkInternalMeshNode.MessageFollowHandler messageFollowHandler;
     private volatile Function<String, Optional<ZLinkStreamCodec>> applicationStreamCodecResolver =
             ZLinkJavaRawMeshNode::defaultApplicationStreamCodec;
-    private volatile ZLinkInternalMeshNode.RelocationReplyRelayHandler relocationReplyRelayHandler;
     private final Map<ReplyRelayPendingKey, ReplyRelayPending> pendingReplyRelays =
             new ConcurrentHashMap<>();
     private volatile ZLinkInternalMeshNode.SessionRelocationRouteHandler
@@ -811,6 +810,22 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             long targetSpotGeneration,
             byte[] metadata,
             Long replyRouteId) {
+        return localSpotMessage(
+                sourceSpotId,
+                targetSpotId,
+                targetSpotGeneration,
+                metadata,
+                replyRouteId,
+                UUID.randomUUID());
+    }
+
+    ZLinkServiceM6BWireCodec.SpotMessage localSpotMessage(
+            String sourceSpotId,
+            String targetSpotId,
+            long targetSpotGeneration,
+            byte[] metadata,
+            Long replyRouteId,
+            UUID operation) {
         ZLinkServiceNodeDescriptor descriptor = localDescriptor;
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long ownerGeneration =
@@ -824,7 +839,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 || ownerLeaseGeneration <= 0) {
             return null;
         }
-        UUID operation = UUID.randomUUID();
         return new ZLinkServiceM6BWireCodec.SpotMessage(
                 replyRouteId != null,
                 metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA,
@@ -848,7 +862,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             RoutingId sourceSessionRid,
             long sourceBindingGeneration,
             long sourceSessionSequence,
-            long requestId) {
+            long requestId,
+            UUID operationId) {
         if (localAuthorityFence == null) {
             return null;
         }
@@ -862,11 +877,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (target == null) return null;
         return localActorMessage(
                 target,
-                sourceNodeRid,
                 sourceSessionRid,
                 sourceBindingGeneration,
                 sourceSessionSequence,
-                requestId);
+                requestId,
+                operationId);
     }
 
     ZLinkServiceM6BWireCodec.ActorMessage localActorMessage(
@@ -876,12 +891,27 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             long sourceBindingGeneration,
             long sourceSessionSequence,
             long requestId) {
+        return localActorMessage(
+                target,
+                sourceSessionRid,
+                sourceBindingGeneration,
+                sourceSessionSequence,
+                requestId,
+                UUID.randomUUID());
+    }
+
+    ZLinkServiceM6BWireCodec.ActorMessage localActorMessage(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+            RoutingId sourceSessionRid,
+            long sourceBindingGeneration,
+            long sourceSessionSequence,
+            long requestId,
+            UUID operation) {
         var boundSession =
                 sourceSessionRid == null
                         ? null
                         : new ZLinkServiceM6BWireCodec.BoundSessionTail(
                                 sourceSessionRid, sourceBindingGeneration, sourceSessionSequence);
-        UUID operation = UUID.randomUUID();
         return new ZLinkServiceM6BWireCodec.ActorMessage(
                 requestId != 0,
                 0,
@@ -2867,39 +2897,49 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     .submitTerminal(
                             operationId,
                             timeout,
-                            terminal ->
-                                    admitRequest(
-                                            targetNodeRid,
-                                            operationOwner,
-                                            completion,
-                                            terminal,
-                                            frames,
-                                            requestAdmission,
-                                            (admittedTimeout, progress) ->
-                                                    port.requestMessagesTo(
-                                                            requireStarted(),
-                                                            targetNodeRid,
-                                                            frames,
-                                                            admittedTimeout,
-                                                            replyFrames ->
-                                                                    completeSpotRequest(
-                                                                            targetNodeRid,
-                                                                            targetSpotId,
-                                                                            correlation,
-                                                                            RequestResult.OK,
-                                                                            replyFrames),
-                                                            failure ->
-                                                                    completeSpotRequest(
-                                                                            targetNodeRid,
-                                                                            targetSpotId,
-                                                                            correlation,
-                                                                            requestTerminal(
-                                                                                    failure),
-                                                                            List.of()),
-                                                            terminal,
-                                                            null,
-                                                            requestAdmission),
-                                            targetNodeGeneration),
+                            terminal -> {
+                                registerRelocationReply(
+                                        operationOwner,
+                                        completion,
+                                        correlation,
+                                        reply ->
+                                                relocatedSpotReply(
+                                                        targetNodeRid,
+                                                        targetSpotId,
+                                                        correlation,
+                                                        reply));
+                                return admitRequest(
+                                        targetNodeRid,
+                                        operationOwner,
+                                        completion,
+                                        terminal,
+                                        frames,
+                                        requestAdmission,
+                                        (admittedTimeout, progress) ->
+                                                port.requestMessagesTo(
+                                                        requireStarted(),
+                                                        targetNodeRid,
+                                                        frames,
+                                                        admittedTimeout,
+                                                        replyFrames ->
+                                                                completeSpotRequest(
+                                                                        targetNodeRid,
+                                                                        targetSpotId,
+                                                                        correlation,
+                                                                        RequestResult.OK,
+                                                                        replyFrames),
+                                                        failure ->
+                                                                completeSpotRequest(
+                                                                        targetNodeRid,
+                                                                        targetSpotId,
+                                                                        correlation,
+                                                                        requestTerminal(failure),
+                                                                        List.of()),
+                                                        terminal,
+                                                        null,
+                                                        requestAdmission),
+                                        targetNodeGeneration);
+                            },
                             ZLinkBackendReceived::close,
                             completion)
                     .whenComplete(
@@ -3526,6 +3566,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                     correlation,
                                     route.targetNodeGeneration(),
                                     false);
+                    registerInstanceRelocationReply(operation, correlation);
                     UUID operationId = operation.id();
                     admitRequest(
                             route.targetNodeRid(),
@@ -3592,6 +3633,35 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 });
     }
 
+    private void registerInstanceRelocationReply(
+            ZLinkServiceOperationRegistry.Operation<List<Message>> operation, long replyRoute) {
+        registerRelocationReply(
+                operations,
+                operation,
+                replyRoute,
+                reply -> {
+                    operation.requestProgress().replyReceived();
+                    if (reply.relay().terminalResult() != 0) {
+                        throw instanceReplyFailure(
+                                reply.relay().terminalResult(), reply.relay().failureCode());
+                    }
+                    return decodeRelocationReplyParts(reply);
+                });
+    }
+
+    private static RuntimeException instanceReplyFailure(int terminalResult, int failureCode) {
+        return ZLinkRequestFailureMapping.receivedFailure(
+                backendResult(terminalResult).toFrameworkErrorKind(failureCode),
+                "remote Instance Spot request failed: terminal="
+                        + terminalResult
+                        + " failureCode="
+                        + failureCode,
+                failureCode,
+                failureCode == ServiceWireConstants.FRAMEWORK_ERROR_SPOT_MOVING
+                        ? ZLinkFrameworkErrorOrigin.frameworkMetadata()
+                        : Map.of());
+    }
+
     private void finishInstanceSpotRequest(
             ZLinkServiceOperationRegistry.Operation<List<Message>> operation,
             long correlation,
@@ -3634,17 +3704,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 // spotMoving is a Framework admission control result. Its
                 // failed reply has no metadata frame, so preserve that
                 // origin locally.
-                throw ZLinkRequestFailureMapping.receivedFailure(
-                        ZLinkBackendRequestResult.fromWireTerminal(header.terminalResult())
-                                .toFrameworkErrorKind(header.failureCode()),
-                        "remote Instance Spot request failed: terminal="
-                                + header.terminalResult()
-                                + " failureCode="
-                                + header.failureCode(),
-                        header.failureCode(),
-                        header.failureCode() == ServiceWireConstants.FRAMEWORK_ERROR_SPOT_MOVING
-                                ? ZLinkFrameworkErrorOrigin.frameworkMetadata()
-                                : java.util.Map.of());
+                throw instanceReplyFailure(header.terminalResult(), header.failureCode());
             }
             if (replies.size() != 2) {
                 throw new ZLinkFrameworkException(
@@ -3789,6 +3849,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             UUID identity;
             InstanceReply reply;
             if (operation != null) {
+                registerInstanceRelocationReply(operation, correlation);
                 identity = operation.id();
                 reply = operation.requestProgress().localReply(operations, identity);
             } else {
@@ -3992,6 +4053,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                         .submitRegistered(
                                                 operationId,
                                                 terminal -> {
+                                                    registerActorRelocationReply(
+                                                            completion,
+                                                            correlation,
+                                                            completion
+                                                                    .requestProgress()
+                                                                    .replyDecoder(decodeReply),
+                                                            mapFailure);
                                                     BiConsumer<T, Throwable> receiver =
                                                             (value, failure) ->
                                                                     terminal.accept(
@@ -4563,49 +4631,40 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     @Override
-    public void setRelocationReplyRelayHandler(
-            ZLinkInternalMeshNode.RelocationReplyRelayHandler handler) {
-        relocationReplyRelayHandler = Objects.requireNonNull(handler, "handler");
-    }
-
-    @Override
     public CompletionStage<byte[]> requestRelocationReplyRelay(
-            RoutingId landingNodeRid,
+            RoutingId requesterNodeRid,
             ZLinkServiceRelocationWireCodec.RequestSourceFence expectedSource,
             byte[] command33,
             List<byte[]> payload,
             Duration timeout) {
-        Objects.requireNonNull(landingNodeRid, "landingNodeRid");
         Objects.requireNonNull(expectedSource, "expectedSource");
-        byte[] command = Objects.requireNonNull(command33, "command33").clone();
-        List<byte[]> application = cloneFrames(Objects.requireNonNull(payload, "payload"), 0);
-        Objects.requireNonNull(timeout, "timeout");
-        var relocationWire = new ZLinkServiceRelocationWireCodec();
-        var relay = relocationWire.decodeReplyRelay(command);
-        //  The landing node owns the reply capability after relocation. It is
-        //  not required to equal the request-source fence: the command 46 ACK
-        //  is validated against the exact expected source below.
-        if (landingNodeRid.equals(routingId)) {
-            var handler = relocationReplyRelayHandler;
-            if (handler == null) {
-                return CompletableFuture.failedFuture(
-                        new IllegalStateException("local relocation reply relay is unavailable"));
-            }
-            return handler.handle(routingId, command, application)
-                    .thenApply(
-                            reply -> {
-                                validateReplyRelayAck(
-                                        relay,
-                                        expectedSource,
-                                        relocationWire.decodeReplyRelayAck(reply));
-                                return reply.clone();
-                            });
+        if (!expectedSource.nodeRid().equals(requesterNodeRid)) {
+            return CompletableFuture.failedFuture(
+                    new IllegalArgumentException(
+                            "command 33 destination differs from request source"));
         }
-        List<byte[]> frames = new ArrayList<>(application.size() + 1);
-        frames.add(command);
-        frames.addAll(application);
+        List<byte[]> frames = new ArrayList<>(1 + payload.size());
+        frames.add(command33.clone());
+        frames.addAll(cloneFrames(payload, 0));
+        var relocationWire = new ZLinkServiceRelocationWireCodec();
+        var relay = relocationWire.decodeReplyRelayFrames(frames).relay();
+        if (requesterNodeRid.equals(routingId)) {
+            return acceptRelocationReply(routingId, null, frames, relocationWire)
+                    .thenApply(
+                            ack -> {
+                                if (ack == null) {
+                                    throw new CompletionException(
+                                            new TimeoutException(
+                                                    "command 46 ACK was not received"));
+                                }
+                                validateReplyRelayAck(relay, expectedSource, ack);
+                                return relocationWire.encodeReplyRelayAck(ack);
+                            })
+                    .exceptionallyCompose(
+                            failure -> CompletableFuture.failedFuture(requestFailure(failure)));
+        }
         requireStarted();
-        ReplyRelayPendingKey key = ReplyRelayPendingKey.from(landingNodeRid, relay);
+        ReplyRelayPendingKey key = ReplyRelayPendingKey.from(requesterNodeRid, relay);
         var pending = new ReplyRelayPending(relay, expectedSource);
         if (pendingReplyRelays.putIfAbsent(key, pending) != null) {
             return CompletableFuture.failedFuture(
@@ -4636,7 +4695,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             return pending.completion;
         }
         try {
-            port.send(requireStarted(), landingNodeRid, frames)
+            port.send(requireStarted(), requesterNodeRid, frames)
                     .whenComplete(
                             (ignored, failure) -> {
                                 if (failure == null) {
@@ -4653,7 +4712,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 pending.completion.completeExceptionally(failure);
             }
         }
-        return pending.completion;
+        return pending.completion.exceptionallyCompose(
+                failure -> CompletableFuture.failedFuture(requestFailure(failure)));
     }
 
     @Override
@@ -5509,11 +5569,15 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     0,
                     java.util.Map.of());
         }
-        ZLinkBackendRequestResult result = backendResult(header.terminalResult());
-        throw ZLinkRequestFailureMapping.receivedFailure(
-                result.toFrameworkErrorKind(header.failureCode()),
+        throw actorReplyFailure(header.terminalResult(), header.failureCode());
+    }
+
+    private static RuntimeException actorReplyFailure(int terminalResult, int failureCode) {
+        ZLinkBackendRequestResult result = backendResult(terminalResult);
+        return ZLinkRequestFailureMapping.receivedFailure(
+                result.toFrameworkErrorKind(failureCode),
                 "Actor request failed: " + result,
-                header.failureCode(),
+                failureCode,
                 java.util.Map.of());
     }
 
@@ -6364,11 +6428,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 return;
             }
             if (command == ServiceWireConstants.COMMAND_REPLY_RELAY) {
-                dispatchRelocationReplyRelay(inbound);
+                dispatchRelocationReplyRelay(record);
                 return;
             }
             if (command == ServiceWireConstants.COMMAND_REPLY_RELAY_ACK) {
-                dispatchRelocationReplyRelayAck(inbound);
+                dispatchRelocationReplyRelayAck(record);
                 return;
             }
             if (command == ServiceWireConstants.COMMAND_SESSION_RELOCATION_ROUTE) {
@@ -6927,71 +6991,146 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         }
     }
 
-    private void dispatchRelocationReplyRelay(ZLinkJavaRawServicePort.Inbound inbound) {
-        var handler = relocationReplyRelayHandler;
-        if (handler == null || inbound.requestSequence() != null || inbound.frames().isEmpty()) {
-            return;
-        }
-        byte[] command33 = inbound.frames().getFirst();
+    private void dispatchRelocationReplyRelay(ClaimedRecord record) {
+        var inbound = record.inbound;
+        if (inbound.requestSequence() != null) return;
         var relocationWire = new ZLinkServiceRelocationWireCodec();
-        ZLinkServiceRelocationWireCodec.ReplyRelay relay;
-        try {
-            relay = relocationWire.decodeReplyRelay(command33);
-            validateReplyRelayPayload(relay, inbound.frames().size() - 1);
-        } catch (RuntimeException invalid) {
-            return;
+        acceptRelocationReply(
+                        inbound.source(), record.currentSource, inbound.frames(), relocationWire)
+                .thenAccept(
+                        ack -> {
+                            if (ack != null) {
+                                port.send(
+                                        requireStarted(),
+                                        inbound.source(),
+                                        List.of(relocationWire.encodeReplyRelayAck(ack)));
+                            }
+                        });
+    }
+
+    private CompletionStage<ZLinkServiceRelocationWireCodec.ReplyRelayAck> acceptRelocationReply(
+            RoutingId transportSource,
+            ZLinkServiceTopologyRegistry.Peer peer,
+            List<byte[]> frames,
+            ZLinkServiceRelocationWireCodec codec) {
+        var reply = codec.decodeReplyRelayFrames(frames);
+        var coordinator = reply.relay().coordinator();
+        var local = requestSourceFence();
+        if (local == null
+                || !coordinator.nodeRid().equals(transportSource)
+                || !matchesRelocationCoordinator(
+                        transportSource,
+                        peer,
+                        coordinator.nodeGeneration(),
+                        coordinator.ownerId(),
+                        coordinator.leaseGeneration())) {
+            return CompletableFuture.completedFuture(null);
         }
-        List<byte[]> payload = cloneFrames(inbound.frames(), 1);
-        CompletionStage<byte[]> completion;
-        try {
-            completion =
-                    Objects.requireNonNull(
-                            handler.handle(inbound.source(), command33.clone(), payload),
-                            "relocation reply handler returned null");
-        } catch (RuntimeException failure) {
-            completion = CompletableFuture.failedFuture(failure);
+        return operations.acceptRelocationReply(reply, local);
+    }
+
+    private boolean matchesRelocationCoordinator(
+            RoutingId rid,
+            ZLinkServiceTopologyRegistry.Peer peer,
+            long generation,
+            String ownerId,
+            long lease) {
+        if (rid.equals(routingId)) {
+            var local = localAuthorityFence;
+            return local != null && local.identifies(rid, generation, ownerId, lease);
         }
-        completion.whenComplete(
-                (ack, failure) -> {
-                    if (failure != null || ack == null) {
-                        Throwable cause = failure == null ? null : unwrap(failure);
-                        String diagnostic =
-                                "relocation-reply-relay-failed source="
-                                        + inbound.source()
-                                        + " error="
-                                        + (cause == null
-                                                ? "missing-ack"
-                                                : cause.getClass().getSimpleName()
-                                                        + ": "
-                                                        + String.valueOf(cause.getMessage()));
-                        LOGGER.warning(diagnostic);
-                        return;
-                    }
+        var authority = peerAdmissionExpectations.get(rid);
+        return peer != null
+                && isReadyPeer(peer)
+                && peer.descriptor().lifecycleGeneration() == generation
+                && authority != null
+                && authority.lifecycleGeneration() == generation
+                && ownerId.equals(authority.ownerId())
+                && authority.leaseGeneration() == lease;
+    }
+
+    <T> void registerRelocationReply(
+            ZLinkServiceOperationRegistry registry,
+            ZLinkServiceOperationRegistry.Operation<T> operation,
+            long replyRoute,
+            Function<ZLinkServiceRelocationWireCodec.StoredReply, T> decode) {
+        operations.registerRelocationReply(registry, operation, replyRoute, decode);
+    }
+
+    <T> void registerActorRelocationReply(
+            ZLinkServiceOperationRegistry.Operation<T> operation,
+            long replyRoute,
+            Function<List<Message>, T> decode,
+            Function<Throwable, Throwable> mapFailure) {
+        registerRelocationReply(
+                operations,
+                operation,
+                replyRoute,
+                reply -> {
                     try {
-                        relocationWire.decodeReplyRelayAck(ack);
-                        port.send(requireStarted(), inbound.source(), List.of(ack.clone()));
-                    } catch (RuntimeException invalid) {
-                        // Invalid ACKs are never published as terminal evidence.
+                        if (reply.relay().terminalResult() != 0) {
+                            throw actorReplyFailure(
+                                    reply.relay().terminalResult(), reply.relay().failureCode());
+                        }
+                        return decode.apply(decodeRelocationReplyParts(reply));
+                    } catch (RuntimeException failure) {
+                        var mapped = mapFailure.apply(failure);
+                        if (mapped instanceof RuntimeException runtime) throw runtime;
+                        throw new CompletionException(mapped);
                     }
                 });
     }
 
-    private void dispatchRelocationReplyRelayAck(ZLinkJavaRawServicePort.Inbound inbound) {
-        if (inbound.requestSequence() != null || inbound.frames().size() != 1) {
-            return;
+    ZLinkBackendReceived relocatedSpotReply(
+            RoutingId targetNodeRid,
+            String targetSpotId,
+            long correlation,
+            ZLinkServiceRelocationWireCodec.StoredReply reply) {
+        return new ZLinkBackendReceived(
+                backendResult(reply.relay().terminalResult()),
+                reply.relay().failureCode(),
+                Optional.of(targetNodeRid),
+                Optional.of(targetSpotId),
+                Optional.of(correlation),
+                decodeRelocationReplyParts(reply));
+    }
+
+    private static List<Message> decodeRelocationReplyParts(
+            ZLinkServiceRelocationWireCodec.StoredReply reply) {
+        var payload = reply.payload();
+        if (payload == null) return List.of();
+        if (!ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME.equals(payload.packetName())
+                || !ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE.equals(
+                        payload.contentType())) {
+            return List.of(Message.from(payload.payload()));
         }
+        return ZLinkServiceM6AWireCodec.decodeFrameworkMultipart(
+                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                        payload.packetName(), payload.contentType(), payload.payload()));
+    }
+
+    private ZLinkServiceRelocationWireCodec.RequestSourceFence requestSourceFence() {
+        var local = localAuthorityFence;
+        return local == null
+                ? null
+                : new ZLinkServiceRelocationWireCodec.RequestSourceFence(
+                        local.ownerId(),
+                        local.ownerLeaseGeneration(),
+                        local.sourceNodeRid(),
+                        local.sourceNodeGeneration());
+    }
+
+    private void dispatchRelocationReplyRelayAck(ClaimedRecord record) {
+        var inbound = record.inbound;
+        if (inbound.requestSequence() != null || inbound.frames().size() != 1) return;
         byte[] encoded = inbound.frames().getFirst();
-        var relocationWire = new ZLinkServiceRelocationWireCodec();
-        ZLinkServiceRelocationWireCodec.ReplyRelayAck ack;
-        try {
-            ack = relocationWire.decodeReplyRelayAck(encoded);
-            //  The ACK is sent by the landing node that owns the relocated
-            //  reply capability, which may differ from the request-source
-            //  fence inside the ACK. The pending key below pins the ACK to
-            //  the exact addressed landing node and validateReplyRelayAck
-            //  pins the full expected request-source fence.
-            topology.peerFromOwner(inbound.source()).orElseThrow();
-        } catch (RuntimeException invalid) {
+        var ack = new ZLinkServiceRelocationWireCodec().decodeReplyRelayAck(encoded);
+        var source = ack.requestSource();
+        var peer = record.currentSource;
+        if (!source.nodeRid().equals(inbound.source())
+                || peer == null
+                || !isReadyPeer(peer)
+                || peer.descriptor().lifecycleGeneration() != source.nodeGeneration()) {
             return;
         }
         ReplyRelayPendingKey key = ReplyRelayPendingKey.from(inbound.source(), ack);
@@ -7009,15 +7148,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         } catch (RuntimeException invalid) {
             // A forged or stale ACK cannot close or poison a valid pending
             // relay. A later exact ACK may still complete it before timeout.
-        }
-    }
-
-    static void validateReplyRelayPayload(
-            ZLinkServiceRelocationWireCodec.ReplyRelay relay, int payloadFrames) {
-        if (payloadFrames < 0
-                || relay.terminalResult() == 0 && payloadFrames != 1
-                || relay.terminalResult() != 0 && payloadFrames != 0) {
-            throw new IllegalArgumentException("command 33 terminal payload boundary differs");
         }
     }
 

@@ -1075,6 +1075,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                 "relocation authority is not Ready on the source: "
                                                         + key));
                             }
+                            ZLinkUserSpotRetireRuntime.requireReleasedPublication(snapshot);
                             return CompletableFuture.completedFuture(
                                     new Owned(
                                             key,
@@ -1330,7 +1331,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
         private final UnresolvedPreparations unresolved;
         private final ZLinkSpotRetireControl.StageRequest stageRequest;
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
-        private Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> finalJournal = Map.of();
         private ZLinkUserSpotRelocationBarrier.RelocationCommit relocationCommit;
         private CompletableFuture<ZLinkUserSpotRelocationBarrier.RelocationCommit>
                 relocationCommitClaim;
@@ -1477,12 +1477,27 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             cut -> {
                                 Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> relayed =
                                         cut.committed().heldIngress();
+                                Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> requests =
+                                        new LinkedHashMap<>(captured.staging().acceptedJournal());
+                                relayed.forEach(
+                                        (lane, records) ->
+                                                requests.merge(
+                                                        lane,
+                                                        records,
+                                                        (saved, held) ->
+                                                                Stream.concat(
+                                                                                saved.stream(),
+                                                                                held.stream())
+                                                                        .toList()));
                                 CompletionStage<Void> chain =
-                                        stateLane.runAsync(
-                                                () -> {
-                                                    finalJournal = relayed;
-                                                    captureFinished = true;
-                                                });
+                                        bindCommittedReplies(requests)
+                                                .thenCompose(
+                                                        ignored ->
+                                                                stateLane.runAsync(
+                                                                        () ->
+                                                                                captureFinished =
+                                                                                        true))
+                                                .thenAccept(ignored -> {});
                                 for (List<ZLinkSerialExecutionQueue.QueuedRecord> lane :
                                         relayed.values()) {
                                     for (ZLinkSerialExecutionQueue.QueuedRecord record : lane) {
@@ -1511,7 +1526,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
                         participant.authorityKey(), participant.sourceAuthorityOwnerGeneration());
             }
             installRelocationForwards(targetOwnerGenerations);
-            bindCommittedReplies(targetOwnerGenerations);
         }
 
         private void installRelocationForwards(Map<String, Long> targetOwnerGenerations) {
@@ -1564,30 +1578,16 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             : actor.snapshot().ownerLeaseGeneration());
         }
 
-        private void bindCommittedReplies(Map<String, Long> targetOwnerGenerations) {
-            Map<String, ZLinkSpotRelocationReplyRoutes.CommittedFence> replyFences =
-                    new LinkedHashMap<>();
-            for (int index = 0; index < stageRequest.participants().size(); index++) {
-                var participant = stageRequest.participants().get(index);
-                replyFences.put(
-                        participant.objectId().equals(stageRequest.spotId())
-                                ? "spot"
-                                : participant.objectId(),
-                        new ZLinkSpotRelocationReplyRoutes.CommittedFence(
-                                participant.authorityKey(),
-                                index + 1L,
-                                stageRequest.fence().aggregateGeneration()));
-            }
+        private CompletionStage<Void> bindCommittedReplies(
+                Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal) {
             if (relocationReplies == null) {
                 throw new IllegalStateException("relocation reply runtime is unavailable");
             }
-            Map<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal =
-                    inStateLane(() -> finalJournal);
-            relocationReplies.bindCanonicalRelocationReplies(
+            return relocationReplies.bindRelocationRepliesAsync(
                     journal,
                     stageRequest.targetNodeRid(),
                     stageRequest.targetNodeGeneration(),
-                    Map.copyOf(replyFences));
+                    stageRequest.fence().aggregateGeneration());
         }
 
         CompletionStage<Void> completeSourceBarrierCommit() {

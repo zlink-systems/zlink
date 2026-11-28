@@ -18,6 +18,7 @@ import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
@@ -225,22 +226,24 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             boolean requireCommittedShell) {
         return readOwned(actorId, cancellation)
                 .thenCompose(
-                        owned ->
-                                committedShell(owned, cancellation, requireCommittedShell)
-                                        .thenCompose(
-                                                shell ->
-                                                        listDescriptors(cancellation)
-                                                                .thenApply(
-                                                                        descriptors ->
-                                                                                new Admission(
-                                                                                        owned,
-                                                                                        selectTarget(
-                                                                                                owned,
-                                                                                                descriptors,
-                                                                                                targetPolicy,
-                                                                                                shell),
-                                                                                        sessionRoute(
-                                                                                                owned)))));
+                        owned -> {
+                            ZLinkUserSpotRetireRuntime.requireReleasedPublication(owned.snapshot());
+                            return committedShell(owned, cancellation, requireCommittedShell)
+                                    .thenCompose(
+                                            shell ->
+                                                    listDescriptors(cancellation)
+                                                            .thenApply(
+                                                                    descriptors ->
+                                                                            new Admission(
+                                                                                    owned,
+                                                                                    selectTarget(
+                                                                                            owned,
+                                                                                            descriptors,
+                                                                                            targetPolicy,
+                                                                                            shell),
+                                                                                    sessionRoute(
+                                                                                            owned))));
+                        });
     }
 
     private CompletionStage<Optional<ZLinkAuthoritySnapshot>> committedShell(
@@ -581,7 +584,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                         return ZLinkStandaloneActorRelocationSourceBuilder
                                                                                 .<Void>failed(
                                                                                         new IllegalStateException(
-                                                                                                "Source relocation queue was lost during abort"));
+                                                                                                "Source"
+                                                                                                        + " relocation"
+                                                                                                        + " queue"
+                                                                                                        + " was lost"
+                                                                                                        + " during"
+                                                                                                        + " abort"));
                                                                     return coordinator
                                                                             .clearSourceProgress(
                                                                                     phaseParticipants
@@ -653,6 +661,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                             result ->
                                                     boundary.finished().thenApply(done -> result));
                         });
+    }
+
+    CompletionStage<ZLinkAuthorityReadResult> readActorAuthority(
+            String actorId, ZLinkStoreCancellation cancellation) {
+        return locations.read(ZLinkAuthorityKeyCodec.actor(actorId), cancellation);
     }
 
     private CompletionStage<Owned> readOwned(String actorId, ZLinkStoreCancellation cancellation) {
@@ -1442,26 +1455,18 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         }
 
         private CompletionStage<Void> bindCommittedReplies() {
-            ZLinkSpotRetireControl.ParticipantFence participant =
-                    stageRequest.participants().stream()
-                            .filter(value -> value.objectId().equals(owned.actorId()))
-                            .findFirst()
-                            .orElseThrow(
-                                    () ->
-                                            new IllegalStateException(
-                                                    "Actor relocation participant is missing"));
             return captureCompletion.thenCompose(
                     journal ->
-                            relocationReplies.bindCanonicalRelocationRepliesAsync(
-                                    Map.of("actor:" + owned.actorId(), journal),
+                            relocationReplies.bindRelocationRepliesAsync(
+                                    Map.of(
+                                            "actor:" + owned.actorId(),
+                                            java.util.stream.Stream.concat(
+                                                            seal.captured().stream(),
+                                                            journal.stream())
+                                                    .toList()),
                                     stageRequest.targetNodeRid(),
                                     stageRequest.targetNodeGeneration(),
-                                    Map.of(
-                                            owned.actorId(),
-                                            new ZLinkSpotRelocationReplyRoutes.CommittedFence(
-                                                    participant.authorityKey(),
-                                                    1L,
-                                                    stageRequest.fence().aggregateGeneration()))));
+                                    stageRequest.fence().aggregateGeneration()));
         }
 
         CompletionStage<Void> completeSourceQueueCommit() {

@@ -70,7 +70,7 @@ final class ZLinkRedisAggregateRelocationCapacityLiveTest {
             assertEquals(
                     ZLinkAggregateCommitResult.COMMITTED,
                     fixture.repository
-                            .commitAggregate(prepared.fence(), () -> false)
+                            .commitAggregate(prepared.fence(), java.util.List.of(), () -> false)
                             .toCompletableFuture()
                             .get());
             assertEquals(TARGET, fixture.snapshot(moved).allocation().descriptor().rid());

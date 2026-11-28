@@ -8,6 +8,11 @@ import java.util.concurrent.CompletionStage;
 
 /** Framework-private relocation transition boundary used by source schedulers. */
 interface ZLinkRelocationTransitionClient {
+    default java.util.Optional<java.util.concurrent.CompletableFuture<Void>> targetPublication(
+            java.util.UUID relocationId) {
+        return java.util.Optional.empty();
+    }
+
     /** The source transport's terminal lifecycle, independent of remote failure replies. */
     default boolean sourceStopped() {
         return false;

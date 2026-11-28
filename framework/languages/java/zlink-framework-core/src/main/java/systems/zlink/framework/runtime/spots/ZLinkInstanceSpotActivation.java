@@ -341,7 +341,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                             ? ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND)
                             : flow;
             admitted =
-                    context.enqueueMessage(
+                    enqueueRoute(
                             received,
                             () -> host.dispatchQueuedInstanceMessage(this, received, inboundFlow),
                             accepted);
@@ -371,6 +371,38 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                         accepted.completeExceptionally(failure);
                     }
                 });
+    }
+
+    private CompletionStage<Void> enqueueRoute(
+            ZLinkBackendReceived received,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        if (received.acceptedJournalRecordSize() == 0) {
+            return context.enqueueMessage(received, null, operation, admission);
+        }
+        if (!received.hasDirectReplyPath()) {
+            return context.enqueueMessage(
+                    received, received::acceptedJournalRecord, operation, admission);
+        }
+        var replyRoute =
+                host.registerRelocationReplyLazy(
+                        received::acceptedJournalRecord,
+                        received,
+                        context.spotId(),
+                        backendSpot.lifecycleGeneration());
+        return context.enqueueMessage(
+                        received,
+                        replyRoute::record,
+                        () ->
+                                operation
+                                        .get()
+                                        .whenComplete(
+                                                (ignored, failure) -> replyRoute.completeLocal()),
+                        admission)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) replyRoute.completeLocal();
+                        });
     }
 
     @Override

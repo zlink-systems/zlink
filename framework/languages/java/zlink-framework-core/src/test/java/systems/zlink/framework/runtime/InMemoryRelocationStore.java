@@ -132,7 +132,8 @@ public final class InMemoryRelocationStore
             values.remove(reference);
             return CompletableFuture.completedFuture(new ZLinkRelocationMissing());
         }
-        return CompletableFuture.completedFuture(new ZLinkRelocationFound(entry.payload()));
+        return CompletableFuture.completedFuture(
+                new ZLinkRelocationFound(entry.payload(), entry.expiresAt(), now));
     }
 
     @Override

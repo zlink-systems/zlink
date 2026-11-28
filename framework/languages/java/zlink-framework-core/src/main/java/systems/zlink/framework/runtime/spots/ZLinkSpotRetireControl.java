@@ -31,6 +31,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -59,8 +60,9 @@ final class ZLinkSpotRetireControl {
         return new Client(node);
     }
 
-    static Target install(ZLinkInternalMeshNode node, TargetEndpoint endpoint) {
-        Target target = new Target(endpoint);
+    static Target install(
+            ZLinkInternalMeshNode node, TargetEndpoint endpoint, Consumer<Runnable> resubmit) {
+        Target target = new Target(endpoint, resubmit);
         node.setRelocationControlHandler(target::handle);
         return target;
     }
@@ -94,13 +96,15 @@ final class ZLinkSpotRetireControl {
 
     static final class Target {
         private final TargetEndpoint endpoint;
+        private final Consumer<Runnable> resubmit;
         // A slot's staged/published/aborted fields and this index are one C2
         // aggregate. A concurrent map would not preserve their transition.
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
         private final Map<Fence, Slot> slots = new HashMap<>();
 
-        private Target(TargetEndpoint endpoint) {
+        private Target(TargetEndpoint endpoint, Consumer<Runnable> resubmit) {
             this.endpoint = Objects.requireNonNull(endpoint, "endpoint");
+            this.resubmit = Objects.requireNonNull(resubmit, "resubmit");
         }
 
         CompletionStage<byte[]> handle(RoutingId transportSource, byte[] encoded) {
@@ -191,7 +195,13 @@ final class ZLinkSpotRetireControl {
             //  endpoint.publish inline and reenters relocation control.
             state.start
                     .staged
-                    .thenCompose(ignored -> endpoint.publish(state.start.request))
+                    .thenCompose(
+                            ignored -> {
+                                var request = state.start.request;
+                                return endpoint.publish(
+                                        request,
+                                        endpoint.prepareCompletions(request, List.of(), resubmit));
+                            })
                     .thenApply(ignored -> encodeAck(state.start.request.fence()))
                     .whenComplete(
                             (ack, failure) -> {
@@ -295,7 +305,11 @@ final class ZLinkSpotRetireControl {
             return stage(request);
         }
 
-        CompletionStage<Void> publish(StageRequest request);
+        ZLinkTargetRelocationReplies prepareCompletions(
+                StageRequest request, List<byte[]> verifiedBatch, Consumer<Runnable> resubmit);
+
+        CompletionStage<Void> publish(
+                StageRequest request, ZLinkTargetRelocationReplies completions);
 
         /** Stages one command 31 frozen application record in arrival order. */
         default CompletionStage<Void> stageRelayedRecord(
