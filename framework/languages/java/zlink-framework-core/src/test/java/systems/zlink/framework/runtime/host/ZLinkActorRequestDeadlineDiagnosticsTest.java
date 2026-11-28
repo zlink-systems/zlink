@@ -16,6 +16,7 @@ import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.runtime.binding.ZLinkJavaRawMeshNodeTestAccess;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
@@ -37,6 +38,12 @@ import java.util.regex.Pattern;
 class ZLinkActorRequestDeadlineDiagnosticsTest {
     private static final String FLAG = "ZLINK_DEBUG_FRAMEWORK_RELOCATION";
     private static final String MARKER = "[zlink.runtime.relocation] node_request_deadline";
+    private static final String CALLBACK = "join callbackNanos";
+    private static final String POOL_ENTERED = "completion worker enteredNanos";
+    private static final String POOL_RELEASED = "completion worker releasedNanos";
+    // Covers thread wake-up and clock-read jitter after the measured occupation ends; it is not
+    // a spec deadline (01-submit-and-completion.ko.md §10.1 allows the late visit itself).
+    private static final long SCHEDULING_SLACK_NANOS = TimeUnit.MILLISECONDS.toNanos(250);
     private static final String MESH = "deadline-actors";
     private static final String TARGET = "deadline-target";
     private static final String SOURCE = "deadline-source";
@@ -44,8 +51,7 @@ class ZLinkActorRequestDeadlineDiagnosticsTest {
     private static final Duration DEADLINE = Duration.ofSeconds(2);
     private static final CompletableFuture<Void> ENTERED = new CompletableFuture<>();
     private static final CompletableFuture<Void> RELEASE = new CompletableFuture<>();
-    private static final BlockingQueue<ZLinkActorJoinCompletion> JOINS =
-            new LinkedBlockingQueue<>();
+    private static final BlockingQueue<JoinCallback> JOINS = new LinkedBlockingQueue<>();
 
     @TempDir Path outputDir;
 
@@ -56,7 +62,8 @@ class ZLinkActorRequestDeadlineDiagnosticsTest {
 
     @Test
     void reportsExpiredActorJoinOnce() throws Exception {
-        assertDeadline(run("join", "1"));
+        String output = run("join", "1");
+        assertJoinTiming(assertDeadline(output), output);
     }
 
     @Test
@@ -74,7 +81,7 @@ class ZLinkActorRequestDeadlineDiagnosticsTest {
         run("allocations", "1");
     }
 
-    private static void assertDeadline(String output) {
+    private static String assertDeadline(String output) {
         var record = Pattern.compile(Pattern.quote(MARKER) + " \\{[^}]*}").matcher(output);
         assertTrue(record.find(), output);
         String event = record.group();
@@ -101,6 +108,33 @@ class ZLinkActorRequestDeadlineDiagnosticsTest {
         }
         assertTrue(event.contains("replyReceivedMs: undefined"), event);
         assertTrue(event.contains("localDispatchMs: undefined"), event);
+        return event;
+    }
+
+    private static void assertJoinTiming(String event, String output) {
+        long terminal = timestamp(event, "terminalNanos");
+        long dispatcher = timestamp(event, "dispatcherStartNanos");
+        long callback = timestamp(output, CALLBACK);
+        var occupation =
+                new Occupation(timestamp(output, POOL_ENTERED), timestamp(output, POOL_RELEASED));
+        // Binding expiry can claim the same request without an owner deadline-index visit.
+        if (!event.contains("scheduledDeadlineNanos: undefined")) {
+            long scheduled = timestamp(event, "scheduledDeadlineNanos");
+            long visit = timestamp(event, "ownerVisitNanos");
+            assertTrue(scheduled <= visit && visit <= terminal, output);
+        }
+        assertTrue(terminal <= dispatcher && occupation.end() <= dispatcher, output);
+        assertTrue(dispatcher <= callback, output);
+        long bound = occupation.boundFrom(terminal);
+        assertTrue(
+                callback <= bound,
+                () -> "Join callback exceeded boundNanos=" + bound + "\n" + output);
+    }
+
+    private static long timestamp(String output, String field) {
+        var matcher = Pattern.compile(Pattern.quote(field) + ": (-?[0-9]+)").matcher(output);
+        assertTrue(matcher.find(), output);
+        return Long.parseLong(matcher.group(1));
     }
 
     private String run(String kind, String flag) throws Exception {
@@ -116,10 +150,15 @@ class ZLinkActorRequestDeadlineDiagnosticsTest {
                                 kind)
                         .redirectErrorStream(true)
                         .redirectOutput(output.toFile());
+        if (kind.equals("join")) {
+            process.command().add(1, "-Djava.util.concurrent.ForkJoinPool.common.parallelism=1");
+        }
         process.environment().put(FLAG, flag);
         var child = process.start();
         try {
-            assertTrue(child.waitFor(25, TimeUnit.SECONDS), () -> "child timed out: " + output);
+            if (!child.waitFor(25, TimeUnit.SECONDS)) {
+                fail("child timed out: " + output + "\n" + Files.readString(output));
+            }
             String log = Files.readString(output);
             assertEquals(0, child.exitValue(), log);
             System.out.print(log);
@@ -163,7 +202,9 @@ class ZLinkActorRequestDeadlineDiagnosticsTest {
                 assertEquals(new Echo(false), await(request(source, join, false)));
                 if (join) {
                     var accepted =
-                            assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, nextJoin());
+                            assertInstanceOf(
+                                    ZLinkActorJoinCompletion.Accepted.class,
+                                    nextWarmupJoin().completion());
                     assertEquals(RoutingId.from(TARGET), accepted.actor().nodeRid());
                 }
                 try {
@@ -171,10 +212,8 @@ class ZLinkActorRequestDeadlineDiagnosticsTest {
                     await(ENTERED);
                     if (join) {
                         assertEquals(new Echo(true), await(pending));
-                        assertEquals(
-                                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                                assertInstanceOf(ZLinkActorJoinCompletion.Failed.class, nextJoin())
-                                        .kind());
+                        var node = ZLinkFrameworkRuntimeTestAccess.meshNode(source, MESH);
+                        assertExpiredJoin(ZLinkJavaRawMeshNodeTestAccess.operationRegistry(node));
                     } else {
                         var failure = assertThrows(ExecutionException.class, () -> await(pending));
                         assertEquals(
@@ -187,7 +226,67 @@ class ZLinkActorRequestDeadlineDiagnosticsTest {
                 }
             }
         }
+        if (join)
+            assertTrue(JOINS.isEmpty(), () -> "unexpected additional Join callbacks: " + JOINS);
     }
+
+    private static void assertExpiredJoin(ZLinkServiceOperationRegistry registry) throws Exception {
+        var entered = new CompletableFuture<Long>();
+        var stopped = new CompletableFuture<Long>();
+        var release = new CountDownLatch(1);
+        ForkJoinPool.commonPool()
+                .execute(
+                        () -> {
+                            entered.complete(System.nanoTime());
+                            try {
+                                release.await();
+                                stopped.complete(System.nanoTime());
+                            } catch (InterruptedException interrupted) {
+                                Thread.currentThread().interrupt();
+                                stopped.completeExceptionally(interrupted);
+                            }
+                        });
+
+        long poolEntered;
+        long terminalObserved;
+        try {
+            poolEntered = entered.get();
+            System.out.println(POOL_ENTERED + ": " + poolEntered);
+            while (registry.pendingCount() != 0) {
+                Thread.sleep(1);
+            }
+            terminalObserved = System.nanoTime();
+        } finally {
+            release.countDown();
+        }
+        var occupation = new Occupation(poolEntered, stopped.get());
+        System.out.println(POOL_RELEASED + ": " + occupation.end());
+        long bound = occupation.boundFrom(terminalObserved);
+        var callback = JOINS.poll(Math.max(0, bound - System.nanoTime()), TimeUnit.NANOSECONDS);
+        System.out.println(CALLBACK + ": " + (callback == null ? "missing" : callback.arrival()));
+        assertNotNull(
+                callback,
+                () ->
+                        "Join callback missing at boundNanos="
+                                + bound
+                                + ", terminalObservedNanos="
+                                + terminalObserved);
+        assertEquals("local-player", callback.actorId());
+        assertEquals(
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                assertInstanceOf(ZLinkActorJoinCompletion.Failed.class, callback.completion())
+                        .kind());
+    }
+
+    private record Occupation(long start, long end) {
+        long boundFrom(long terminal) {
+            long occupiedAfterTerminal = Math.max(0, end - Math.max(terminal, start));
+            return terminal + occupiedAfterTerminal + SCHEDULING_SLACK_NANOS;
+        }
+    }
+
+    private record JoinCallback(
+            String actorId, ZLinkActorJoinCompletion completion, long arrival) {}
 
     private static void measureAllocations() {
         var lane = new ZLinkStateLane();
@@ -331,7 +430,7 @@ class ZLinkActorRequestDeadlineDiagnosticsTest {
         return stage.toCompletableFuture().get(5, TimeUnit.SECONDS);
     }
 
-    private static ZLinkActorJoinCompletion nextJoin() throws InterruptedException {
+    private static JoinCallback nextWarmupJoin() throws InterruptedException {
         var result = JOINS.poll(5, TimeUnit.SECONDS);
         assertNotNull(result);
         return result;
@@ -344,7 +443,7 @@ class ZLinkActorRequestDeadlineDiagnosticsTest {
     public record Player(ZLinkActorContext context) implements ZLinkActor {
         @Override
         public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
-            JOINS.add(completion);
+            JOINS.add(new JoinCallback(context.actorId(), completion, System.nanoTime()));
             return CompletableFuture.completedFuture(null);
         }
     }
