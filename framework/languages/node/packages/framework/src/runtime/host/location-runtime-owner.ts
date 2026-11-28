@@ -124,7 +124,10 @@ export class ZLinkLocationRuntimeOwner {
           this.options.shutdownSignal()
         );
         if (maintenance !== undefined) {
-          this.options.detachedTaskRunner.runDetached('Relocation accepted reply retention', maintenance);
+          this.options.detachedTaskRunner.runDetached(
+            'Relocation accepted reply retention',
+            maintenance
+          );
         }
       });
     }

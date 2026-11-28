@@ -36,7 +36,8 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
     namespace fw = zlink::framework;
     namespace protocol = fw::runtime::protocol;
     for (const std::string_view scenario :
-         {"commit", "preserve", "missing", "shutdown", "cleanup-error"}) {
+         {"commit", "preserve", "drain-preserve", "missing", "shutdown", "cleanup-error"}) {
+        const bool preserved = scenario == "preserve" || scenario == "drain-preserve";
         metric_test::provider_t provider;
         auto monitoring = zlink::framework::test::runtime_failure_monitoring ();
         stateful_object_runtime_t objects;
@@ -66,6 +67,7 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
         fw::detail::delay_owner_t delays (delay_mutex);
         maintenance_runtime_t relocation (objects, authority, roots);
         relocation.bind_delay_owner (delays);
+        std::string captured_version;
         if (scenario == "cleanup-error")
             relocation.attach_committed_terminal ([] (const object_ref_t &, const auto &) {
                 throw std::runtime_error ("source cleanup failed");
@@ -86,6 +88,7 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
                   && aggregate->relocation->expected_store_version == "1"
                   && store.snapshot->store_version != "1",
                 "source must publish Captured against the original fence before PREPARE");
+              captured_version = store.snapshot->store_version;
               co_return relocation_reason_t::none;
           },
           .send_state_chunk = [] (const protocol::relocation_state_t &) -> fw::task_t<bool> {
@@ -100,6 +103,8 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
                   store.snapshot.reset ();
               else if (scenario == "shutdown")
                   delays.request_stop ();
+              else if (scenario == "drain-preserve")
+                  delays.request_stop (std::chrono::steady_clock::now () + std::chrono::seconds{1});
               else if (scenario != "preserve") {
                   store.snapshot->store_version = "committed";
                   store.snapshot->owner = {"target-owner", 2};
@@ -124,13 +129,17 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
             const auto result = await_task (relocation.relocate (
               actor, "target-owner", {"target-owner", 2}, 1024 * 1024, digest_with (0x41), wire));
             const auto observed =
-              scenario == "preserve"   ? relocation_authority_t::source_preserved
+              preserved                ? relocation_authority_t::source_preserved
               : scenario == "missing"  ? relocation_authority_t::source_lease_expired
               : scenario == "shutdown" ? relocation_authority_t::unsettled
                                        : relocation_authority_t::target_committed;
             test.require (result.settlement.outcome == observed,
                           "fixture must exercise the requested source settlement");
-            if (scenario == "preserve")
+            if (scenario == "shutdown")
+                test.require (store.snapshot && store.snapshot->store_version == captured_version
+                                && store.snapshot->owner.owner_id == "source-owner",
+                              "stop with unsettled authority must leave the Store row intact");
+            if (preserved)
                 test.require (
                   objects.enqueue (actor, turn_domain_t::application, {1, {0x41}})
                     == stateful_error_t::none,
@@ -147,7 +156,7 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
                       "each source relocation must write one terminal message-flow record");
         if (observed_flows.size () == 1) {
             const auto &event = observed_flows.front ();
-            const auto flow_outcome = scenario == "preserve"   ? "aborted"
+            const auto flow_outcome = preserved                ? "aborted"
                                       : scenario == "shutdown" ? "shutdown"
                                       : scenario == "missing"  ? "failed"
                                                                : "completed";
@@ -161,7 +170,7 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
                 && event.detail_result == flow_outcome,
               "source terminal record must retain the actor, flow pair, and confirmed result");
         }
-        const auto expected = scenario == "preserve"   ? "aborted"
+        const auto expected = preserved                ? "aborted"
                               : scenario == "shutdown" ? "shutdown"
                               : scenario == "missing"  ? "failed"
                                                        : "completed";

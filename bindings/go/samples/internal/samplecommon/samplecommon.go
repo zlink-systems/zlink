@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -134,15 +133,4 @@ func MustStep(step string, err error) {
 	if err != nil {
 		Must(fmt.Errorf("%s: %w", step, err))
 	}
-}
-
-func WaitUntil(timeout time.Duration, description string, predicate func() bool) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if predicate() {
-			return
-		}
-		runtime.Gosched()
-	}
-	Must(fmt.Errorf("timed out waiting for %s", description))
 }

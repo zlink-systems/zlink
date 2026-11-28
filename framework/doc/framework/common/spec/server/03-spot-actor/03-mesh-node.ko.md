@@ -302,6 +302,11 @@ handshake만 admission한다.
 않을 수 있다. HELLO는 같은 identity에 대해 멱등이다. 이를 위해 별도 timer를 두지 않으며, ADMIT을 받으면
 다시 보내지 않는다.
 
+**HELLO 송신과 수락은 host의 [admission seal](../00-foundation/02-glossary.ko.md#admission-seal)(shutdown·drain)에서만 닫는다.**
+Owner lease를 잃어 새 owner 작업을 받지 못하는 상태에서도 HELLO를 보내고 받는다. 그 상태에서도 이미 수락한
+작업의 reply, relay와 복구 요청에 연결이 필요하기 때문이다. 새 작업을 받을지는 Location runtime의 owner
+admission이 정하며 mesh admission이 다시 판정하지 않는다.
+
 **선택 route에서 REJECT를 받은 node는 그 route의 admission을 하지 않은 상태로 둔다.** 그 peer가 admitted였다면
 admitted 기록과 liveness admission을 지운다. REJECT는 connection intent를 제거하지 않으며, 그 뒤는 위의 ADMIT 대기
 규칙(HELLO를 liveness 관리 주기마다 다시 보냄)을 그대로 따른다. REJECT를 위한 별도 peer 상태나 timer는 두지 않는다.

@@ -61,8 +61,11 @@ export type ZLinkAggregateParticipant = AuthorityContract.ZLinkAggregateParticip
 };
 export type ZLinkAggregatePrepareRequest = Omit<
   AuthorityContract.ZLinkAggregatePrepareRequest,
-  'participants'
-> & { readonly participants: readonly ZLinkAggregateParticipant[] };
+  'participants' | 'inventoryDigest'
+> & {
+  readonly participants: readonly ZLinkAggregateParticipant[];
+  readonly sealedInventoryDigest?: string;
+};
 
 /** The target commit installs the captured and boundary request rows. */
 export type ZLinkAggregateFence = AuthorityContract.ZLinkAggregateFence & {

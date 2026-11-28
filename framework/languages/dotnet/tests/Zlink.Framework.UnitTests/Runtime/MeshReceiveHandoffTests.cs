@@ -115,25 +115,47 @@ public sealed class MeshReceiveHandoffTests
             )
         )
             return;
-        await RunChannelMailboxAsync(false);
+        await RunChannelMailboxAsync(false, new FailureTimeline(ChannelMailboxSteps));
     }
 
     [Fact]
     public async Task ChannelMailbox_WithNoIdleWorker_KeepsReceiverAndManagementIndependent()
     {
-        if (
-            await IsolatedTestProcess.RunIsolatedAsync(
-                typeof(MeshReceiveHandoffTests),
-                nameof(ChannelMailbox_WithNoIdleWorker_KeepsReceiverAndManagementIndependent)
+        var timeline = new FailureTimeline(ChannelMailboxSteps);
+        try
+        {
+            if (
+                await IsolatedTestProcess.RunIsolatedAsync(
+                    typeof(MeshReceiveHandoffTests),
+                    nameof(ChannelMailbox_WithNoIdleWorker_KeepsReceiverAndManagementIndependent)
+                )
             )
-        )
-            return;
-        await RunChannelMailboxAsync(true);
+                return;
+        }
+        catch (Xunit.Sdk.XunitException error)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"Child launch requested at Stopwatch tick {timeline.StartTimestamp}.\n{error.Message}",
+                error
+            );
+        }
+        await RunChannelMailboxAsync(true, timeline);
     }
 
-    private static async Task RunChannelMailboxAsync(bool exhaustApplicationResources)
+    private static readonly string[] ChannelMailboxSteps =
+    [
+        "workerReleaseStarted",
+        "handlerWaitStarted",
+        "handlerEntered",
+        "handlerWaitEnded",
+    ];
+
+    private static async Task RunChannelMailboxAsync(
+        bool exhaustApplicationResources,
+        FailureTimeline timeline
+    )
     {
-        var capture = new ChannelTurnCapture();
+        var capture = new ChannelTurnCapture { Timeline = timeline };
         var builder = Host.CreateApplicationBuilder();
         builder.Logging.ClearProviders().AddConsole().SetMinimumLevel(LogLevel.Trace);
         builder.Services.AddSingleton(capture).AddTransient<ChannelTurnHandler>();
@@ -273,9 +295,18 @@ public sealed class MeshReceiveHandoffTests
                 Assert.False(capture.FirstEntered.Task.IsCompleted);
                 await CheckDeadline();
                 Assert.Equal(0, Volatile.Read(ref turns));
+                timeline.Mark("workerReleaseStarted");
                 releaseWorkers.Set();
             }
-            await capture.FirstEntered.Task.WaitAsync(CompletionBound);
+            timeline.Mark("handlerWaitStarted");
+            try
+            {
+                await capture.FirstEntered.Task.WaitAsync(CompletionBound);
+            }
+            finally
+            {
+                timeline.Mark("handlerWaitEnded");
+            }
             var second = Submit("work", "second");
             await router.SecondReceived.Task.WaitAsync(CompletionBound);
             var other = Submit("other", "other");
@@ -316,6 +347,10 @@ public sealed class MeshReceiveHandoffTests
             Assert.Equal(1, router.MaximumConcurrentReceives);
             Assert.Empty(failures);
             Assert.Empty(reporter.Failures);
+        }
+        catch (Exception error) when (FailureTimeline.IsTimingFailure(error))
+        {
+            throw timeline.Rethrow(error, ", child test entered");
         }
         finally
         {
@@ -431,6 +466,7 @@ public sealed class MeshReceiveHandoffTests
         > Starts = new();
         internal readonly System.Collections.Concurrent.ConcurrentQueue<string> WorkOrder = new();
         internal readonly TaskCompletionSource FirstEntered = Signal();
+        internal required FailureTimeline Timeline { get; init; }
         internal readonly TaskCompletionSource AsyncEntered = Signal();
         internal readonly ManualResetEventSlim ReleaseSync = new();
         internal readonly TaskCompletionSource ReleaseAsync = Signal();
@@ -450,6 +486,7 @@ public sealed class MeshReceiveHandoffTests
                 capture.WorkOrder.Enqueue(request.Value);
             if (request.Value == "first")
             {
+                capture.Timeline.Mark("handlerEntered");
                 capture.FirstEntered.TrySetResult();
                 Assert.True(capture.ReleaseSync.Wait(CompletionBound));
             }

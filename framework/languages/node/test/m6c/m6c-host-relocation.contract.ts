@@ -47,6 +47,7 @@ import type {
   ZLinkLocationOwnerToken
 } from '../../packages/framework/src/runtime/locations/internal-location-contracts';
 import { ZLinkInMemoryLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-location-store';
+import { ZLinkAggregateInventoryStore } from '../../packages/framework/src/runtime/locations/aggregate-inventory-store';
 import {
   createServiceRelocationId,
   decodeQueuedHandoffPacket,
@@ -1666,9 +1667,10 @@ test('target-ready application authority contains no relocation publication', ()
   assert.equal(Buffer.from(projected).subarray(0, 4).toString(), 'ZLAU');
 });
 
-test('ActorJoin target keeps the route cache intact and preserves post-open relay order', async () => {
+test('ActorJoin without captured requests normalizes before completion and preserves Session route order', async () => {
   const events: string[] = [];
   const actor = { context: { actorId: 'actor-join', meshName: 'mesh-a' } };
+  const key = encodeAuthorityKey('actor', actor.context.actorId);
   const nativeRef = { actorId: 'actor-join', generation: 5n, nodeRid: 'target' };
   const authority = {
     kind: 'snapshot',
@@ -1697,10 +1699,13 @@ test('ActorJoin target keeps the route cache intact and preserves post-open rela
         _relocationId: string,
         _actor: unknown,
         _actorRef: unknown,
-        submitSourceLeave: (sourceNodeRid: string) => Promise<void>
+        submitSourceLeave: (sourceNodeRid: string) => Promise<void>,
+        _signal?: AbortSignal,
+        beforeJoinCompletion?: () => Promise<void>
       ) {
         events.push('onJoined');
         await submitSourceLeave('source');
+        await beforeJoinCompletion?.();
         events.push('accepted');
         return true;
       }
@@ -1740,8 +1745,8 @@ test('ActorJoin target keeps the route cache intact and preserves post-open rela
     memberships: []
   };
   const hidden = {
-    authorityKey: encodeAuthorityKey('actor', actor.context.actorId).value,
-    actor
+    actor,
+    replayPackets: []
   };
   const stage = {
     offer: { prepareFingerprint: 'actor-join' },
@@ -1757,8 +1762,9 @@ test('ActorJoin target keeps the route cache intact and preserves post-open rela
       }
     },
     staging: {
+      primaryAuthorityKey: key,
       envelope,
-      hidden: new Map([[hidden.authorityKey, hidden]])
+      hidden: new Map([[key.value, hidden]])
     },
     phase: 'ready',
     lane: Promise.resolve(),
@@ -1783,10 +1789,10 @@ test('ActorJoin target keeps the route cache intact and preserves post-open rela
     'onJoined',
     'sourceLeave:submit',
     'sourceLeave:warning',
+    'publication:clear',
     'accepted',
     'command44',
-    'dispatch:open',
-    'publication:clear'
+    'dispatch:open'
   ]);
 });
 
@@ -4239,7 +4245,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       const wire = {
         kind: 'cutover',
         relocation: { high: 0n, low: 145n },
-        targetAttemptGeneration: 6n,
+        targetAttemptGeneration: 1n,
         coordinator,
         senderRole: 'source',
         object: {
@@ -4313,6 +4319,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
 }
 
 function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[]) {
+  const inventory = new ZLinkAggregateInventoryStore(new ZLinkInMemoryProviderLocationStore());
   let current = initial;
   let removed = false;
   let prepared: any;
@@ -4341,6 +4348,14 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
     },
     get preserves() {
       return preserves;
+    },
+    storeAggregateInventory: inventory.store.bind(inventory),
+    readAggregateInventory(
+      fence: Parameters<typeof inventory.read>[0],
+      digest: string,
+      signal?: AbortSignal
+    ) {
+      return inventory.read(fence, Buffer.from(digest, 'hex'), signal);
     },
     async readAuthority() {
       return removed ? { kind: 'missing' as const, storeNow: new Date() } : current;

@@ -6,7 +6,14 @@ const test = require('node:test');
 const {
   ServiceStatefulRuntime
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
-const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
+const {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkInternalErrorKind,
+  ZLinkHostServiceRelocationRuntime
+} = require('../../packages/framework/dist/internal');
+const {
+  wireReplyFailureException
+} = require('../../packages/framework/dist/runtime/framework-errors-internal');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
 const multipart = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
@@ -276,6 +283,26 @@ for (const mode of ['off', 'errors', 'normal', 'detailed']) {
     }
   });
 }
+
+test('relocated Actor rejection reaches the original requester as Unavailable', async () => {
+  const f = await fixture();
+  try {
+    await f.target.relayTerminalReply('mesh', f.stage, f.coordinator, 1n, f.packet, {
+      index: 0,
+      ok: false,
+      errorKind: ZLinkFrameworkInternalErrorKind.RouteNotConnected
+    });
+    const { terminalResult, failureCode } = await f.pending.promise;
+    assert.equal(
+      wireReplyFailureException(terminalResult, failureCode, 'Actor unavailable').kind,
+      ZLinkFrameworkErrorKind.Unavailable
+    );
+    assert.equal(f.relays.length, 1);
+    assert.equal(f.acks.length, 1);
+  } finally {
+    f.requester.close();
+  }
+});
 
 for (const targetRid of ['C', 'D']) {
   test(`original requester A accepts the terminal from ${targetRid} after previous owner B ended`, async () => {

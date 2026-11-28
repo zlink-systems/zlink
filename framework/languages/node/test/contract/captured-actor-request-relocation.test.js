@@ -19,6 +19,7 @@ const {
 } = require('../../packages/framework/dist/runtime/locations/relocation-reply-record');
 const { MemoryRelocationStore } = require('./fixtures/instance-relocation-memory-store');
 const telemetry = require('./helpers/telemetry-log-capture');
+const deferred = require('./helpers/deferred.cjs');
 
 const timeout = 10_000;
 const mesh = 'reply-mesh';
@@ -49,13 +50,13 @@ for (const requester of ['source', 'independent host']) {
     { timeout: 30_000 },
     async (t) => {
       await telemetry.observed();
-      const captureStarted = Promise.withResolvers();
-      const releaseCapture = Promise.withResolvers();
-      const terminalWrite = Promise.withResolvers();
-      const releaseWrite = Promise.withResolvers();
-      const terminalStored = Promise.withResolvers();
-      const initialJoin = Promise.withResolvers();
-      const deferredJoin = Promise.withResolvers();
+      const captureStarted = deferred();
+      const releaseCapture = deferred();
+      const terminalWrite = deferred();
+      const releaseWrite = deferred();
+      const terminalStored = deferred();
+      const initialJoin = deferred();
+      const deferredJoin = deferred();
       const actorKey = encodeAuthorityKey('actor', actorId);
       const requesterRid = requester === 'source' ? sourceRid : destinationRid;
 

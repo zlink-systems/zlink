@@ -1,5 +1,5 @@
-use crate::ffi;
-use crate::routing_id::RoutingId;
+use crate::contracts::core::routing_id::RoutingId;
+use crate::runtime::native::ffi;
 
 impl RoutingId {
     pub(crate) fn as_raw(&self) -> &ffi::zlink_routing_id_t {

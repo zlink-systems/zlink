@@ -74,7 +74,8 @@ async Task RunAsync()
     {
         log = new RunLog(root, []);
         StructureCheck.Run(root, null);
-        var server = new MatchRun(root, outcome, log.DirectoryPath, foreground: true);
+        var server = new MatchRun(root, outcome, log.DirectoryPath, foreground: true,
+            networkSync: args.Contains("--network-sync"));
         await ServerHost.RunAsync(
             root,
             async ct =>
@@ -119,7 +120,8 @@ async Task RunAsync()
     {
         log.Start(scenario);
         await using (
-            var active = new MatchRun(root, outcome, Path.Combine(log.DirectoryPath, scenario))
+            var active = new MatchRun(root, outcome, Path.Combine(log.DirectoryPath, scenario),
+                networkSync: scenario == "network-sync")
         )
         {
             if (endpoints is null)

@@ -13,7 +13,7 @@ using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
-public sealed class HostRelocationSealStageTests
+public sealed partial class HostRelocationSealStageTests
 {
     [Theory]
     [InlineData(false, false)]
@@ -550,7 +550,11 @@ public sealed class HostRelocationSealStageTests
             },
             holdTargetCommitResponse
                 ? (inner, actorId, sourceRid) =>
-                    commitStore = new CommitResponseGateStore(inner, actorId, sourceRid)
+                    commitStore = new CommitResponseGateStore(
+                        inner,
+                        actorId,
+                        snapshot => snapshot.Allocation.Descriptor.Rid != sourceRid
+                    )
                 : null
         );
     }
@@ -595,6 +599,7 @@ public sealed class HostRelocationSealStageTests
 
     private sealed record BoundMemberRelocationContext(
         RelocationBehaviorHost Source,
+        RelocationBehaviorHost Target,
         IServiceProvider SessionServices,
         IZlinkStreamConnector Connector,
         SpotWideMemberSealCaptureTests.HandoffBacklogLoggerProvider Backlog,
@@ -732,6 +737,7 @@ public sealed class HostRelocationSealStageTests
             await scenario(
                 new BoundMemberRelocationContext(
                     source,
+                    target,
                     session.Services,
                     connector,
                     backlog,
@@ -753,12 +759,12 @@ public sealed class HostRelocationSealStageTests
     private sealed class CommitResponseGateStore(
         IZLinkLocationStore inner,
         string actorId,
-        RoutingId sourceRid
+        Func<ZLinkAuthoritySnapshot, bool> shouldHold
     ) : IZLinkLocationStore
     {
         private readonly ZLinkProviderLocationRepository reader = new(inner);
 
-        internal TaskCompletionSource Committed { get; } =
+        internal TaskCompletionSource<ZLinkAuthoritySnapshot> Committed { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Release { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -785,12 +791,9 @@ public sealed class HostRelocationSealStageTests
                     ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId),
                     cancellationToken
                 );
-                if (
-                    authority is ZLinkAuthorityReadResult.Found found
-                    && found.Snapshot.Allocation.Descriptor.Rid != sourceRid
-                )
+                if (authority is ZLinkAuthorityReadResult.Found found && shouldHold(found.Snapshot))
                 {
-                    Committed.TrySetResult();
+                    Committed.TrySetResult(found.Snapshot);
                     await Release.Task.WaitAsync(cancellationToken);
                 }
             }

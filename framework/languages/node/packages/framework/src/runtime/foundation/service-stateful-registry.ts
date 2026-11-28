@@ -186,6 +186,10 @@ export class ServiceStatefulRegistry {
     return this.spots.get(spotId);
   }
 
+  isRetiredInstanceSpot(spotId: string): boolean {
+    return !this.spots.has(spotId) && this.spotTypes.get(spotId)?.kind === 'instance';
+  }
+
   restoreSpot(
     ref: ServiceSpotRef,
     kind: ServiceSpotKind,

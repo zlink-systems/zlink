@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../../../framework/languages/dotnet/Directory.Build.props" />
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <TargetFramework>net8.0</TargetFramework>
+    <PackageId>Zlink.NetworkSync.Server</PackageId>
+    <Description>Authoritative network sync for ZLink Framework Spot servers.</Description>
+    <Authors>zlink</Authors>
+    <RepositoryUrl>https://github.com/zlink-systems/zlink</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Zlink.Framework" Version="$(Version)" />
+    <None Include="../../../../framework/LICENSE" Pack="true" PackagePath="/" />
+    <None Include="../README.md" Pack="true" PackagePath="/" />
+    <Compile Include="../Simulation/*.cs" Link="Simulation/%(Filename)%(Extension)" />
+    <InternalsVisibleTo Include="Zlink.NetworkSync.Server.Tests" />
+  </ItemGroup>
+</Project>

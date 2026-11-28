@@ -50,15 +50,16 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToke
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
-import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
+import systems.zlink.framework.runtime.spots.ZLinkUserSpotAggregateStagingOwner.PreparedSpot;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -415,7 +416,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             targetDescriptor.lifecycleGeneration(),
                             coordinator,
                             unusedSpotStaging(),
-                            ignored -> null,
+                            (kind, stableType) -> null,
                             (lane, queued) -> {
                                 assertEquals("actor:" + ACTOR_ID, lane);
                                 assertTrue(
@@ -891,45 +892,62 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 assertEquals(1, targetCommits.get());
                 return;
             }
-            if (scenario.joinedFailure() != null || scenario == Scenario.COMPLETION_FAILURE) {
+            if (scenario == Scenario.COMPLETION_FAILURE) {
+                var accepted =
+                        assertInstanceOf(
+                                ZLinkActorJoinCompletion.Accepted.class,
+                                COMPLETION.get().get(4, TimeUnit.SECONDS));
+                assertEquals(operationId, accepted.operationId());
+                PUSH_TERMINAL.get().complete(null);
+                link.targetCompletion.get(4, TimeUnit.SECONDS);
+                assertEquals(TARGET_RID, moved.get(4, TimeUnit.SECONDS).targetActor().nodeRid());
+                assertEquals(1, targetCommits.get());
+                assertEquals(1, EVENTS.stream().filter("target.completion"::equals).count());
+                assertBefore("target.completion", "command44");
+                assertBefore("command44", "target.open");
+                ZLinkTelemetryTestFence.awaitIdle();
+                assertTrue(
+                        diagnostics.errors.stream()
+                                .anyMatch(
+                                        message ->
+                                                message.contains("packet=OnJoinCompleted")
+                                                        && message.contains("action=drop")
+                                                        && message.contains(
+                                                                "injected completion callback failure")),
+                        diagnostics.errors.toString());
+                return;
+            }
+            if (scenario.joinedFailure() != null) {
                 ZLinkActorJoinCompletion completion = COMPLETION.get().get(4, TimeUnit.SECONDS);
-                if (scenario.joinedFailure() != null) {
-                    var failed =
-                            assertInstanceOf(ZLinkActorJoinCompletion.Failed.class, completion);
-                    assertEquals(operationId, failed.operationId());
-                    ZLinkTelemetryTestFence.awaitIdle();
-                    assertTrue(
-                            diagnostics.errors.stream()
-                                    .anyMatch(
-                                            message ->
-                                                    message.contains(
-                                                                    "injected target joined"
-                                                                            + " failure")
-                                                            && message.contains(
-                                                                    scenario.joinedFailure()
-                                                                                    instanceof
-                                                                                    ZLinkFrameworkException
-                                                                            ? "ZLinkFrameworkException"
-                                                                            : "IllegalStateException")),
-                            diagnostics.errors.toString());
-                    assertEquals(
-                            switch (scenario) {
-                                case JOINED_TYPED_FAILURE -> ZLinkFrameworkErrorKind.DATA_LOST;
-                                case JOINED_NOT_FOUND -> ZLinkFrameworkErrorKind.NOT_FOUND;
-                                case JOINED_UNAVAILABLE -> ZLinkFrameworkErrorKind.UNAVAILABLE;
-                                default -> ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
-                            },
-                            failed.kind());
-                    assertFalse(
-                            EVENTS.contains("leave.submit"),
-                            "failed target lifecycle must not submit source OnLeave");
-                    assertFalse(EVENTS.contains("source.leave"));
-                } else {
-                    assertEquals(
-                            operationId,
-                            assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, completion)
-                                    .operationId());
-                }
+                var failed = assertInstanceOf(ZLinkActorJoinCompletion.Failed.class, completion);
+                assertEquals(operationId, failed.operationId());
+                ZLinkTelemetryTestFence.awaitIdle();
+                assertTrue(
+                        diagnostics.errors.stream()
+                                .anyMatch(
+                                        message ->
+                                                message.contains(
+                                                                "injected target joined"
+                                                                        + " failure")
+                                                        && message.contains(
+                                                                scenario.joinedFailure()
+                                                                                instanceof
+                                                                                ZLinkFrameworkException
+                                                                        ? "ZLinkFrameworkException"
+                                                                        : "IllegalStateException")),
+                        diagnostics.errors.toString());
+                assertEquals(
+                        switch (scenario) {
+                            case JOINED_TYPED_FAILURE -> ZLinkFrameworkErrorKind.DATA_LOST;
+                            case JOINED_NOT_FOUND -> ZLinkFrameworkErrorKind.NOT_FOUND;
+                            case JOINED_UNAVAILABLE -> ZLinkFrameworkErrorKind.UNAVAILABLE;
+                            default -> ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+                        },
+                        failed.kind());
+                assertFalse(
+                        EVENTS.contains("leave.submit"),
+                        "failed target lifecycle must not submit source OnLeave");
+                assertFalse(EVENTS.contains("source.leave"));
                 assertThrows(
                         java.util.concurrent.ExecutionException.class,
                         () -> link.targetCompletion.get(4, TimeUnit.SECONDS));
@@ -1440,7 +1458,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
                     @Override
                     public CompletionStage<Void> enqueueIngress(
-                            Object spot,
+                            PreparedSpot spot,
                             List<QueuedTurn> dispatches,
                             String lane,
                             byte[] record,
@@ -1459,14 +1477,14 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     }
 
                     @Override
-                    public CompletionStage<Object> prepareSpot(
+                    public CompletionStage<PreparedSpot> prepareSpot(
                             ZLinkUserSpotAggregateStagingOwner.Request request) {
                         return unused();
                     }
 
                     @Override
                     public CompletionStage<Void> restoreSpot(
-                            Object spot,
+                            PreparedSpot spot,
                             ZLinkUserSpotAggregateStagingOwner.Request request,
                             ZLinkRelocationCancellation cancellation) {
                         return unused();
@@ -1480,7 +1498,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     }
 
                     @Override
-                    public CompletionStage<Void> publishSpot(Object spot) {
+                    public CompletionStage<Void> publishSpot(PreparedSpot spot) {
                         fail();
 
                         return CompletableFuture.completedFuture(null);
@@ -1488,7 +1506,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
                     @Override
                     public void publishActor(
-                            Object preparedSpot,
+                            PreparedSpot preparedSpot,
                             Object actor,
                             String targetSpotId,
                             Long targetOwnerGeneration) {
@@ -1501,7 +1519,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     }
 
                     @Override
-                    public void publishTimers(Object spot) {
+                    public void publishTimers(PreparedSpot spot) {
                         fail();
                     }
 
@@ -1511,7 +1529,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     }
 
                     @Override
-                    public CompletionStage<Void> discardSpot(Object spot) {
+                    public CompletionStage<Void> discardSpot(PreparedSpot spot) {
                         fail();
 
                         return CompletableFuture.completedFuture(null);

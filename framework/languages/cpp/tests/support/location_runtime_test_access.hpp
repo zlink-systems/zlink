@@ -110,6 +110,20 @@ struct location_runtime_test_access_t
         return std::atomic_load_explicit (runtime._owner_lease.get (), std::memory_order_acquire);
     }
 
+    static bool publication_confirmed (location_runtime_t &runtime,
+                                       const std::shared_ptr<outage_t> &episode,
+                                       std::chrono::milliseconds timeout)
+    {
+        const auto pending = runtime._lane->run_task ([episode] {
+            if (!episode->publication)
+                return task_t<bool> (result_t<bool>::success (false));
+            return detail::project_task_terminal<bool> (
+              *episode->publication, [] (const result_t<bool> &result) { return result; });
+        });
+        const auto result = pending.result_for (timeout);
+        return result && *result && result->value ();
+    }
+
     template <class Episode>
     static bool recovery_terminal (location_runtime_t &runtime,
                                    const std::shared_ptr<Episode> &episode,

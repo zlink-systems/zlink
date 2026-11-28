@@ -30,13 +30,14 @@ public sealed partial class RelocationRuntimeTests
             spot.ObjectGeneration,
             spot.AuthorityOwnerGeneration
         );
+        var frozenRecord = CreateMinimalCanonicalFrozenRecord();
         var data = new ZLinkServiceWireCodec.RelocationDataRecord(
             relocationId,
             stage.TargetAttemptGeneration,
             coordinator,
             1,
             subject,
-            new(new byte[] { 4, 3 })
+            new(frozenRecord)
         );
         await stage.AppendCanonicalInboundDataAsync(data);
         var cutover = new ZLinkServiceWireCodec.RelocationCutoverRecord(
@@ -53,21 +54,18 @@ public sealed partial class RelocationRuntimeTests
         Assert.Throws<InvalidDataException>(() =>
             stage.ValidateBoundary(cutover with { BoundaryRecordCount = 2 })
         );
-        var changed = data with { FrozenRecord = new(new byte[] { 4, 2 }) };
+        var changed = CreateMinimalCanonicalFrozenRecord("q");
         Assert.Throws<InvalidDataException>(() =>
             stage.ValidateBoundary(
                 cutover with
                 {
                     BoundaryChecksumCrc32c = ZLinkRelocationBoundaryBatch.ComputeChecksum([
-                        changed.FrozenRecord.Encoded,
+                        changed,
                     ]),
                 }
             )
         );
-        Assert.Equal(
-            new byte[] { 4, 3 },
-            Assert.Single(stage.SnapshotHeldRecords()).Payload.ToArray()
-        );
+        Assert.Equal(frozenRecord, Assert.Single(stage.SnapshotHeldRecords()).Payload.ToArray());
     }
 
     [Theory]
@@ -190,7 +188,25 @@ public sealed partial class RelocationRuntimeTests
             );
             Assert.True(target.TryTrackStage(fence, stage));
 
-            // Stop after authority confirmation and before application dispatch.
+            Assert.True(
+                ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(committed, out var previous)
+            );
+            Assert.Same(
+                stage.Terminal.Task,
+                target.FindTargetTerminal(previous.State, actor.AuthorityKey, out _)
+            );
+            Assert.Null(
+                target.FindTargetTerminal(
+                    previous.State with
+                    {
+                        TargetAttemptGeneration = stage.TargetAttemptGeneration + 1,
+                    },
+                    actor.AuthorityKey,
+                    out _
+                )
+            );
+
+            // Stop after authority confirmation and before authority normalization.
             stage.AdmissionDrainTask = Task.FromCanceled(new CancellationToken(canceled: true));
             if (publication == StagedAuthorityPublication.Complete)
             {

@@ -23,6 +23,9 @@ const {
   ZLinkActorTransferRuntime
 } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
 const {
+  ZLinkActorPacketRelay
+} = require('../../packages/framework/dist/runtime/host/actor-packet-relay');
+const {
   ApplicationJobQueue,
   resolveApplicationJobQueueConfiguration
 } = require('../../packages/framework/dist/runtime/host/application-job-queue');
@@ -2628,6 +2631,46 @@ test('positive Message Follow request returns one correlated reply and preserves
     (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
   );
   failed.forEach((part) => part.close());
+});
+
+test('Message Follow preserves an Unavailable reply from the remote Actor executor', async () => {
+  const targetRelay = new ZLinkActorPacketRelay({
+    meshRouters: {},
+    spotNodeRuntime: () => ({
+      async dispatchEntryActorPacket() {
+        throw new framework.ZLinkFrameworkException(
+          framework.ZLinkFrameworkErrorKind.Unavailable,
+          'Actor Join completion did not release application dispatch.'
+        );
+      }
+    })
+  });
+  const { coordinator } = harness(1_000, (_target, payload) =>
+    targetRelay.receiveRemoteActorPacketRelay(payload, {
+      meshName: 'mesh',
+      sourceNodeRid: 'source-node'
+    })
+  );
+  coordinator.begin('actor-1', 1n);
+  coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
+  const header = streamProtocol.encodeStreamHeader({
+    kind: streamProtocol.ZLinkStreamMessageKind.Request,
+    codec: streamProtocol.ZLinkStreamCodec.Json,
+    flags: streamProtocol.ZLinkStreamHeaderFlags.None,
+    requestSeq: 1n,
+    name: 'Probe',
+    metadata: new Map()
+  });
+  const parts = [zlink.Message.from(Buffer.from(header)), zlink.Message.from('{}')];
+  try {
+    const ref = contextRef(parts, { request: true });
+    await assert.rejects(
+      coordinator.capture('remote', 'actor-1', parts, true, undefined, ref),
+      (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+    );
+  } finally {
+    parts.forEach((part) => part.close());
+  }
 });
 
 test('in-flight request preserves framing, reply correlation, and the caller timeout', async () => {

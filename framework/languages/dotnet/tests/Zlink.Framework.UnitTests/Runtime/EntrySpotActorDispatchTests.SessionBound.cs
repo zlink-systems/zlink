@@ -323,9 +323,16 @@ public sealed partial class EntrySpotActorDispatchTests
         runtime.ErrorSink.UnhandledCallbackException += failures.Add;
         actor.Bound = async (_, ct) =>
         {
-            using var registration = ct.Register(() => canceled.TrySetResult());
             started.TrySetResult();
-            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            }
+            catch (OperationCanceledException exception) when (exception.CancellationToken == ct)
+            {
+                canceled.TrySetResult();
+                throw;
+            }
         };
         var replies = new List<(RequestResult Result, uint Code, string? Message)>();
         try

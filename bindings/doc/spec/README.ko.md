@@ -1038,6 +1038,17 @@ Raw builder는 `routerSocket.request(rid).message(part).submit()`처럼 사용�
   표면에는 aggregate routed recv와 [공통 request 완료 표면](async-coroutine-policy.ko.md#6-언어별-terminal-interface)만 노출한다.
   direct receive callback 은 제공하지 않는다.
 
+#### Subscription 조회
+
+- SUB와 XSUB의 `subscription_at(index)`는 바인딩이 가진 버퍼로 `zlink_subscription_at`를 한 번
+  부른다. 빈 filter를 포함해 OK 결과면 조회를 끝낸다.
+- `ZLINK_CONFIG_BUFFER_TOO_SMALL`(`ENOBUFS`)일 때만 Core가 돌려준 길이로 한 번 더 부른다. 다른
+  결과는 다시 부르지 않는다.
+- 범위 밖 인덱스(`ZLINK_CONFIG_NOT_FOUND`, `ENOENT`)는 오류가 아니라 항목 없음으로 반환한다. 그 밖의
+  실패는 그 언어의 설정 오류로 낸다.
+- 언어별 spec은 "항목 없음" 값(`None`, `Ok(None)`, `std::nullopt`, `null`, 찾음 여부 `false`)만 적고
+  이 절을 링크하며, 규칙을 다시 적지 않는다.
+
 #### Socket Readiness Snapshots
 
 - `ROUTER` 의 선택 route snapshot(`zlink_router_routes_snapshot()`)과 `ZLINK_POLLROUTE` (64)는

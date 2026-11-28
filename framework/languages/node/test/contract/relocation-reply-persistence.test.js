@@ -168,7 +168,9 @@ test('source boundary snapshots replay request identities and excludes sends', a
     staging: {
       envelope: { aggregateId: defaultIdentity.relocationId },
       primaryAuthorityKey: key,
-      hidden: new Map([[key.value, { replayPackets: [makePacket(0), makePacket(1)] }]])
+      hidden: new Map([
+        [key.value, { actor: { context: { actorId: 'actor' } }, replayPackets: [makePacket(0), makePacket(1)] }]
+      ])
     }
   };
   let fenced;

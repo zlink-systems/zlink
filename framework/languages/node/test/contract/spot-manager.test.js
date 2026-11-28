@@ -1,7 +1,5 @@
 const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 
 const telemetry = require('./helpers/telemetry-log-capture');
@@ -30,9 +28,6 @@ const json = connector;
 const msgpack = require('../../packages/framework-codec-msgpack/dist/server/framework.cjs');
 const protobuf = require('../../packages/framework-codec-protobuf/dist/server/framework.cjs');
 const flowContext = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
-const messageFollow = require(
-  '../../packages/framework/dist/runtime/actors/actor-message-follow-context'
-);
 const { ZLinkSpotActivationRegistry } = require(
   '../../packages/framework/dist/runtime/spots/spot-activation-registry'
 );
@@ -3238,54 +3233,22 @@ test('spot manager retains committed membership when target joined callback fail
   request.close();
 });
 
-test('routed actor transfer separates admission from materialization and commit', async () => {
+test('routed actor transfer reuses admission for duplicate requests', async () => {
   const events = [];
   const replies = [];
-  let failJoined = false;
   let admissionGate;
-  let transferInGate;
   const target = {
     async onActorJoin(actorId, request) {
       events.push(`admission:${actorId}:${request.decode()}`);
       await admissionGate;
       return { accepted: true, reply: 'admitted' };
-    },
-    async onJoinedActor(actor) {
-      events.push(`joined:${actor.actor.actorId}`);
-      if (failJoined) {
-        throw new Error('joined failed');
-      }
     }
   };
   const admission = new ZLinkSpotRoutedActorAdmission({
     serial: new framework.ZLinkSpotSerialTurnExecutor(),
     resolveActor: () => undefined,
     getTarget: () => target,
-    defaultAccept: false,
-    pendingAdmissionTimeoutMs: 5,
-    async routedActorTransferProvider(actorId, actorType, adapterKey, state) {
-      events.push(`transferIn:${actorId}:${actorType}:${adapterKey ?? 'default'}:${state.data().toString()}`);
-      await transferInGate;
-      return {
-        actor: { actorId, value: state.data().toString() },
-        actorRef: { nodeRid: zlink.RoutingId.from('target-node'), actorId, generation: 2n }
-      };
-    },
-    async commitTransferredActor(actor) {
-      events.push(`location:${actor.actorId}`);
-      try {
-        events.push(`commit:${actor.actorId}`);
-        await target.onJoinedActor({
-          actor: { nodeRid: zlink.RoutingId.from('target-node'), actorId: actor.actorId, generation: 2n },
-          actorType: 'player',
-          membershipEpoch: 1n
-        });
-        return [];
-      } catch (error) {
-        events.push(`rollback:${actor.actorId}`);
-        throw error;
-      }
-    }
+    defaultAccept: false
   });
   const makeReceived = (payload) => {
     const part = zlink.Message.from(Buffer.from(JSON.stringify(payload)));
@@ -3331,72 +3294,6 @@ test('routed actor transfer separates admission from materialization and commit'
   assert.deepEqual(events, ['admission:alice:join']);
   assert.equal(replies[1].accepted, true);
 
-  const committed = makeReceived({
-    ...common,
-    phase: 'commit',
-    transferAdapterKey: 'PlayerActor',
-    transferState: Buffer.from('state-42').toString('base64')
-  });
-  assert.equal(await admission.admit(committed.received), true);
-  committed.part.close();
-  assert.deepEqual(events, [
-    'admission:alice:join',
-    'transferIn:alice:player:PlayerActor:state-42',
-    'location:alice',
-    'commit:alice',
-    'joined:alice'
-  ]);
-  assert.equal(replies[2].accepted, true);
-  assert.equal(replies[2].actorNodeRid, 'target-node');
-
-  const duplicateCommit = makeReceived({
-    ...common,
-    phase: 'commit',
-    transferAdapterKey: 'PlayerActor',
-    transferState: Buffer.from('state-42').toString('base64')
-  });
-  assert.equal(await admission.admit(duplicateCommit.received), true);
-  duplicateCommit.part.close();
-  assert.equal(events.filter((event) => event.startsWith('transferIn:')).length, 1);
-  assert.equal(replies[3].accepted, true);
-
-  const expiring = makeReceived({ ...common, transferId: 'transfer-expired', phase: 'admission' });
-  assert.equal(await admission.admit(expiring.received), true);
-  expiring.part.close();
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  const lateCommit = makeReceived({
-    ...common,
-    transferId: 'transfer-expired',
-    phase: 'commit',
-    transferState: ''
-  });
-  assert.equal(await admission.admit(lateCommit.received), true);
-  lateCommit.part.close();
-  assert.equal(replies[5].accepted, false);
-  assert.equal(events.filter((event) => event.startsWith('joined:')).length, 1);
-
-  failJoined = true;
-  const failingAdmission = makeReceived({ ...common, transferId: 'transfer-fail', phase: 'admission' });
-  await admission.admit(failingAdmission.received);
-  failingAdmission.part.close();
-  const failingCommit = makeReceived({
-    ...common,
-    transferId: 'transfer-fail',
-    phase: 'commit',
-    transferState: Buffer.from('failed-state').toString('base64')
-  });
-  await admission.admit(failingCommit.received);
-  failingCommit.part.close();
-  assert.equal(replies[7].accepted, false);
-  assert.deepEqual(events.slice(-5), [
-    'transferIn:alice:player:default:failed-state',
-    'location:alice',
-    'commit:alice',
-    'joined:alice',
-    'rollback:alice'
-  ]);
-
-  failJoined = false;
   let releaseAdmission;
   admissionGate = new Promise((resolve) => { releaseAdmission = resolve; });
   const concurrentAdmissionA = makeReceived({ ...common, transferId: 'transfer-concurrent', phase: 'admission' });
@@ -3411,26 +3308,7 @@ test('routed actor transfer separates admission from materialization and commit'
   concurrentAdmissionB.part.close();
   assert.equal(events.filter((event) => event.startsWith('admission:')).length, admissionCountBefore + 1);
 
-  admissionGate = undefined;
-  let releaseTransferIn;
-  transferInGate = new Promise((resolve) => { releaseTransferIn = resolve; });
-  const concurrentCommitPayload = {
-    ...common,
-    transferId: 'transfer-concurrent',
-    phase: 'commit',
-    transferState: Buffer.from('concurrent-state').toString('base64')
-  };
-  const concurrentCommitA = makeReceived(concurrentCommitPayload);
-  const concurrentCommitB = makeReceived(concurrentCommitPayload);
-  const transferInCountBefore = events.filter((event) => event.startsWith('transferIn:')).length;
-  const commitA = admission.admit(concurrentCommitA.received);
-  await new Promise((resolve) => setImmediate(resolve));
-  const commitB = admission.admit(concurrentCommitB.received);
-  releaseTransferIn();
-  await Promise.all([commitA, commitB]);
-  concurrentCommitA.part.close();
-  concurrentCommitB.part.close();
-  assert.equal(events.filter((event) => event.startsWith('transferIn:')).length, transferInCountBefore + 1);
+
 });
 
 test('spot manager rejects one-phase native remote join without materializing a target actor', async () => {
@@ -3730,116 +3608,7 @@ test('Mesh actor return to Entry Spot resolves a moving actor through the lifecy
   assert.deepEqual(events, [['test.mesh', actor]]);
 });
 
-test('formal remote Actor transfer to Entry Spot materializes state before commit', async () => {
-  const relocationBehavior = JSON.parse(fs.readFileSync(
-    path.resolve(__dirname, '../../../../runtime/conformance/relocation-behavior-v1.json'),
-    'utf8'
-  ));
-  const actorJoin = relocationBehavior.profiles.find(( value ) => value.name === 'actorJoin');
-  assert.ok(actorJoin, 'relocation behavior fixture must define Actor Join');
-  assert.ok(relocationBehavior.commonLifecycle.requiredOrder.some(([before, after]) =>
-    before === 'ownershipCommitted' && after === 'targetLifecycleCompleted'
-  ));
-  assert.ok(actorJoin.additionalOrder.some(([before, after]) =>
-    before === 'targetLifecycleCompleted' && after === 'sourceMembershipLeaveSubmitted'
-  ));
-  const entryNodeRid = zlink.RoutingId.from('entry-node');
-  const actor = { actorId: 'player-1', context: { actorId: 'player-1' } };
-  const replies = [];
-  const events = [];
-  const order = [];
-  const detached = [];
-  const transferMessage = zlink.Message.from(JSON.stringify({
-    packetName: '__zlink.actor.join_spot.request',
-    actorType: 'PlayerActor',
-    actorEntryNodeRid: String(entryNodeRid),
-    transferId: 'formal-entry-transfer',
-    transferState: Buffer.from('player-state').toString('base64'),
-    request: Buffer.from('join-entry').toString('base64'),
-    handoffBacklog: []
-  }));
-  let materialized = false;
-  const manager = new framework.DefaultZLinkSpotManager({
-    spotFactories: [],
-    entryNodeRidProvider: () => entryNodeRid,
-    actorTransferRuntime: {
-      async materializeRoutedActor(actorId, actorType, _adapterKey, transferState) {
-        assert.equal(actorId, actor.actorId);
-        assert.equal(actorType, 'PlayerActor');
-        assert.equal(transferState.getString('utf8'), 'player-state');
-        materialized = true;
-        return { actor, actorRef: { actorId, nodeRid: entryNodeRid, generation: 2n } };
-      },
-      async commitRoutedActorAuthority() {},
-      async rollbackRoutedActor() {}
-    },
-    detachedTaskRunner: {
-      runDetached(_name, callback) {
-        detached.push(callback);
-      }
-    },
-    async dispatchEntryActorJoin(meshName, joinedActor, backlog) {
-      order.push('target-lifecycle-completed');
-      events.push([meshName, joinedActor, backlog]);
-    }
-  });
-
-  try {
-    await manager.dispatchMeshActorJoin('test.mesh', {
-      spotId: entryNodeRid,
-      actor: null
-    }, {
-      kind: framework.ReceiveKind.SpotControl,
-      kindData: {
-        kind: 'actorControl',
-        currentActor: {
-          nodeRid: zlink.RoutingId.from('source-node'),
-          actorId: actor.actorId,
-          generation: 1n
-        },
-        currentMembershipEpoch: 4n
-      },
-      parts: [transferMessage],
-      replyActorJoin(code) {
-        order.push('ownership-committed');
-        replies.push(code);
-        return zlink.SubmitResult.Ok;
-      }
-    });
-
-    assert.equal(materialized, true);
-    assert.deepEqual(replies, [0]);
-    assert.equal(detached.length, 1);
-    assert.deepEqual(events, []);
-    assert.deepEqual(order, ['ownership-committed']);
-    let sourceLeaveAcknowledged = false;
-    const sourceLeaveTerminal = manager.completeFormalSourceLeaveTerminal(
-      actor.actorId,
-      'formal-entry-transfer',
-      true
-    ).then((completed) => {
-      sourceLeaveAcknowledged = true;
-      return completed;
-    });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(sourceLeaveAcknowledged, false);
-    const targetCommit = detached[0]();
-    assert.equal(
-      await sourceLeaveTerminal,
-      true
-    );
-    await targetCommit;
-    assert.deepEqual(events, [['test.mesh', actor, []]]);
-    assert.deepEqual(order, [
-      'ownership-committed',
-      'target-lifecycle-completed'
-    ]);
-  } finally {
-    transferMessage.close();
-  }
-});
-
-test('formal remote Actor transfer admits the target before reading referenced state', async () => {
+test('formal remote Actor transfer admits without reading or materializing state', async () => {
   const events = [];
   const actor = { context: { actorId: 'player-1' } };
   const commonTransfer = {
@@ -3856,12 +3625,6 @@ test('formal remote Actor transfer admits the target before reading referenced s
   const admissionMessage = zlink.Message.from(JSON.stringify({
     ...commonTransfer,
     phase: 'admission'
-  }));
-  const commitMessage = zlink.Message.from(JSON.stringify({
-    ...commonTransfer,
-    phase: 'commit',
-    transferStateReference: 'relocation-state',
-    transferStateChecksumCrc32c: 17
   }));
   class RoomSpot {
     async onActorJoin() {
@@ -3909,319 +3672,81 @@ test('formal remote Actor transfer admits the target before reading referenced s
       }
     });
 
-    await manager.dispatchMeshActorJoin('test.mesh', {
-      spotId: zlink.RoutingId.from('room-1'),
-      actor: null
-    }, {
-      kind: framework.ReceiveKind.SpotControl,
-      kindData: {
-        kind: 'actorControl',
-        currentActor: {
-          nodeRid: zlink.RoutingId.from('source-node'),
-          actorId: actor.context.actorId,
-          generation: 1n
-        },
-        currentSpotGeneration: 1n
-      },
-      parts: [commitMessage],
-      replyActorJoin() {
-        return zlink.SubmitResult.Ok;
-      }
-    });
-
-    //  admission만 일어난다. relocation payload는 Relocation Store를 거치지 않고
-    //  source memory에서 target으로 직접 전달하므로(Service wire protocol 9절의
-    //  relocationState chunk 전송, Spot·Actor membership의 재-Restore 원본 규정)
-    //  target이 store reference를 읽어 state를 가져오는 경로는 없다.
     assert.deepEqual(events, ['admission']);
   } finally {
     admissionMessage.close();
-    commitMessage.close();
   }
 });
 
-test('formal Actor Join runtime port preserves fixture order through target Ready before Session route', async () => {
-  const relocationBehavior = JSON.parse(fs.readFileSync(
-    path.resolve(__dirname, '../../../../runtime/conformance/relocation-behavior-v1.json'),
-    'utf8'
-  ));
-  const actorJoin = relocationBehavior.profiles.find(( value ) => value.name === 'actorJoin');
-  const boundSessionRoute = relocationBehavior.optionalBranches.find(
-    ( value ) => value.name === 'boundSessionRoute'
-  );
-  assert.ok(actorJoin, 'relocation behavior fixture must define Actor Join');
-  assert.ok(boundSessionRoute, 'relocation behavior fixture must define the Session route branch');
-
+test('formal Actor Join admission stages the deferred result before replying', async () => {
+  const actorId = 'player-1';
   const events = [];
-  const detached = [];
-  class PlayerActor {
-    constructor() {
-      this.actorId = 'player-1';
-      this.context = { actorId: this.actorId };
-    }
-  }
-  const actor = new PlayerActor();
-  const savedParts = createActorSendParts('SavedDuringRelocation', { kind: 'saved' });
-  const sourceOwner = messageFollow.ownerFence({
-    ownerId: 'source-owner',
-    ownerLeaseGeneration: 1n,
-    nodeRid: 'source-node',
-    nodeGeneration: 1n,
-    authorityOwnerGeneration: 1n
-  });
-  const handoffBacklog = [{
-    index: 0,
-    header: Buffer.from(savedParts[0].data()).toString('base64'),
-    payload: Buffer.from(savedParts[1].data()).toString('base64'),
-    returnResponse: false,
-    messageFollowContext: {
-      operationId: '11111111111111111111111111111111',
-      objectGeneration: '1',
-      sourceOwner,
-      targetOwner: sourceOwner,
-      request: false,
-      hopCount: 0,
-      visitedOwners: [messageFollow.messageFollowOwnerFenceKey(sourceOwner)],
-      payloadChecksumSha256: messageFollow.actorMessageFollowPayloadChecksum(savedParts)
-    }
-  }];
-  savedParts.forEach(( part ) => part.close());
-  const commonTransfer = {
-    packetName: '__zlink.actor.join_spot.request',
-    actorId: actor.context.actorId,
-    actorType: 'PlayerActor',
-    actorNodeRid: 'source-node',
-    actorGeneration: '1',
-    routerChannelId: 'test.mesh',
-    transferId: 'completed-source-transfer',
-    request: Buffer.from('join-room').toString('base64'),
-    handoffBacklog,
-    completionOperationHigh: '7',
-    completionOperationLow: '9'
-  };
-  const admissionMessage = zlink.Message.from(JSON.stringify({
-    ...commonTransfer,
-    phase: 'admission'
-  }));
-  const commitMessage = zlink.Message.from(JSON.stringify({
-    ...commonTransfer,
-    phase: 'commit',
-    transferState: Buffer.from('player-state').toString('base64')
-  }));
   class RoomSpot {
-    async onActorJoin() {
+    async onActorJoin(id, request) {
+      assert.equal(id, actorId);
+      assert.equal(request.decode(), 'join-room');
       events.push('admission-callback-completed');
       return { accepted: true };
     }
-    async onJoinedActor(joinedActor) {
-      assert.equal(joinedActor, actor);
-      events.push('joined-callback-completed');
-    }
   }
-  class SavedHandler {
-    async handle(_spot, joinedActor, _context, message) {
-      assert.equal(joinedActor, actor);
-      assert.equal(message.kind, 'saved');
-      events.push('saved-handler-completed');
-    }
-  }
-  class ReadyHandler {
-    async handle(_spot, joinedActor, _context, message) {
-      assert.equal(joinedActor, actor);
-      assert.equal(message.kind, 'ready');
-      events.push('ready-handler-completed');
-    }
-  }
-  let deferredJoinCompletion;
   const manager = new framework.DefaultZLinkSpotManager({
+    detachedTaskRunner,
     spotFactories: [RoomSpot],
-    spotActorSendHandlers: [{
-      spotType: RoomSpot,
-      actorType: PlayerActor,
-      handlerType: SavedHandler,
-      packetName: 'SavedDuringRelocation'
-    }, {
-      spotType: RoomSpot,
-      actorType: PlayerActor,
-      handlerType: ReadyHandler,
-      packetName: 'ReadyAfterRelocation'
-    }],
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     actorTransferRuntime: {
-      prepareDeferredJoinAccepted() {
-        deferredJoinCompletion = { operation: 'public-join' };
-        return deferredJoinCompletion;
-      },
-      async materializeRoutedActor() {
-        events.push('target-state-restored');
-        return {
-          actor,
-          actorRef: {
-            actorId: actor.context.actorId,
-            nodeRid: 'target-node',
-            generation: 2n
-          }
-        };
-      },
-      bindRoutedActorRef() {},
-      commitRoutedActor() {},
-      async commitRoutedActorAuthority() {
-        events.push('actor-location-claimed');
-      },
-      async claimRoutedActorLocation() {},
-      async publishRoutedActorOwnership() {
-        events.push('session-ownership-published');
-      },
-      async openRoutedActorSession() {
-        events.push('session-route-opened');
-      },
-      async deliverDeferredJoinCompletion(completion, joinedActor, _currentRef, execute) {
-        assert.equal(completion, deferredJoinCompletion);
-        assert.equal(joinedActor, actor);
-        await execute(async () => {
-          events.push('public-join-completed');
-        });
-      },
-      async rollbackRoutedActor() {}
-    },
-    detachedTaskRunner: {
-      runDetached(name, callback) {
-        detached.push({ name, callback });
+      prepareDeferredJoinAccepted(id, operationId, actorRef, reply) {
+        assert.equal(id, actorId);
+        assert.deepEqual(operationId, { high: 7n, low: 9n });
+        assert.equal(actorRef.actorId, actorId);
+        assert.equal(reply.length, 0);
+        events.push('deferred-completion-staged');
+        return { operation: 'public-join' };
       }
     }
   });
-  const owner = { spotId: zlink.RoutingId.from('room-1'), actor: null };
-  const joinRecord = (message) => ({
-    kind: framework.ReceiveKind.SpotControl,
-    kindData: {
-      kind: 'actorControl',
-      currentActor: {
-        nodeRid: zlink.RoutingId.from('source-node'),
-        actorId: actor.context.actorId,
-        generation: 1n
-      },
-      currentSpotGeneration: 1n
-    },
-    parts: [message],
-    replyActorJoin() {
-      return zlink.SubmitResult.Ok;
-    }
-  });
-
-  await manager.getOrCreate('test.mesh', RoomSpot, 'room-1');
+  const spotId = zlink.RoutingId.from('room-1');
+  const sourceNodeRid = zlink.RoutingId.from('source-node');
+  await manager.getOrCreate('test.mesh', RoomSpot, spotId);
+  const message = zlink.Message.from(JSON.stringify({
+    packetName: '__zlink.actor.join_spot.request',
+    actorId,
+    actorType: 'PlayerActor',
+    actorNodeRid: String(sourceNodeRid),
+    actorGeneration: '1',
+    routerChannelId: 'test.mesh',
+    transferId: 'completed-source-transfer',
+    request: Buffer.from(JSON.stringify('join-room')).toString('base64'),
+    phase: 'admission',
+    completionOperationHigh: '7',
+    completionOperationLow: '9'
+  }));
   try {
-    await manager.dispatchMeshActorJoin('test.mesh', owner, joinRecord(admissionMessage));
-    await manager.dispatchMeshActorJoin('test.mesh', owner, joinRecord(commitMessage));
-    await manager.dispatchMeshSpotControl('test.mesh', owner, {
+    await manager.dispatchMeshActorJoin('test.mesh', { spotId, actor: null }, {
+      kind: framework.ReceiveKind.SpotControl,
       kindData: {
         kind: 'actorControl',
-        lifecycleKind: framework.ActorLifecycleKind.Joined,
-        previousActor: null,
-        currentActor: {
-          nodeRid: zlink.RoutingId.from('target-node'),
-          actorId: actor.context.actorId,
-          generation: 2n
-        },
-        currentSpotGeneration: 1n,
-        currentMembershipEpoch: 2n
+        currentActor: { nodeRid: sourceNodeRid, actorId, generation: 1n },
+        currentSpotGeneration: 1n
+      },
+      parts: [message],
+      replyActorJoin(code) {
+        assert.equal(code, 0);
+        events.push('admission-replied');
+        return zlink.SubmitResult.Ok;
       }
     });
-    assert.equal(detached.length, 1);
-    assert.match(detached[0].name, /target commit/);
-    const targetCommit = detached[0].callback();
-    // The source leave terminal below is completed by the test itself, so OnJoinedActor must
-    // complete without it. Wait for that completion rather than a single event-loop turn.
-    await waitFor(
-      () => events.includes('joined-callback-completed'),
-      undefined,
-      () => `OnJoinedActor must complete before the source leave submission fence; observed ${events.join(' -> ')}`
-    );
-    assert.equal(events.includes('public-join-completed'), false);
-    assert.equal(
-      await manager.completeFormalSourceLeaveTerminal(
-        actor.context.actorId,
-        commonTransfer.transferId,
-        true
-      ),
-      true
-    );
-    await targetCommit;
-
-    const readyParts = createActorSendParts('ReadyAfterRelocation', { kind: 'ready' });
-    try {
-      await manager.dispatchMeshActor('remote', 'test.mesh', meshActorOwner('room-1', actor.actorId), {
-        kind: framework.ReceiveKind.ActorSend,
-        parts: readyParts
-      });
-    } finally {
-      readyParts.forEach(( part ) => part.close());
-    }
-
-    assert.equal(detached.length, 2);
-    assert.match(detached[1].name, /Session route/);
-    assert.equal(events.includes('session-route-opened'), false);
-    await detached[1].callback();
-
-    const fixtureOrder = [
-      ...relocationBehavior.commonLifecycle.requiredOrder,
-      ...actorJoin.additionalOrder,
-      ...boundSessionRoute.requiredOrder
-    ];
-    const actualEvent = new Map([
-      ['targetStateRestored', 'target-state-restored'],
-      ['ownershipCommitted', 'actor-location-claimed'],
-      ['targetLifecycleCompleted', 'joined-callback-completed'],
-      ['publicJoinCompleted', 'public-join-completed'],
-      ['savedWorkAdmitted', 'saved-handler-completed'],
-      ['targetReadyPublished', 'ready-handler-completed'],
-      ['sessionRouteConverged', 'session-route-opened']
+    assert.deepEqual(events, [
+      'admission-callback-completed',
+      'deferred-completion-staged',
+      'admission-replied'
     ]);
-    const successors = new Map();
-    for (const [before, after] of fixtureOrder) {
-      const values = successors.get(before) ?? [];
-      values.push(after);
-      successors.set(before, values);
-    }
-    const requiresBefore = (before, after) => {
-      const pending = [...(successors.get(before) ?? [])];
-      const visited = new Set();
-      while (pending.length > 0) {
-        const current = pending.shift();
-        if (current === after) return true;
-        if (visited.has(current)) continue;
-        visited.add(current);
-        pending.push(...(successors.get(current) ?? []));
-      }
-      return false;
-    };
-    for (const [before, beforeConcrete] of actualEvent) {
-      for (const [after, afterConcrete] of actualEvent) {
-        if (!requiresBefore(before, after)) continue;
-        const beforeIndex = events.indexOf(beforeConcrete);
-        const afterIndex = events.indexOf(afterConcrete);
-        assert.notEqual(
-          beforeIndex,
-          -1,
-          `${beforeConcrete} was not observed; observed ${events.join(' -> ')}`
-        );
-        assert.notEqual(
-          afterIndex,
-          -1,
-          `${afterConcrete} was not observed; observed ${events.join(' -> ')}`
-        );
-        assert.ok(
-          beforeIndex < afterIndex,
-          `${beforeConcrete} must precede ${afterConcrete}; observed ${events.join(' -> ')}`
-        );
-      }
-    }
   } finally {
-    admissionMessage.close();
-    commitMessage.close();
+    message.close();
+    await closeUserSpot(manager, 'test.mesh', spotId);
   }
 });
 
-test('formal remote Actor admission and commit retries are idempotent', async () => {
+test('formal remote Actor admission retries are idempotent', async () => {
   const events = [];
   const actor = { context: { actorId: 'player-1' } };
   const commonTransfer = {
@@ -4253,17 +3778,6 @@ test('formal remote Actor admission and commit retries are idempotent', async ()
   });
   const admission = zlink.Message.from(JSON.stringify({ ...commonTransfer, phase: 'admission' }));
   const duplicateAdmission = zlink.Message.from(JSON.stringify({ ...commonTransfer, phase: 'admission' }));
-  const commit = zlink.Message.from(JSON.stringify({
-    ...commonTransfer,
-    phase: 'commit',
-    transferState: Buffer.from('player-state').toString('base64')
-  }));
-  const duplicateCommit = zlink.Message.from(JSON.stringify({
-    ...commonTransfer,
-    phase: 'commit',
-    transferState: Buffer.from('player-state').toString('base64')
-  }));
-  let materializeCount = 0;
   class RoomSpot {
     async onActorJoin() {
       events.push('admission');
@@ -4276,7 +3790,6 @@ test('formal remote Actor admission and commit retries are idempotent', async ()
     createNativeSpot: (_meshName, spotId) => formalNativeSpot(spotId),
     actorTransferRuntime: {
       async materializeRoutedActor(_actorId, _actorType, _adapterKey, transferState) {
-        materializeCount += 1;
         events.push(`materialize:${transferState.getString('utf8')}`);
         return { actor, actorRef: { actorId: actor.context.actorId, nodeRid: 'target-node', generation: 2n } };
       },
@@ -4289,15 +3802,10 @@ test('formal remote Actor admission and commit retries are idempotent', async ()
   try {
     await manager.dispatchMeshActorJoin('test.mesh', { spotId: zlink.RoutingId.from('room-1'), actor: null }, makeRecord(admission));
     await manager.dispatchMeshActorJoin('test.mesh', { spotId: zlink.RoutingId.from('room-1'), actor: null }, makeRecord(duplicateAdmission));
-    await manager.dispatchMeshActorJoin('test.mesh', { spotId: zlink.RoutingId.from('room-1'), actor: null }, makeRecord(commit));
-    await manager.dispatchMeshActorJoin('test.mesh', { spotId: zlink.RoutingId.from('room-1'), actor: null }, makeRecord(duplicateCommit));
-    assert.deepEqual(events, ['admission', 'materialize:player-state']);
-    assert.equal(materializeCount, 1);
+    assert.deepEqual(events, ['admission']);
   } finally {
     admission.close();
     duplicateAdmission.close();
-    commit.close();
-    duplicateCommit.close();
   }
 });
 

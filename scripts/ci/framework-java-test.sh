@@ -13,6 +13,10 @@ stop_watchdog() {
   wait "${watchdog_pid}" 2>/dev/null || true
 }
 trap stop_watchdog EXIT
+extra_tasks=()
+if [[ "${1}" == linux-* ]]; then
+  extra_tasks+=( :zlink-stream-connector:test )
+fi
 ./gradlew --no-daemon --max-workers="${worker_count}" \
   :zlink-framework-core:test \
   :zlink-framework-core:integrationTest \
@@ -23,4 +27,16 @@ trap stop_watchdog EXIT
   :zlink-framework-locations-etcd:test \
   :zlink-framework-locations-etcd:contractTest \
   :zlink-framework-testkit:test \
+  :zlink-framework-testkit:contractTest \
+  :zlink-framework-testkit:fakeBackendTest \
+  :zlink-framework-core:contractTest \
+  :zlink-framework-kotlin:contractTest \
+  :zlink-framework-kotlin:integrationTest \
+  :zlink-framework-locations-etcd:integrationTest \
+  :zlink-framework-provider-abstractions:contractTest \
+  :zlink-framework-codec-protobuf:test \
+  :zlink-framework-codec-msgpack:test \
+  :zlink-http-client:test \
+  :zlink-http-client-kotlin:test \
+  "${extra_tasks[@]}" \
   -Pzlink.includeSamples=false

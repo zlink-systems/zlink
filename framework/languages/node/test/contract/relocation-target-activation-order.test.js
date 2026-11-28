@@ -1,6 +1,9 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
+const {
+  encodeAuthorityKey
+} = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
 
 function target() {
   const runtime = new ZLinkHostServiceRelocationRuntime({});
@@ -21,7 +24,11 @@ function target() {
     releaseActivation() {},
     releaseJoinAdmission() {},
     offer: { reservation: {}, prepareFingerprint: 'same' },
-    staging: { hidden: new Map(), envelope: { participants: [] } },
+    staging: {
+      primaryAuthorityKey: encodeAuthorityKey('actor', 'actor'),
+      hidden: new Map(),
+      envelope: { participants: [] }
+    },
     owner: {
       async normalize() {},
       async publish() {},
@@ -55,9 +62,6 @@ test('the previous target move submits command 44 before its first handler start
 
 test('terminal cleanup follows Join completion and cannot overwrite the next root', async () => {
   const { runtime, stage, events } = target();
-  const {
-    encodeAuthorityKey
-  } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
   const key = encodeAuthorityKey('actor', 'next-root');
   stage.staging.primaryAuthorityKey = key;
   let root = 'first-root';
@@ -98,9 +102,6 @@ test('request terminal relay uses the activated authority before terminal cleanu
   const { runtime, stage, events } = target();
   const packet = { index: 0, returnResponse: true, source: { replyRouteId: '1' } };
   const hidden = { actor: { context: { actorId: 'actor' } }, replayPackets: [packet] };
-  const {
-    encodeAuthorityKey
-  } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
   const key = encodeAuthorityKey('actor', 'actor');
   stage.staging.hidden.set(key.value, hidden);
   stage.staging.envelope.participants.push({ key: key.value });
@@ -156,9 +157,6 @@ test('request terminal relay uses the activated authority before terminal cleanu
 for (const primary of [false, true]) {
   for (const stored of [false, true]) {
     test(`Actor publication cleanup observes only successful CAS results (primary=${primary}, stored=${stored})`, async () => {
-      const {
-        encodeAuthorityKey
-      } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
       const key = encodeAuthorityKey('actor', 'returning-actor');
       const observations = [];
       const current = {

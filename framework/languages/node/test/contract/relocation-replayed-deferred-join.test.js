@@ -1,4 +1,5 @@
 const { replyFixture } = require('./helpers/relocation-reply');
+const { relocationInventoryStore } = require('./fixtures/relocation-authority-store');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate: turn } = require('node:timers/promises');
@@ -108,6 +109,7 @@ for (const [scenario, name] of [
     const publication = deferred();
     const store = {
       relocationReplies: replies.store,
+      ...relocationInventoryStore(),
       async readAuthority() {
         return current;
       },
@@ -438,7 +440,7 @@ for (const [scenario, name] of [
       );
     };
 
-    const hidden = { actor };
+    const hidden = { actor, replayPackets: packets };
     let opened;
     const admissionOpened = new Promise((done) => {
       opened = done;

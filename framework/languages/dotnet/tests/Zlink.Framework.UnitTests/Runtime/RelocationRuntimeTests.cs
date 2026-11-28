@@ -156,6 +156,7 @@ public sealed partial class RelocationRuntimeTests
                 ExpiresAt = TimeSpan.Zero,
             };
             Volatile.Write(ref stage.Published, 1);
+            stage.Terminal.SetResult();
             Volatile.Write(ref stage.SessionRoutesConverged, 1);
             return target.TryTrackStage(
                 new ZLinkAggregateFence(envelope.AggregateId, envelope.AggregateGeneration),
@@ -499,70 +500,6 @@ public sealed partial class RelocationRuntimeTests
 
         Assert.Throws<InvalidDataException>(() => ZLinkRelocationEnvelopeCodec.Decode(trailing));
         Assert.ThrowsAny<IOException>(() => ZLinkRelocationEnvelopeCodec.Decode(truncated));
-    }
-
-    [Fact]
-    public void SpotReplyRelaySenderRejectsStaleDurableTargetAttempt()
-    {
-        var targetRid = RoutingId.From("reply-target");
-        var targetOwner = new ZLinkLocationOwnerToken("target-owner", 17);
-        var state = new ZLinkCanonicalRelocationAuthorityState(
-            11,
-            13,
-            19,
-            RoutingId.From("reply-source").ToHex(),
-            23,
-            "source-owner",
-            29,
-            targetRid.ToHex(),
-            31,
-            targetOwner.OwnerId,
-            checked((ulong)targetOwner.LeaseGeneration),
-            "coordinator-owner",
-            41,
-            RoutingId.From("reply-coordinator").ToHex(),
-            43,
-            7,
-            "reply-root",
-            47,
-            53
-        );
-        var canonical = new ZLinkCanonicalRelocationAuthorityProjection(
-            state.RelocationHigh,
-            state.RelocationLow,
-            state.TargetAttemptGeneration,
-            state.TargetOwnerId,
-            state.TargetOwnerLeaseGeneration,
-            state.Phase,
-            state.RelocationReference,
-            state.RelocationChecksumCrc32c,
-            state.ApplicationVersion,
-            ReadOnlyMemory<byte>.Empty,
-            state
-        );
-
-        Assert.True(
-            ZLinkFrameworkRuntime.IsExactCanonicalReplyRelayTarget(
-                canonical,
-                11,
-                13,
-                19,
-                targetRid,
-                31,
-                targetOwner
-            )
-        );
-        Assert.False(
-            ZLinkFrameworkRuntime.IsExactCanonicalReplyRelayTarget(
-                canonical,
-                11,
-                13,
-                20,
-                targetRid,
-                31,
-                targetOwner
-            )
-        );
     }
 
     [Fact]
@@ -1449,7 +1386,7 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Fact]
-    public async Task ShutdownDrainWaitsForPublishedTargetReplay()
+    public async Task ShutdownDrainWaitsForCapturedRequestDelivery()
     {
         using var services = new ServiceCollection().BuildServiceProvider();
         var target = new ZLinkSpotRetireTargetRuntime(
@@ -1472,7 +1409,7 @@ public sealed partial class RelocationRuntimeTests
         try
         {
             Assert.False(drain.IsCompleted);
-            var failure = new IOException("Published target replay failed.");
+            var failure = new IOException("Captured request delivery failed.");
             replay.SetException(failure);
             Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => drain));
             Assert.Equal(1, target.ActiveStageCount);
@@ -1670,6 +1607,7 @@ public sealed partial class RelocationRuntimeTests
         );
 
         Assert.True(authorityNormalized);
+        Assert.False(stage.Terminal.Task.IsCompleted);
         Assert.Empty(deleted);
 
         await ZLinkSpotRetireTargetRuntime.ReleaseFinalRootAfterNormalizationAsync(
@@ -1678,6 +1616,7 @@ public sealed partial class RelocationRuntimeTests
             commitNormalization: null,
             reference =>
             {
+                Assert.True(stage.Terminal.Task.IsCompletedSuccessfully);
                 deleted.Add(reference);
                 return ValueTask.CompletedTask;
             }
@@ -1859,9 +1798,20 @@ public sealed partial class RelocationRuntimeTests
         );
         Assert.Equal(1, target.ActiveStageCount);
 
-        // Once the session routes converged, expiry reconciliation completes
-        // the published stage as a Completed tombstone.
+        // Route convergence can finish while the stage still owns publication.
         Volatile.Write(ref stage.SessionRoutesConverged, 1);
+        Assert.False(
+            await target.PublishInboundAsync(
+                unknownFence,
+                stage.SourceNodeRid,
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(1, target.ActiveStageCount);
+        Assert.Equal(0, target.TerminalTombstoneCount);
+
+        // Once publication and the session routes are complete, expiry removes the stage.
+        stage.Terminal.SetResult();
         Assert.False(
             await target.PublishInboundAsync(
                 unknownFence,
@@ -2494,14 +2444,22 @@ public sealed partial class RelocationRuntimeTests
         using var current = MessageFollowSpotReceived(messageFollowHopCount: 1);
         using var looped = MessageFollowSpotReceived(messageFollowHopCount: 8);
 
-        Assert.True(messageFollow.MatchesSourceRoute(current, 5, owner, now));
-        Assert.False(
-            messageFollow.MatchesSourceRoute(current, 5, owner, now + TimeSpan.FromSeconds(31))
-        );
-        Assert.False(messageFollow.MatchesSourceRoute(looped, 5, owner, now));
+        Assert.True(Matches(current, now));
+        Assert.False(Matches(current, now + TimeSpan.FromSeconds(31)));
+        Assert.False(Matches(looped, now));
         Assert.True(messageFollow.TryAcquire(64, out var lease));
         Assert.False(messageFollow.TryAcquire(0, out _));
         lease!.Dispose();
+
+        bool Matches(ZLinkBackendRouteReceived received, TimeSpan timestamp) =>
+            messageFollow.MatchesSourceRoute(
+                5,
+                received.TargetNodeGeneration,
+                received.AuthorityOwnerGeneration,
+                received.OwnerLeaseGeneration,
+                received.MessageFollowHopCount,
+                timestamp
+            );
     }
 
     [Fact]
@@ -4087,7 +4045,7 @@ public sealed partial class RelocationRuntimeTests
         );
     }
 
-    private static byte[] CreateMinimalCanonicalFrozenRecord()
+    private static byte[] CreateMinimalCanonicalFrozenRecord(string messageName = "p")
     {
         using var source = new MemoryStream();
         WriteText8(source, "n");
@@ -4096,7 +4054,7 @@ public sealed partial class RelocationRuntimeTests
         WriteUInt64(source, 1);
 
         using var payload = new MemoryStream();
-        WriteText8(payload, "p");
+        WriteText8(payload, messageName);
         WriteText8(payload, "application/octet-stream");
         WriteUInt32(payload, 0);
 
@@ -4829,7 +4787,7 @@ public sealed partial class RelocationRuntimeTests
                 DateTimeOffset.UtcNow
             )
             {
-                Relocation = request.Relocation,
+                Relocation = request.ApplyRelocation(current: null, participant),
             };
         }
 

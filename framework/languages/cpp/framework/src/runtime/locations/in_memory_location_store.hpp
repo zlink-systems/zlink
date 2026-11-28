@@ -1,37 +1,24 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
-#include "runtime/locations/actor_authority_payload.hpp"
-#include "runtime/locations/authority_aggregate_relocation.hpp"
-#include "runtime/locations/relocation_authority_payload.hpp"
 
-#include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
-
-#include <zlink/framework/detail/binary_text_codec.hpp>
-
-#include "runtime/locations/location_key_codec.hpp"
-#include "runtime/locations/aggregate_inventory.hpp"
-#include "runtime/locations/authority_key_codec.hpp"
-#include "runtime/locations/location_store_limits.hpp"
-#include <runtime/locations/location_repository.hpp>
-#include "runtime/locations/pending_creation_projection.hpp"
 #include "runtime/execution/state_lane.hpp"
-#include <zlink/framework/contracts/locations/stores.hpp>
+#include "runtime/locations/location_repository.hpp"
 
-#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <initializer_list>
-#include <limits>
 #include <map>
-#include <mutex>
-#include <set>
+#include <optional>
+#include <stop_token>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace zlink::framework::runtime
 {
-
-namespace location_composite_key
-{
-inline constexpr char separator[] = "\x1f";
-}
 
 struct owner_lease_row_t
 {
@@ -49,1268 +36,112 @@ class in_memory_location_repository_t : public location_repository_t
   public:
     in_memory_location_repository_t () = default;
 
-    explicit in_memory_location_repository_t (std::uint64_t initial_store_revision) :
-        _store_revision (initial_store_revision)
-    {
-    }
+    explicit in_memory_location_repository_t (std::uint64_t initial_store_revision);
 
     task_t<location_write_result_t> update_mesh_node (mesh_node_descriptor_t descriptor,
-                                                      location_write_intent_t intent) override
-    {
-        if (!valid_mesh_node_descriptor (descriptor))
-            throw std::invalid_argument ("mesh node descriptor is incomplete");
-        return _lane.run_task ([this, descriptor = std::move (descriptor), intent] () mutable {
-            const auto now = clock_t::now ();
-            const auto key = mesh_node_key (descriptor.mesh_name, descriptor.rid);
-            const auto found = _mesh_nodes.find (key);
-            const auto token =
-              location_owner_token_t{descriptor.owner_id, descriptor.lease_generation};
-            if (!owner_token_is_live (token, now))
-                return completed (
-                  location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
-
-            if (found != _mesh_nodes.end ()
-                && ((intent == location_write_intent_t::new_claim
-                     || intent == location_write_intent_t::fixed_rid_new_claim)
-                    || intent == location_write_intent_t::renew)
-                && same_mesh_node_descriptor (found->second, descriptor)) {
-                retain_reclaim_observation ("mesh:" + key);
-                return completed (location_write_result_t::stored (
-                  static_cast<std::int64_t> (found->second.descriptor_revision),
-                  found->second.updated_at));
-            }
-
-            if ((intent == location_write_intent_t::new_claim
-                 || intent == location_write_intent_t::fixed_rid_new_claim)) {
-                const location_owner_token_t previous =
-                  found == _mesh_nodes.end ()
-                    ? location_owner_token_t{}
-                    : location_owner_token_t{found->second.owner_id,
-                                             found->second.lease_generation};
-                const bool live =
-                  found != _mesh_nodes.end () && owner_token_is_live (previous, now);
-                const bool elapsed = intent != location_write_intent_t::fixed_rid_new_claim
-                                     || reclaim_wait_elapsed ("mesh:" + key, previous, live);
-                if (live)
-                    return completed (
-                      location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-                if (!elapsed)
-                    return completed (
-                      location_write_result_t{location_write_status_t::waiting, 0, {}});
-            } else if (intent == location_write_intent_t::renew) {
-                if (found == _mesh_nodes.end () || found->second.owner_id != descriptor.owner_id
-                    || found->second.lease_generation > descriptor.lease_generation
-                    || descriptor.descriptor_revision < found->second.descriptor_revision)
-                    return completed (
-                      location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
-                if (!same_mesh_node_identity (found->second, descriptor))
-                    return completed (
-                      location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-                if (descriptor.descriptor_revision == found->second.descriptor_revision)
-                    return completed (
-                      location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-            } else {
-                return completed (
-                  location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-            }
-
-            descriptor.updated_at = now;
-            _mesh_nodes[key] = descriptor;
-            retain_reclaim_observation ("mesh:" + key);
-            return completed (location_write_result_t::stored (
-              static_cast<std::int64_t> (descriptor.descriptor_revision), now));
-        });
-    }
+                                                      location_write_intent_t intent) override;
 
     task_t<location_write_status_t> remove_mesh_node (mesh_node_descriptor_key_t key,
-                                                      location_owner_token_t owner) override
-    {
-        return _lane
-          .run ([&] {
-              const auto found = _mesh_nodes.find (mesh_node_key (key.mesh_name, key.rid));
-              if (found == _mesh_nodes.end ()) {
-                  remove_reclaim_observation ("mesh:" + mesh_node_key (key.mesh_name, key.rid),
-                                              owner);
-                  return completed (location_write_status_t::ignored_stale);
-              }
-              if (found->second.owner_id != owner.owner_id
-                  || found->second.lease_generation != owner.lease_generation)
-                  return completed (location_write_status_t::ignored_stale);
-              _mesh_nodes.erase (found);
-              remove_reclaim_observation ("mesh:" + mesh_node_key (key.mesh_name, key.rid), owner);
-              return completed (location_write_status_t::stored);
-          })
-          .get ();
-    }
+                                                      location_owner_token_t owner) override;
 
     task_t<location_page_t<mesh_node_descriptor_t>>
-    list_mesh_nodes_core (std::string mesh_name, location_page_request_t page = {}) override
-    {
-        return _lane.run_task ([this, mesh_name = std::move (mesh_name), page = std::move (page)] {
-            std::vector<mesh_node_descriptor_t> matched;
-            for (const auto &[_, descriptor] : _mesh_nodes) {
-                if (descriptor.mesh_name == mesh_name) {
-                    auto projected = descriptor;
-                    apply_capacity_projection (projected);
-                    matched.push_back (std::move (projected));
-                }
-            }
-            const auto offset =
-              page.continuation_token ? parse_offset (*page.continuation_token) : 0;
-            const auto page_size =
-              page.page_size > 0 ? static_cast<std::size_t> (page.page_size) : matched.size ();
-            location_page_t<mesh_node_descriptor_t> result;
-            for (std::size_t index = offset;
-                 index < matched.size () && result.items.size () < page_size; ++index)
-                result.items.push_back (matched[index]);
-            const auto next = offset + result.items.size ();
-            if (next < matched.size ())
-                result.continuation_token = std::to_string (next);
-            return result;
-        });
-    }
+    list_mesh_nodes_core (std::string mesh_name, location_page_request_t page = {}) override;
 
     task_t<location_write_result_t>
     update_client_server (client_server_server_descriptor_t descriptor,
-                          location_write_intent_t intent) override
-    {
-        if (!valid_client_server_descriptor (descriptor))
-            throw std::invalid_argument ("ClientServer descriptor is incomplete");
-        return _lane
-          .run ([&] {
-              const auto now = clock_t::now ();
-              const auto key = client_server_key (descriptor.channel_name, descriptor.server_rid);
-              const auto found = _client_servers.find (key);
-              const auto token =
-                location_owner_token_t{descriptor.owner_id, descriptor.lease_generation};
-              if (!owner_token_is_live (token, now))
-                  return completed (
-                    location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
-
-              if (intent == location_write_intent_t::new_claim) {
-                  if (found != _client_servers.end ()
-                      && owner_token_is_live (
-                        {found->second.owner_id, found->second.lease_generation}, now))
-                      return completed (
-                        same_client_server_descriptor (found->second, descriptor)
-                          ? location_write_result_t::stored (
-                              static_cast<std::int64_t> (found->second.descriptor_revision),
-                              found->second.updated_at)
-                          : location_write_result_t{
-                              location_write_status_t::rejected_conflict, 0, {}});
-              } else if (intent == location_write_intent_t::renew) {
-                  if (found == _client_servers.end ()
-                      || found->second.owner_id != descriptor.owner_id
-                      || found->second.lease_generation != descriptor.lease_generation
-                      || descriptor.descriptor_revision < found->second.descriptor_revision)
-                      return completed (
-                        location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
-                  if (!same_client_server_identity (found->second, descriptor))
-                      return completed (
-                        location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-                  if (descriptor.descriptor_revision == found->second.descriptor_revision) {
-                      if (!same_client_server_descriptor (found->second, descriptor))
-                          return completed (location_write_result_t{
-                            location_write_status_t::rejected_conflict, 0, {}});
-                      return completed (location_write_result_t::stored (
-                        static_cast<std::int64_t> (descriptor.descriptor_revision),
-                        found->second.updated_at));
-                  }
-              } else {
-                  return completed (
-                    location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-              }
-
-              descriptor.updated_at = now;
-              _client_servers[key] = descriptor;
-              return completed (location_write_result_t::stored (
-                static_cast<std::int64_t> (descriptor.descriptor_revision), now));
-          })
-          .get ();
-    }
+                          location_write_intent_t intent) override;
 
     task_t<location_write_status_t> remove_client_server (client_server_server_descriptor_key_t key,
-                                                          location_owner_token_t owner) override
-    {
-        return _lane
-          .run ([&] {
-              const auto found =
-                _client_servers.find (client_server_key (key.channel_name, key.server_rid));
-              if (found == _client_servers.end () || found->second.owner_id != owner.owner_id
-                  || found->second.lease_generation != owner.lease_generation)
-                  return completed (location_write_status_t::ignored_stale);
-              _client_servers.erase (found);
-              return completed (location_write_status_t::stored);
-          })
-          .get ();
-    }
+                                                          location_owner_token_t owner) override;
 
     task_t<location_page_t<client_server_server_descriptor_t>>
-    list_client_servers (std::string channel_name, location_page_request_t page = {}) override
-    {
-        if (channel_name.empty () || page.page_size < 1
-            || page.page_size > location_page_item_limit)
-            throw std::invalid_argument ("ClientServer list arguments are invalid");
-        return _lane
-          .run ([&] {
-              std::vector<client_server_server_descriptor_t> matched;
-              for (const auto &[_, descriptor] : _client_servers) {
-                  if (descriptor.channel_name == channel_name)
-                      matched.push_back (descriptor);
-              }
-              const auto offset =
-                page.continuation_token ? parse_offset (*page.continuation_token) : 0;
-              location_page_t<client_server_server_descriptor_t> result;
-              for (std::size_t index = offset;
-                   index < matched.size ()
-                   && result.items.size () < static_cast<std::size_t> (page.page_size);
-                   ++index)
-                  result.items.push_back (matched[index]);
-              const auto next = offset + result.items.size ();
-              if (next < matched.size ())
-                  result.continuation_token = std::to_string (next);
-              return completed (std::move (result));
-          })
-          .get ();
-    }
+    list_client_servers (std::string channel_name, location_page_request_t page = {}) override;
 
     task_t<location_write_result_t>
     update_fanout_publisher (fanout_publisher_descriptor_t descriptor,
-                             location_write_intent_t intent) override
-    {
-        if (!valid_fanout_descriptor (descriptor))
-            throw std::invalid_argument ("fanout publisher descriptor is incomplete");
-        return _lane.run_task ([this, descriptor = std::move (descriptor), intent] () mutable {
-            const auto now = clock_t::now ();
-            const auto key = fanout_key (descriptor.channel_name, descriptor.publisher_rid);
-            const auto found = _fanout_publishers.find (key);
-            const auto token =
-              location_owner_token_t{descriptor.owner_id, descriptor.lease_generation};
-            if (!owner_token_is_live (token, now))
-                return completed (
-                  location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
-
-            if (intent == location_write_intent_t::new_claim
-                || intent == location_write_intent_t::takeover) {
-                if (found != _fanout_publishers.end ()
-                    && owner_token_is_live (
-                      {found->second.owner_id, found->second.lease_generation}, now)
-                    && (intent == location_write_intent_t::new_claim
-                        || found->second.owner_id != descriptor.owner_id
-                        || found->second.lease_generation != descriptor.lease_generation))
-                    return completed (
-                      same_fanout_descriptor (found->second, descriptor)
-                        ? location_write_result_t::stored (
-                            static_cast<std::int64_t> (found->second.descriptor_revision),
-                            found->second.updated_at)
-                        : location_write_result_t{
-                            location_write_status_t::rejected_conflict, 0, {}});
-            } else if (intent != location_write_intent_t::renew) {
-                return completed (
-                  location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-            }
-
-            if (found != _fanout_publishers.end () && found->second.owner_id == descriptor.owner_id
-                && found->second.lease_generation == descriptor.lease_generation) {
-                if (!same_fanout_identity (found->second, descriptor))
-                    return completed (
-                      location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-                if (descriptor.descriptor_revision < found->second.descriptor_revision)
-                    return completed (
-                      location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
-                if (descriptor.descriptor_revision == found->second.descriptor_revision) {
-                    if (!same_fanout_descriptor (found->second, descriptor))
-                        return completed (location_write_result_t{
-                          location_write_status_t::rejected_conflict, 0, {}});
-                    return completed (location_write_result_t::stored (
-                      static_cast<std::int64_t> (descriptor.descriptor_revision),
-                      found->second.updated_at));
-                }
-            } else if (intent == location_write_intent_t::renew) {
-                return completed (
-                  location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
-            }
-
-            descriptor.updated_at = now;
-            _fanout_publishers[key] = descriptor;
-            return completed (location_write_result_t::stored (
-              static_cast<std::int64_t> (descriptor.descriptor_revision), now));
-        });
-    }
+                             location_write_intent_t intent) override;
 
     task_t<location_write_status_t> remove_fanout_publisher (fanout_publisher_descriptor_key_t key,
-                                                             location_owner_token_t owner) override
-    {
-        return _lane
-          .run ([&] {
-              const auto found =
-                _fanout_publishers.find (fanout_key (key.channel_name, key.publisher_rid));
-              if (found == _fanout_publishers.end () || found->second.owner_id != owner.owner_id
-                  || found->second.lease_generation != owner.lease_generation)
-                  return completed (location_write_status_t::ignored_stale);
-              _fanout_publishers.erase (found);
-              return completed (location_write_status_t::stored);
-          })
-          .get ();
-    }
+                                                             location_owner_token_t owner) override;
 
     task_t<location_page_t<fanout_publisher_descriptor_t>>
-    list_fanout_publishers (std::string channel_name, location_page_request_t page = {}) override
-    {
-        if (channel_name.empty () || page.page_size < 1
-            || page.page_size > location_page_item_limit)
-            throw std::invalid_argument ("fanout publisher list arguments are invalid");
-        return _lane
-          .run ([&] {
-              const auto offset =
-                page.continuation_token ? parse_offset (*page.continuation_token) : 0;
-              location_page_t<fanout_publisher_descriptor_t> result;
-              std::size_t matched = 0;
-              std::size_t encoded_bytes = 0;
-              for (const auto &[_, descriptor] : _fanout_publishers) {
-                  if (descriptor.channel_name != channel_name)
-                      continue;
-                  if (matched++ < offset)
-                      continue;
-                  const auto row_bytes = fanout_descriptor_encoded_size_upper_bound (descriptor);
-                  if (result.items.size () == static_cast<std::size_t> (page.page_size)
-                      || (!result.items.empty ()
-                          && encoded_bytes + row_bytes > 4u * 1024u * 1024u)) {
-                      result.continuation_token = std::to_string (offset + result.items.size ());
-                      break;
-                  }
-                  encoded_bytes += row_bytes;
-                  result.items.push_back (descriptor);
-              }
-              if (matched < offset)
-                  throw std::invalid_argument ("fanout publisher continuation token is invalid");
-              return completed (std::move (result));
-          })
-          .get ();
-    }
+    list_fanout_publishers (std::string channel_name, location_page_request_t page = {}) override;
 
     task_t<owner_lease_claim_result_t>
-    claim_owner_lease (std::string owner_id, std::chrono::milliseconds lease_ttl) override
-    {
-        if (owner_id.empty () || lease_ttl.count () <= 0)
-            throw std::invalid_argument ("owner lease claim is incomplete");
-        return _lane
-          .run ([&] {
-              const auto now = clock_t::now ();
-              const auto existing = _leases.find (owner_id);
-              if (existing != _leases.end () && existing->second.lease_expires_at > now)
-                  return completed (owner_lease_claim_result_t{owner_lease_conflict_t{}});
-              if (_lease_generation >= max_generation)
-                  return completed (
-                    owner_lease_claim_result_t{owner_lease_generation_exhausted_t{}});
-              if (existing != _leases.end ())
-                  _leases.erase (existing);
-              ++_lease_generation;
-              const auto generation = static_cast<std::int64_t> (_lease_generation);
-              const auto expires_at = now + lease_ttl;
-              _active_lease_generations[owner_id] = generation;
-              _leases[owner_id] = owner_lease_row_t{
-                owner_id, zlink::routing_id_t::from (std::uint32_t{0}), expires_at, now};
-              return completed (owner_lease_claim_result_t{
-                owner_lease_claimed_t{{std::move (owner_id), generation}, expires_at, now}});
-          })
-          .get ();
-    }
+    claim_owner_lease (std::string owner_id, std::chrono::milliseconds lease_ttl) override;
 
-    task_t<owner_lease_read_result_t> read_owner_lease (std::string owner_id) override
-    {
-        return _lane.run_task ([this, owner_id = std::move (owner_id)] () mutable {
-            const auto now = clock_t::now ();
-            const auto lease = _leases.find (owner_id);
-            const auto generation = _active_lease_generations.find (owner_id);
-            if (lease == _leases.end () || generation == _active_lease_generations.end ()
-                || lease->second.lease_expires_at <= now) {
-                if (lease != _leases.end ())
-                    _leases.erase (lease);
-                _active_lease_generations.erase (owner_id);
-                return owner_lease_read_result_t{owner_lease_missing_t{}};
-            }
-            return owner_lease_read_result_t{owner_lease_found_t{
-              {std::move (owner_id), generation->second}, lease->second.lease_expires_at, now}};
-        });
-    }
+    task_t<owner_lease_read_result_t> read_owner_lease (std::string owner_id) override;
 
     task_t<owner_lease_renew_result_t>
-    renew_owner_lease (location_owner_token_t token, std::chrono::milliseconds lease_ttl) override
-    {
-        if (lease_ttl.count () <= 0)
-            throw std::invalid_argument ("owner lease TTL must be positive");
-        return _lane
-          .run ([&] {
-              const auto now = clock_t::now ();
-              const auto lease = _leases.find (token.owner_id);
-              if (!owner_token_is_live (token, now))
-                  return completed (owner_lease_renew_result_t{owner_lease_stale_t{}});
-              const auto expires_at = now + lease_ttl;
-              lease->second.lease_expires_at = expires_at;
-              lease->second.updated_at = now;
-              return completed (owner_lease_renew_result_t{owner_lease_renewed_t{expires_at, now}});
-          })
-          .get ();
-    }
+    renew_owner_lease (location_owner_token_t token, std::chrono::milliseconds lease_ttl) override;
 
-    task_t<owner_lease_release_result_t> release_owner_lease (location_owner_token_t token) override
-    {
-        return _lane
-          .run ([&] {
-              const auto now = clock_t::now ();
-              if (!owner_token_is_live (token, now))
-                  return completed (owner_lease_release_result_t{owner_lease_stale_t{}});
-              _leases.erase (token.owner_id);
-              _active_lease_generations.erase (token.owner_id);
-              return completed (owner_lease_release_result_t{owner_lease_released_t{}});
-          })
-          .get ();
-    }
+    task_t<owner_lease_release_result_t>
+    release_owner_lease (location_owner_token_t token) override;
 
-    task_t<authority_read_result_t> read_authority_core (authority_key_t key,
-                                                         std::stop_token cancellation = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<authority_read_result_t> ();
-        return _lane.run_task ([this, key = std::move (key)] () mutable {
-            const auto now = clock_t::now ();
-            const auto found = _authorities.find (key.value);
-            if (found == _authorities.end ())
-                return completed (authority_read_result_t{authority_missing_t{now}});
-            auto snapshot = found->second;
-            snapshot.store_now = now;
-            return completed (authority_read_result_t{std::move (snapshot)});
-        });
-    }
+    task_t<authority_read_result_t>
+    read_authority_core (authority_key_t key, std::stop_token cancellation = {}) override;
 
     task_t<authority_compare_exchange_result_t>
     compare_exchange_authority_core (authority_key_t key,
                                      std::string expected_store_version,
                                      authority_mutation_t mutation,
-                                     std::stop_token cancellation = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<authority_compare_exchange_result_t> ();
-        return _lane.run_task ([this, key = std::move (key),
-                                expected_store_version = std::move (expected_store_version),
-                                mutation = std::move (mutation)] () mutable {
-            if (const auto *put = std::get_if<authority_put_t> (&mutation);
-                put && put->operation_deadline
-                && std::chrono::steady_clock::now () >= *put->operation_deadline)
-                return task_t<authority_compare_exchange_result_t> (
-                  result_t<authority_compare_exchange_result_t>::failure (
-                    framework_error_kind_t::deadline_exceeded,
-                    "Actor membership operation deadline expired"));
-            const auto now = clock_t::now ();
-            auto found = _authorities.find (key.value);
-            if (found == _authorities.end ()
-                || found->second.store_version != expected_store_version) {
-                authority_read_result_t current =
-                  found == _authorities.end () ? authority_read_result_t{authority_missing_t{now}}
-                                               : authority_read_result_t{found->second};
-                return completed (
-                  authority_compare_exchange_result_t{authority_conflict_t{std::move (current)}});
-            }
-
-            if (authority_mutation_locked_on_lane (key.value))
-                return completed (
-                  authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-
-            const auto old_member = decode_direct_actor_authority_payload (found->second.payload);
-            const auto member = std::visit (
-              [] (const auto &value) {
-                  if constexpr (requires { value.payload; })
-                      return decode_direct_actor_authority_payload (value.payload);
-                  else
-                      return std::optional<actor_authority_payload_t>{};
-              },
-              mutation);
-            if (const auto failure = user_membership_commit_failure (old_member, member, now))
-                return completed (authority_compare_exchange_result_t{
-                  authority_conflict_t{found->second, failure}});
-
-            if (std::holds_alternative<authority_delete_t> (mutation)) {
-                if (found->second.allocation.state != placement_allocation_state_t::active
-                    || !owner_token_is_live (found->second.owner, now)
-                    || !capacity_bundle_present (_active_by_placement,
-                                                 found->second.allocation.target,
-                                                 found->second.allocation.capacity_bundle))
-                    return completed (
-                      authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-                if (!store_revisions_available ())
-                    return completed (
-                      authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
-                const auto store_version = next_store_version ();
-                apply_capacity_bundle (_active_by_placement, found->second.allocation.target,
-                                       found->second.allocation.capacity_bundle, false);
-                _authorities.erase (found);
-                return completed (
-                  authority_compare_exchange_result_t{authority_deleted_t{store_version, now}});
-            }
-
-            if (auto *restore = std::get_if<authority_restore_t> (&mutation)) {
-                if (found->second.allocation.state != placement_allocation_state_t::active
-                    || !same_owner (found->second.owner, restore->expected_owner))
-                    return completed (
-                      authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-                if (!store_revisions_available ())
-                    return completed (
-                      authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
-                auto snapshot = found->second;
-                snapshot.store_version = next_store_version ();
-                snapshot.payload = std::move (restore->payload);
-                snapshot.store_now = now;
-                _authorities[key.value] = snapshot;
-                return completed (
-                  authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
-            }
-
-            if (auto *retarget = std::get_if<authority_retarget_t> (&mutation)) {
-                if (found->second.allocation.state != placement_allocation_state_t::active
-                    || !capacity_bundle_present (_active_by_placement,
-                                                 found->second.allocation.target,
-                                                 found->second.allocation.capacity_bundle))
-                    return completed (
-                      authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-                const auto target_descriptor =
-                  live_target_descriptor (retarget->target, found->second.allocation.object_kind,
-                                          found->second.allocation.stable_type, now, false);
-                if (!target_descriptor
-                    || (!same_target (found->second.allocation.target, retarget->target)
-                        && !capacity_available (*target_descriptor, retarget->target,
-                                                found->second.allocation.capacity_bundle)))
-                    return completed (
-                      authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-                if (!store_revisions_available ()
-                    || !issue_generations ({{&_authority_owner_generation, 1}}))
-                    return completed (
-                      authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
-                auto snapshot = found->second;
-                snapshot.store_version = next_store_version ();
-                snapshot.payload = std::move (retarget->payload);
-                if (retarget->replace_aggregate)
-                    snapshot.aggregate = *retarget->replace_aggregate;
-                snapshot.authority_owner_generation = _authority_owner_generation;
-                snapshot.owner = retarget->target.owner;
-                snapshot.store_now = now;
-                const auto source_allocation = snapshot.allocation;
-                snapshot.allocation.target = retarget->target;
-                if (!same_target (source_allocation.target, snapshot.allocation.target)) {
-                    apply_capacity_bundle (_active_by_placement, source_allocation.target,
-                                           source_allocation.capacity_bundle, false);
-                    apply_capacity_bundle (_active_by_placement, snapshot.allocation.target,
-                                           snapshot.allocation.capacity_bundle, true);
-                }
-                _authorities[key.value] = snapshot;
-                return completed (
-                  authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
-            }
-
-            if (const auto *put = std::get_if<authority_put_t> (&mutation);
-                put && put->preservation) {
-                const auto &replacement = put->preservation->second;
-                auto target = found->second.allocation.target;
-                target.owner = replacement;
-                const auto descriptor = _mesh_nodes.find (
-                  mesh_node_key (target.mesh_name, std::string (target.node_rid.value ())));
-                if (!put->matches_preserved (found->second)
-                    || !owner_token_is_live (replacement, now) || descriptor == _mesh_nodes.end ()
-                    || descriptor->second.lifecycle_generation != target.node_lifecycle_generation
-                    || descriptor->second.owner_id != replacement.owner_id)
-                    return completed (
-                      authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-                if (!store_revisions_available ())
-                    return completed (
-                      authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
-                auto snapshot = found->second;
-                snapshot.owner = replacement;
-                snapshot.allocation.target.owner = replacement;
-                snapshot.payload = put->payload;
-                snapshot.store_version = next_store_version ();
-                snapshot.store_now = now;
-                found->second = snapshot;
-                return completed (
-                  authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
-            }
-
-            if (found->second.allocation.state != placement_allocation_state_t::active)
-                return completed (
-                  authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-            auto owner = found->second.owner;
-            auto object_generation = found->second.object_generation;
-            auto owner_generation = found->second.authority_owner_generation;
-            auto allocation = found->second.allocation;
-            if (!owner_token_is_live (found->second.owner, now))
-                return completed (
-                  authority_compare_exchange_result_t{authority_conflict_t{found->second}});
-            if (!store_revisions_available ())
-                return completed (
-                  authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
-
-            std::vector<std::byte> payload;
-            auto aggregate = found->second.aggregate;
-            if (auto *reincarnate = std::get_if<authority_reincarnate_t> (&mutation)) {
-                if (!issue_generations (
-                      {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
-                    return completed (
-                      authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
-                object_generation = _object_generation;
-                owner_generation = _authority_owner_generation;
-                payload = std::move (reincarnate->payload);
-            } else {
-                auto &put = std::get<authority_put_t> (mutation);
-                payload = std::move (put.payload);
-                if (put.replace_aggregate)
-                    aggregate = std::move (*put.replace_aggregate);
-            }
-            authority_snapshot_t snapshot{
-              next_store_version (),  std::move (payload), object_generation,
-              owner_generation,       std::move (owner),   now,
-              std::move (allocation), std::nullopt,        std::move (aggregate)};
-            _authorities[key.value] = snapshot;
-            return completed (
-              authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
-        });
-    }
+                                     std::stop_token cancellation = {}) override;
 
     task_t<authority_scan_result_t> list_authorities (std::string prefix,
                                                       std::optional<authority_scan_cursor_t> cursor,
                                                       std::size_t limit,
-                                                      std::stop_token cancellation = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<authority_scan_result_t> ();
-        if (limit == 0 || limit > location_page_item_limit)
-            throw std::invalid_argument ("authority scan limit must be between 1 and 1000");
-        return _lane.run_task ([this, prefix = std::move (prefix), cursor = std::move (cursor),
-                                limit] {
-            const auto now = clock_t::now ();
-            cleanup_scans (now);
-
-            std::string scan_id;
-            std::size_t offset = 0;
-            if (cursor) {
-                const auto encoded = std::string (cursor->encoded ());
-                const auto separator = encoded.find (':');
-                if (separator == std::string::npos)
-                    return completed (authority_scan_result_t{authority_scan_expired_t{}});
-                scan_id = encoded.substr (0, separator);
-                try {
-                    offset =
-                      static_cast<std::size_t> (std::stoull (encoded.substr (separator + 1)));
-                }
-                catch (...) {
-                    return completed (authority_scan_result_t{authority_scan_expired_t{}});
-                }
-            } else {
-                scan_id = std::to_string (++_next_scan_id);
-                authority_scan_state_t state;
-                state.created_at = now;
-                for (const auto &[authority_key, snapshot] : _authorities) {
-                    if (authority_key.starts_with (prefix))
-                        state.entries.push_back ({{authority_key}, snapshot});
-                }
-                _authority_scans.emplace (scan_id, std::move (state));
-            }
-
-            const auto scan = _authority_scans.find (scan_id);
-            if (scan == _authority_scans.end () || offset > scan->second.entries.size ())
-                return completed (authority_scan_result_t{authority_scan_expired_t{}});
-
-            authority_page_t page;
-            std::size_t encoded_size = 0;
-            while (offset < scan->second.entries.size () && page.items.size () < limit) {
-                const auto &entry = scan->second.entries[offset];
-                const auto item_size = entry.key.value.size () + entry.snapshot.payload.size ();
-                if (!page.items.empty () && encoded_size + item_size > 4u * 1024u * 1024u)
-                    break;
-                page.items.push_back (entry);
-                encoded_size += item_size;
-                ++offset;
-            }
-            if (offset < scan->second.entries.size ()) {
-                page.next_cursor = authority_scan_cursor_t{scan_id + ":" + std::to_string (offset)};
-            } else {
-                _authority_scans.erase (scan);
-            }
-            return completed (authority_scan_result_t{std::move (page)});
-        });
-    }
+                                                      std::stop_token cancellation = {}) override;
 
     task_t<std::optional<creation_terminal_record_t>>
     read_creation_terminal (creation_operation_identity_t operation,
-                            std::stop_token cancellation = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<std::optional<creation_terminal_record_t>> ();
-        return _lane
-          .run ([&] {
-              const auto key = creation_operation_key (operation);
-              const auto found = _creation_terminals.find (key);
-              if (found == _creation_terminals.end ()
-                  || found->second.expires_at <= clock_t::now ()) {
-                  if (found != _creation_terminals.end ())
-                      _creation_terminals.erase (found);
-                  return completed (std::optional<creation_terminal_record_t>{});
-              }
-              return completed (std::optional<creation_terminal_record_t>{found->second});
-          })
-          .get ();
-    }
+                            std::stop_token cancellation = {}) override;
 
     task_t<object_complete_creation_result_t>
     complete_creation_core (object_complete_creation_request_t request,
-                            std::stop_token cancellation = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<object_complete_creation_result_t> ();
-        const auto publication = std::visit (
-          [] (const auto &value) -> creation_terminal_publication_t { return value.terminal; },
-          request.completion);
-        if (publication.terminal_envelope.size () > location_record_payload_limit)
-            throw std::invalid_argument ("creation terminal envelope is too large");
-        const auto expires_at = publication.operation_deadline + creation_terminal_retention;
-        return _lane
-          .run ([&] {
-              const auto now = clock_t::now ();
-              if (expires_at <= now)
-                  throw std::invalid_argument ("creation terminal expiry is not in the future");
-              const auto terminal_key = creation_operation_key (publication.operation);
-              if (const auto existing = _creation_terminals.find (terminal_key);
-                  existing != _creation_terminals.end () && existing->second.expires_at > now) {
-                  const auto authority = _authorities.find (object_key (request.key));
-                  const authority_read_result_t read =
-                    authority == _authorities.end ()
-                      ? authority_read_result_t{authority_missing_t{now}}
-                      : authority_read_result_t{authority->second};
-                  return completed (
-                    object_complete_creation_result_t{object_creation_already_completed_result_t{
-                      existing->second, creation_replay_ready (request, read)}});
-              }
-
-              const auto key = object_key (request.key);
-              const auto reservation = _reservations.find (key);
-              if (reservation == _reservations.end ()
-                  || !same_fence (reservation->second.fence, request.fence))
-                  return completed (
-                    object_complete_creation_result_t{object_creation_completion_stale_t{}});
-              auto authority = _authorities.find (key);
-              if (authority == _authorities.end ()
-                  || authority->second.store_version != request.fence.expected_store_version)
-                  return completed (
-                    object_complete_creation_result_t{object_creation_completion_conflict_t{
-                      authority == _authorities.end ()
-                        ? authority_read_result_t{authority_missing_t{now}}
-                        : authority_read_result_t{authority->second}}});
-
-              creation_terminal_record_t terminal{publication.operation,
-                                                  publication.terminal_envelope, expires_at};
-              std::optional<authority_snapshot_t> ready;
-              if (const auto *created =
-                    std::get_if<object_creation_completed_t> (&request.completion)) {
-                  const auto descriptor = live_target_descriptor (
-                    request.fence.target, reservation->second.request.key.kind,
-                    reservation->second.request.intent.stable_type, now, false);
-                  if (!descriptor
-                      || !capacity_bundle_present (_pending_by_placement, request.fence.target,
-                                                   request.fence.capacity_bundle))
-                      return completed (object_complete_creation_result_t{
-                        object_creation_completion_conflict_t{authority->second}});
-                  if (!store_revisions_available ())
-                      return completed (
-                        object_complete_creation_result_t{authority_generation_exhausted_t{}});
-                  authority->second.store_version = next_store_version ();
-                  authority->second.payload = created->ready_payload;
-                  authority->second.store_now = now;
-                  authority->second.allocation.state = placement_allocation_state_t::active;
-                  reservation->second.snapshot = authority->second;
-                  reservation->second.status = reservation_status_t::committed;
-                  release_pending (reservation->second);
-                  apply_capacity_bundle (_active_by_placement, request.fence.target,
-                                         request.fence.capacity_bundle, true);
-                  ready = authority->second;
-              } else {
-                  _authorities.erase (authority);
-                  release_pending (reservation->second);
-                  reservation->second.status = reservation_status_t::aborted;
-              }
-              _creation_terminals.insert_or_assign (terminal_key, terminal);
-              return completed (object_complete_creation_result_t{
-                object_creation_completed_result_t{std::move (terminal), std::move (ready)}});
-          })
-          .get ();
-    }
+                            std::stop_token cancellation = {}) override;
 
     task_t<bool> release_ended_reservation (
       authority_key_t key,
       std::string expected_store_version,
       std::stop_token cancellation = {},
       std::optional<object_reserve_request_t> request = std::nullopt,
-      std::optional<authority_snapshot_t> discarded = std::nullopt) override
-    {
-        if (cancellation.stop_requested ())
-            co_return co_await cancelled<bool> ();
-        co_return co_await _lane.run_task (
-          [this, key = std::move (key), expected_store_version = std::move (expected_store_version),
-           request = std::move (request), discarded = std::move (discarded)] () mutable {
-              const auto current = _authorities.find (key.value);
-              if (current == _authorities.end ()
-                  || current->second.store_version != expected_store_version)
-                  return completed (false);
-              if (request && !authority_matches_creation_type (current->second, *request))
-                  throw framework_exception_t (framework_error_kind_t::type_mismatch,
-                                               "Object type does not match the current authority");
-              return completed (release_ended_reservation_on_lane (
-                key.value, current->second, clock_t::now (), request ? &*request : nullptr,
-                discarded ? &*discarded : nullptr));
-          });
-    }
+      std::optional<authority_snapshot_t> discarded = std::nullopt) override;
 
     task_t<object_reserve_result_t> reserve_core (object_reserve_request_t request,
-                                                  std::stop_token cancellation = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<object_reserve_result_t> ();
-        if (request.creating_payload.size () > location_record_payload_limit
-            || request.intent.request_encoded_size > location_record_payload_limit)
-            throw std::invalid_argument ("object reservation payload exceeds 1 MiB");
-        try {
-            return _lane.run_task ([this, request = std::move (request)] () mutable {
-                const auto now = clock_t::now ();
-                if (request.operation_deadline != std::chrono::system_clock::time_point{}
-                    && std::chrono::system_clock::now () >= request.operation_deadline)
-                    throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
-                                                 "Object creation deadline expired");
-                const auto key = object_key (request.key);
-                auto authority = _authorities.find (key);
-                if (authority != _authorities.end ()
-                    && !authority_matches_creation_type (authority->second, request))
-                    return completed (
-                      object_reserve_result_t{object_type_mismatch_t{authority->second}});
-                if (authority != _authorities.end ()
-                    && release_ended_reservation_on_lane (key, authority->second, now, &request))
-                    authority = _authorities.end ();
-                if (authority != _authorities.end ()) {
-                    if (authority->second.allocation.state
-                        == placement_allocation_state_t::reserved)
-                        return completed (
-                          object_reserve_result_t{object_reserve_conflict_t{authority->second}});
-                    return completed (
-                      object_reserve_result_t{object_already_exists_t{authority->second}});
-                }
-                const auto target_descriptor = live_target_descriptor (
-                  request.target, request.key.kind, request.intent.stable_type, now, true);
-                if (!target_descriptor)
-                    return completed (
-                      object_reserve_result_t{object_reserve_conflict_t{authority_missing_t{now}}});
-                if (!bundle_matches_object (request.capacity_bundle, request.key.kind,
-                                            request.intent.stable_type))
-                    throw std::invalid_argument (
-                      "object reservation capacity bundle does not match the object");
-                if (!capacity_available (*target_descriptor, request.target,
-                                         request.capacity_bundle))
-                    return completed (
-                      object_reserve_result_t{object_placement_capacity_exhausted_t{}});
-                if (!store_revisions_available ()
-                    || !issue_generations (
-                      {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
-                    return completed (object_reserve_result_t{authority_generation_exhausted_t{}});
-
-                const auto store_version = next_store_version ();
-                object_reservation_fence_t fence{
-                  "reservation-" + store_version, store_version,  _object_generation,
-                  _authority_owner_generation,    request.target, request.capacity_bundle};
-                authority_snapshot_t creating{
-                  store_version,
-                  request.creating_payload,
-                  _object_generation,
-                  _authority_owner_generation,
-                  request.target.owner,
-                  now,
-                  {placement_allocation_state_t::reserved, request.key.kind,
-                   request.intent.stable_type, request.target, request.capacity_bundle},
-                  pending_object_creation_t{
-                    fence.reservation_id, request.intent.request_content_reference,
-                    request.intent.request_sha256,
-                    static_cast<std::uint32_t> (request.intent.request_encoded_size)}};
-                reservation_state_t reservation{request, fence, creating,
-                                                reservation_status_t::prepared};
-                _authorities[key] = creating;
-                _reservations[key] = std::move (reservation);
-                apply_capacity_bundle (_pending_by_placement, request.target,
-                                       request.capacity_bundle, true);
-                return completed (object_reserve_result_t{
-                  object_reserved_t{std::move (fence), std::move (creating)}});
-            });
-        }
-        catch (const framework_exception_t &error) {
-            return task_t<object_reserve_result_t> (
-              detail::result_access_t::failure<object_reserve_result_t> (
-                std::make_exception_ptr (error)));
-        }
-    }
+                                                  std::stop_token cancellation = {}) override;
 
     task_t<object_commit_result_t>
     commit_core (object_commit_request_t request,
                  std::stop_token cancellation = {},
-                 std::chrono::system_clock::time_point operation_deadline = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<object_commit_result_t> ();
-        if (request.ready_payload.size () > location_record_payload_limit)
-            throw std::invalid_argument ("object commit payload exceeds 1 MiB");
-        return _lane.run_task ([this, request = std::move (request),
-                                operation_deadline] () mutable {
-            const auto key = object_key (request.key);
-            const auto reservation = _reservations.find (key);
-            if (reservation == _reservations.end ())
-                return completed (object_commit_result_t{object_commit_stale_t{}});
-            if (!same_fence (reservation->second.fence, request.fence))
-                return completed (object_commit_result_t{object_commit_stale_t{}});
-            if (reservation->second.status == reservation_status_t::committed)
-                return completed (
-                  object_commit_result_t{object_already_committed_t{reservation->second.snapshot}});
-            if (reservation->second.status == reservation_status_t::aborted)
-                return completed (object_commit_result_t{object_commit_stale_t{}});
-
-            auto authority = _authorities.find (key);
-            if (authority == _authorities.end ()
-                || authority->second.store_version != request.fence.expected_store_version)
-                return completed (object_commit_result_t{object_commit_conflict_t{
-                  authority == _authorities.end ()
-                    ? authority_read_result_t{authority_missing_t{clock_t::now ()}}
-                    : authority_read_result_t{authority->second}}});
-            const auto now = clock_t::now ();
-            const auto descriptor =
-              live_target_descriptor (request.fence.target, reservation->second.request.key.kind,
-                                      reservation->second.request.intent.stable_type, now, false);
-            if (!descriptor
-                || !capacity_bundle_present (_pending_by_placement, request.fence.target,
-                                             request.fence.capacity_bundle))
-                return completed (
-                  object_commit_result_t{object_commit_conflict_t{authority->second}});
-            if (!store_revisions_available ())
-                return completed (object_commit_result_t{authority_generation_exhausted_t{}});
-
-            if (authority->second.allocation.object_kind == placement_object_kind_t::actor
-                && user_membership_commit_failure (
-                  std::nullopt, decode_direct_actor_authority_payload (request.ready_payload), now))
-                return completed (
-                  object_commit_result_t{object_commit_conflict_t{authority->second}});
-            if (operation_deadline != std::chrono::system_clock::time_point{}
-                && std::chrono::system_clock::now () >= operation_deadline)
-                return task_t<object_commit_result_t> (result_t<object_commit_result_t>::failure (
-                  framework_error_kind_t::deadline_exceeded, "Object creation deadline expired"));
-            authority->second.store_version = next_store_version ();
-            authority->second.payload = std::move (request.ready_payload);
-            authority->second.store_now = now;
-            authority->second.allocation.state = placement_allocation_state_t::active;
-            authority->second.pending_creation.reset ();
-            reservation->second.snapshot = authority->second;
-            reservation->second.status = reservation_status_t::committed;
-            release_pending (reservation->second);
-            apply_capacity_bundle (_active_by_placement, request.fence.target,
-                                   request.fence.capacity_bundle, true);
-            return completed (object_commit_result_t{object_committed_t{authority->second}});
-        });
-    }
+                 std::chrono::system_clock::time_point operation_deadline = {}) override;
 
     task_t<object_abort_result_t> abort (object_abort_request_t request,
                                          std::stop_token cancellation = {},
-                                         std::chrono::system_clock::time_point = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<object_abort_result_t> ();
-        return _lane.run_task ([this, request = std::move (request)] () mutable {
-            const auto key = object_key (request.key);
-            const auto reservation = _reservations.find (key);
-            if (reservation == _reservations.end ())
-                return completed (object_abort_result_t{object_abort_stale_t{}});
-            if (!same_fence (reservation->second.fence, request.fence))
-                return completed (object_abort_result_t{object_abort_stale_t{}});
-            if (reservation->second.status == reservation_status_t::aborted)
-                return completed (object_abort_result_t{object_already_aborted_t{}});
-            if (reservation->second.status == reservation_status_t::committed)
-                return completed (object_abort_result_t{object_abort_stale_t{}});
-
-            const auto authority = _authorities.find (key);
-            if (authority == _authorities.end ()
-                || authority->second.store_version != request.fence.expected_store_version)
-                return completed (object_abort_result_t{object_abort_conflict_t{
-                  authority == _authorities.end ()
-                    ? authority_read_result_t{authority_missing_t{clock_t::now ()}}
-                    : authority_read_result_t{authority->second}}});
-            _authorities.erase (authority);
-            release_pending (reservation->second);
-            reservation->second.status = reservation_status_t::aborted;
-            return completed (object_abort_result_t{object_aborted_t{}});
-        });
-    }
+                                         std::chrono::system_clock::time_point = {}) override;
 
     task_t<aggregate_prepare_result_t>
     prepare_aggregate_core (aggregate_prepare_request_t request,
-                            std::stop_token cancellation = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<aggregate_prepare_result_t> ();
-        const auto inventory_tree = aggregate_inventory::build_tree (request.participants);
-        return _lane
-          .run ([&] {
-              if (request.aggregate_generation == 0 || request.aggregate_generation > max_generation
-                  || request.participants.empty () || all_zero (request.aggregate_id.value)
-                  || request.target_owner.owner_id.empty ()
-                  || request.target_owner.lease_generation <= 0
-                  || !valid_capacity_bundle (request.capacity_bundle)
-                  || request.capacity_bundle.spot_slots != 1 || !request.capacity_bundle.spot_type
-                  || request.capacity_bundle.spot_type->object_kind
-                       != placement_object_kind_t::user_spot
-                  || std::any_of (request.participants.begin (), request.participants.end (),
-                                  [] (const aggregate_participant_t &participant) {
-                                      return !participant.membership_mutation.empty ();
-                                  })
-                  || !inventory_tree)
-                  return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
-
-              const auto aggregate_key = aggregate_id_key (request.aggregate_id);
-              const auto existing = _aggregates.find (aggregate_key);
-              if (existing != _aggregates.end ()) {
-                  if (same_aggregate_request (existing->second.request, request))
-                      return completed (aggregate_prepare_result_t{aggregate_already_prepared_t{
-                        {request.aggregate_id, request.aggregate_generation,
-                         request.inventory_digest}}});
-                  return completed (aggregate_prepare_result_t{aggregate_prepare_stale_t{}});
-              }
-
-              std::string previous;
-              for (const auto &participant : request.participants) {
-                  if (!previous.empty () && participant.key.value <= previous)
-                      return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
-                  previous = participant.key.value;
-                  const auto authority = _authorities.find (participant.key.value);
-                  if (authority == _authorities.end ()
-                      || authority->second.store_version != participant.expected_store_version)
-                      return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
-              }
-              placement_capacity_bundle_t inventory;
-              std::optional<spot_type_capacity_delta_t> inventory_spot_type;
-              for (const auto &participant : request.participants) {
-                  const auto authority = _authorities.find (participant.key.value);
-                  if (authority == _authorities.end ()
-                      || authority->second.allocation.state != placement_allocation_state_t::active
-                      || participant.owner_transition
-                           != authority_generation_transition_t::new_owner
-                      || !capacity_bundle_present (_active_by_placement,
-                                                   authority->second.allocation.target,
-                                                   authority->second.allocation.capacity_bundle))
-                      return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
-                  inventory.actor_slots += authority->second.allocation.capacity_bundle.actor_slots;
-                  inventory.spot_slots += authority->second.allocation.capacity_bundle.spot_slots;
-                  if (authority->second.allocation.capacity_bundle.spot_type) {
-                      const auto &spot_type =
-                        *authority->second.allocation.capacity_bundle.spot_type;
-                      if (inventory_spot_type
-                          && (inventory_spot_type->object_kind != spot_type.object_kind
-                              || inventory_spot_type->stable_type != spot_type.stable_type))
-                          return completed (
-                            aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
-                      inventory_spot_type = spot_type;
-                  }
-              }
-              inventory.spot_type = inventory_spot_type;
-              if (!same_capacity_bundle (inventory, request.capacity_bundle))
-                  return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
-              const object_creation_target_t target{
-                request.target_descriptor.mesh_name,
-                node_rid_t::from_string (request.target_descriptor.rid.to_string ()),
-                request.target_descriptor_lifecycle_generation, request.target_owner};
-              const auto target_descriptor = live_target_descriptor (
-                target, placement_object_kind_t::user_spot,
-                request.capacity_bundle.spot_type->stable_type, clock_t::now (), true);
-              if (!target_descriptor
-                  || !capacity_available (*target_descriptor, target, request.capacity_bundle))
-                  return completed (aggregate_prepare_result_t{aggregate_prepare_conflict_t{}});
-
-              aggregate_state_t state;
-              state.request = std::move (request);
-              state.inventory = *inventory_tree;
-              _aggregates.emplace (aggregate_key, std::move (state));
-              const auto &stored = _aggregates.at (aggregate_key).request;
-              apply_capacity_bundle (_pending_by_placement, target, stored.capacity_bundle, true);
-              return completed (aggregate_prepare_result_t{aggregate_prepared_t{
-                {stored.aggregate_id, stored.aggregate_generation, stored.inventory_digest}}});
-          })
-          .get ();
-    }
+                            std::stop_token cancellation = {}) override;
 
     task_t<aggregate_commit_result_t> commit_aggregate (aggregate_fence_t fence,
-                                                        std::stop_token cancellation = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<aggregate_commit_result_t> ();
-        return _lane
-          .run ([&] {
-              const auto aggregate = _aggregates.find (aggregate_id_key (fence.aggregate_id));
-              if (aggregate == _aggregates.end ()
-                  || aggregate->second.request.aggregate_generation != fence.aggregate_generation)
-                  return completed (aggregate_commit_result_t::stale);
-              if (aggregate->second.status == aggregate_status_t::committed)
-                  return completed (aggregate_commit_result_t::already_committed);
-              if (aggregate->second.status == aggregate_status_t::aborted)
-                  return completed (aggregate_commit_result_t::stale);
-              if (fence.inventory_digest
-                  && fence.inventory_digest->value
-                       != aggregate->second.request.inventory_digest.value)
-                  return completed (aggregate_commit_result_t::stale);
-
-              const auto participant_count = static_cast<std::size_t> (
-                std::count_if (aggregate->second.request.participants.begin (),
-                               aggregate->second.request.participants.end (),
-                               [] (const aggregate_participant_t &participant) {
-                                   return participant.owner_transition
-                                          == authority_generation_transition_t::new_owner;
-                               }));
-              if (!store_revisions_available (aggregate->second.request.participants.size ()))
-                  return completed (aggregate_commit_result_t::generation_exhausted);
-              const auto now = clock_t::now ();
-              for (const auto &participant : aggregate->second.request.participants) {
-                  const auto authority = _authorities.find (participant.key.value);
-                  if (authority == _authorities.end ()
-                      || authority->second.store_version != participant.expected_store_version)
-                      return completed (aggregate_commit_result_t::stale);
-              }
-              const object_creation_target_t target{
-                aggregate->second.request.target_descriptor.mesh_name,
-                node_rid_t::from_string (
-                  aggregate->second.request.target_descriptor.rid.to_string ()),
-                aggregate->second.request.target_descriptor_lifecycle_generation,
-                aggregate->second.request.target_owner};
-              const auto target_descriptor = live_target_descriptor (
-                target, placement_object_kind_t::user_spot,
-                aggregate->second.request.capacity_bundle.spot_type
-                  ? aggregate->second.request.capacity_bundle.spot_type->stable_type
-                  : std::string{},
-                now, true);
-              if (!target_descriptor
-                  || !capacity_bundle_present (_pending_by_placement, target,
-                                               aggregate->second.request.capacity_bundle))
-                  return completed (aggregate_commit_result_t::stale);
-              for (const auto &participant : aggregate->second.request.participants) {
-                  const auto authority = _authorities.find (participant.key.value);
-                  if (authority == _authorities.end ()
-                      || authority->second.allocation.state != placement_allocation_state_t::active
-                      || !capacity_bundle_present (_active_by_placement,
-                                                   authority->second.allocation.target,
-                                                   authority->second.allocation.capacity_bundle))
-                      return completed (aggregate_commit_result_t::stale);
-              }
-              auto next_owner_generation = _authority_owner_generation;
-              if (!issue_generations ({{&_authority_owner_generation, participant_count}}))
-                  return completed (aggregate_commit_result_t::generation_exhausted);
-              for (std::size_t index = 0; index < aggregate->second.request.participants.size ();
-                   ++index) {
-                  const auto &participant = aggregate->second.request.participants[index];
-                  auto &snapshot = _authorities.at (participant.key.value);
-                  snapshot.store_version = next_store_version ();
-                  snapshot.payload = participant.authority_payload;
-                  snapshot.store_now = now;
-                  if (participant.owner_transition
-                      == authority_generation_transition_t::new_owner) {
-                      snapshot.authority_owner_generation = ++next_owner_generation;
-                      snapshot.aggregate =
-                        authority_aggregate_codec::without_capture (snapshot.aggregate);
-                      snapshot.owner = aggregate->second.request.target_owner;
-                      const auto source_allocation = snapshot.allocation;
-                      snapshot.allocation.target = target;
-                      apply_capacity_bundle (_active_by_placement, source_allocation.target,
-                                             source_allocation.capacity_bundle, false);
-                      apply_capacity_bundle (_active_by_placement, target,
-                                             snapshot.allocation.capacity_bundle, true);
-                  }
-              }
-              apply_capacity_bundle (_pending_by_placement, target,
-                                     aggregate->second.request.capacity_bundle, false);
-              aggregate->second.status = aggregate_status_t::committed;
-              return completed (aggregate_commit_result_t::committed);
-          })
-          .get ();
-    }
+                                                        std::stop_token cancellation = {}) override;
 
     task_t<aggregate_abort_result_t> abort_aggregate (aggregate_fence_t fence,
-                                                      std::stop_token cancellation = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<aggregate_abort_result_t> ();
-        return _lane
-          .run ([&] {
-              const auto aggregate = _aggregates.find (aggregate_id_key (fence.aggregate_id));
-              if (aggregate == _aggregates.end ()
-                  || aggregate->second.request.aggregate_generation != fence.aggregate_generation)
-                  return completed (aggregate_abort_result_t::stale);
-              if (aggregate->second.status == aggregate_status_t::aborted)
-                  return completed (aggregate_abort_result_t::already_aborted);
-              if (aggregate->second.status == aggregate_status_t::committed)
-                  return completed (aggregate_abort_result_t::stale);
-              const object_creation_target_t target{
-                aggregate->second.request.target_descriptor.mesh_name,
-                node_rid_t::from_string (
-                  aggregate->second.request.target_descriptor.rid.to_string ()),
-                aggregate->second.request.target_descriptor_lifecycle_generation,
-                aggregate->second.request.target_owner};
-              apply_capacity_bundle (_pending_by_placement, target,
-                                     aggregate->second.request.capacity_bundle, false);
-              aggregate->second.status = aggregate_status_t::aborted;
-              return completed (aggregate_abort_result_t::aborted);
-          })
-          .get ();
-    }
+                                                      std::stop_token cancellation = {}) override;
 
     task_t<std::optional<std::vector<aggregate_participant_t>>>
     read_aggregate_participants (aggregate_fence_t fence,
-                                 std::stop_token cancellation = {}) override
-    {
-        if (cancellation.stop_requested ())
-            return cancelled<std::optional<std::vector<aggregate_participant_t>>> ();
-        return _lane
-          .run ([&] {
-              const auto aggregate = _aggregates.find (aggregate_id_key (fence.aggregate_id));
-              if (aggregate == _aggregates.end ()
-                  || aggregate->second.request.aggregate_generation != fence.aggregate_generation
-                  || (fence.inventory_digest
-                      && fence.inventory_digest->value
-                           != aggregate->second.request.inventory_digest.value))
-                  return completed (std::optional<std::vector<aggregate_participant_t>>{});
-              return completed (std::optional<std::vector<aggregate_participant_t>>{
-                aggregate->second.request.participants});
-          })
-          .get ();
-    }
+                                 std::stop_token cancellation = {}) override;
 
-    task_t<std::int64_t> remove_all_by_owner (location_owner_token_t owner) override
-    {
-        return _lane
-          .run ([&] {
-              if (!owner_token_is_live (owner, clock_t::now ()))
-                  return completed (std::int64_t{0});
-              std::int64_t removed = 0;
-              for (auto it = _authorities.begin (); it != _authorities.end ();) {
-                  const auto &row = it->second;
-                  if (!same_owner (row.owner, owner)) {
-                      ++it;
-                      continue;
-                  }
-                  apply_capacity_bundle (
-                    row.allocation.state == placement_allocation_state_t::active
-                      ? _active_by_placement
-                      : _pending_by_placement,
-                    row.allocation.target, row.allocation.capacity_bundle, false);
-                  it = _authorities.erase (it);
-                  ++removed;
-              }
-              return completed (removed);
-          })
-          .get ();
-    }
+    task_t<bool>
+    seal_relocation_inventory (aggregate_fence_t fence,
+                               std::string digest,
+                               std::vector<aggregate_participant_t> participants) override;
+
+    task_t<std::optional<std::vector<aggregate_participant_t>>>
+    read_relocation_inventory (aggregate_fence_t fence, std::string digest) override;
+
+    task_t<std::int64_t> remove_all_by_owner (location_owner_token_t owner) override;
 
   private:
     using clock_t = std::chrono::system_clock;
@@ -1340,10 +171,14 @@ class in_memory_location_repository_t : public location_repository_t
     struct aggregate_state_t
     {
         aggregate_prepare_request_t request;
-        aggregate_inventory::tree_t inventory;
         aggregate_status_t status = aggregate_status_t::prepared;
     };
 
+    struct sealed_inventory_t
+    {
+        std::string digest;
+        std::vector<aggregate_participant_t> participants;
+    };
 
     struct authority_scan_state_t
     {
@@ -1351,779 +186,148 @@ class in_memory_location_repository_t : public location_repository_t
         clock_t::time_point created_at;
     };
 
-    static constexpr std::uint64_t max_generation =
-      static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ());
-    template <typename T> static task_t<T> completed (T value)
-    {
-        return task_t<T> (result_t<T>::success (std::move (value)));
-    }
+    template <typename T> static task_t<T> completed (T value);
 
-    template <typename T> static task_t<T> cancelled ()
-    {
-        return task_t<T> (detail::result_access_t::failure<T> (
-          detail::make_cancellation_exception ("location store operation was cancelled")));
-    }
+    template <typename T> static task_t<T> cancelled ();
 
     std::optional<framework_error_kind_t>
     user_membership_commit_failure (const std::optional<actor_authority_payload_t> &old_member,
                                     const std::optional<actor_authority_payload_t> &member,
-                                    clock_t::time_point now) const
-    {
-        if (member && member->current_spot_kind == actor_authority_spot_kind_t::user
-            && (!old_member || old_member->current_spot_kind != member->current_spot_kind
-                || old_member->current_spot_id != member->current_spot_id
-                || old_member->current_spot_generation != member->current_spot_generation)) {
-            const auto spot =
-              _authorities.find (spot_authority_key (member->current_spot_id).value);
-            if (spot == _authorities.end ())
-                return framework_error_kind_t::not_found;
-            const auto ready =
-              stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (spot->second);
-            if (authority_mutation_locked_on_lane (spot->first) || !ready
-                || ready->spot_id != member->current_spot_id
-                || spot->second.allocation.object_kind != placement_object_kind_t::user_spot
-                || spot->second.allocation.state != placement_allocation_state_t::active
-                || spot->second.object_generation != member->current_spot_generation
-                || !owner_token_is_live (spot->second.owner, now))
-                return framework_error_kind_t::unavailable;
-        }
-        return std::nullopt;
-    }
+                                    clock_t::time_point now) const;
 
-    bool authority_mutation_locked_on_lane (const std::string &key) const
-    {
-        return std::any_of (_aggregates.begin (), _aggregates.end (), [&] (const auto &entry) {
-            return entry.second.status == aggregate_status_t::prepared
-                   && std::any_of (
-                     entry.second.request.participants.begin (),
-                     entry.second.request.participants.end (),
-                     [&] (const auto &participant) { return participant.key.value == key; });
-        });
-    }
+    bool authority_mutation_locked_on_lane (const std::string &key) const;
 
     bool release_ended_reservation_on_lane (const std::string &key,
                                             const authority_snapshot_t &snapshot,
                                             clock_t::time_point now,
                                             const object_reserve_request_t *request = nullptr,
-                                            const authority_snapshot_t *discarded = nullptr)
-    {
-        const bool active = snapshot.allocation.state == placement_allocation_state_t::active;
-        if (discarded && (!active || !discarded->same_incarnation (snapshot)))
-            return false;
-        const auto actor =
-          active && snapshot.allocation.object_kind == placement_object_kind_t::actor
-            ? decode_direct_actor_authority_payload (snapshot.payload)
-            : std::nullopt;
-        const bool closing_actor = actor && actor->state == actor_authority_state_t::closing;
-        if (active ? !request && !discarded && !closing_actor : !snapshot.pending_creation)
-            return false;
-        const auto &target = snapshot.allocation.target;
-        const bool owner_live = owner_token_is_live (snapshot.owner, now);
-        if (active && owner_live)
-            return false;
-        std::vector<std::string> members;
-        if (authority_mutation_locked_on_lane (key)) {
-            if (active)
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Object authority requires aggregate recovery");
-            return false;
-        }
-        if (active) {
-            if (snapshot.aggregate || (actor && actor->has_relocation_state))
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Object authority requires relocation recovery");
-            if (!discarded && !closing_actor) {
-                const auto &creation_target = request->target;
-                const auto descriptor = _mesh_nodes.find (mesh_node_key (
-                  creation_target.mesh_name, std::string (creation_target.node_rid.value ())));
-                // The descriptor read and authority deletion share this lane turn.
-                require_disabled_creation_policy (
-                  *request, descriptor != _mesh_nodes.end () ? &descriptor->second : nullptr);
-            }
-            if (!discarded && !closing_actor
-                && snapshot.allocation.object_kind == placement_object_kind_t::actor
-                && (!actor || actor->state != actor_authority_state_t::ready
-                    || actor->actor_id != request->key.global_id
-                    || actor->stable_type != request->intent.stable_type))
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Actor is not steady Ready");
-            if (!discarded
-                && snapshot.allocation.object_kind == placement_object_kind_t::user_spot) {
-                const auto spot =
-                  stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (snapshot);
-                if (!spot || spot->spot_id != request->key.global_id
-                    || spot->stable_type != request->intent.stable_type)
-                    throw framework_exception_t (framework_error_kind_t::unavailable,
-                                                 "User Spot is not steady Ready");
-            } else if (!discarded
-                       && snapshot.allocation.object_kind
-                            == placement_object_kind_t::instance_spot) {
-                const auto spot = decode_instance_spot_authority_payload (snapshot.payload);
-                if (!spot || spot->state != instance_spot_authority_state_t::ready
-                    || spot->activation_recovery || spot->spot_id != request->key.global_id
-                    || spot->stable_type != request->intent.stable_type)
-                    throw framework_exception_t (framework_error_kind_t::unavailable,
-                                                 "Instance Spot is not steady Ready");
-            }
-        }
-        const bool wait_elapsed =
-          !active || closing_actor || authority_release_wait_elapsed (snapshot.owner);
-        if (!discarded && active
-            && snapshot.allocation.object_kind == placement_object_kind_t::user_spot)
-            members = ended_spot_members_on_lane (key, snapshot, *request, now);
-        if (discarded && !wait_elapsed)
-            return false;
-        if (!wait_elapsed)
-            throw framework_exception_t (framework_error_kind_t::unavailable,
-                                         "Owner lease release observation is still waiting");
-        if (owner_live) {
-            const auto descriptor = _mesh_nodes.find (
-              mesh_node_key (target.mesh_name, std::string (target.node_rid.value ())));
-            if (descriptor != _mesh_nodes.end ()
-                && descriptor->second.lifecycle_generation == target.node_lifecycle_generation)
-                return false;
-        }
-        const auto reservation = _reservations.find (key);
-        if (active) {
-            apply_capacity_bundle (_active_by_placement, snapshot.allocation.target,
-                                   snapshot.allocation.capacity_bundle, false);
-        } else {
-            if (reservation == _reservations.end ())
-                return false;
-            release_pending (reservation->second);
-            reservation->second.status = reservation_status_t::aborted;
-        }
-        _authorities.erase (key);
-        for (const auto &member_key : members) {
-            const auto member = _authorities.find (member_key);
-            apply_capacity_bundle (_active_by_placement, member->second.allocation.target,
-                                   member->second.allocation.capacity_bundle, false);
-            _authorities.erase (member);
-        }
-        return true;
-    }
+                                            const authority_snapshot_t *discarded = nullptr);
 
-    // Location runtime §6.1: every Actor membership of the old User Spot incarnation must
-    // belong to an ended-owner member (steady Ready, activated, outside any aggregate, owner
-    // lease invalid). The release must fit one provider batch; the key set mirrors the
-    // provider repository batch (authority, aggregate lock, owner lease, descriptor and capacity).
     std::vector<std::string> ended_spot_members_on_lane (const std::string &spot_key,
                                                          const authority_snapshot_t &spot,
                                                          const object_reserve_request_t &request,
-                                                         clock_t::time_point now)
-    {
-        const auto node = [] (const object_creation_target_t &target) {
-            return mesh_node_key (target.mesh_name, std::string (target.node_rid.value ()));
-        };
-        std::set<std::string> batch_keys{"authority:" + spot_key,
-                                         "aggregate-lock:" + spot_key,
-                                         "owner:" + spot.owner.owner_id,
-                                         "descriptor:" + node (spot.allocation.target),
-                                         "descriptor:" + node (request.target),
-                                         "capacity:" + node (spot.allocation.target)};
-        std::vector<std::string> members;
-        bool wait_elapsed = true;
-        for (const auto &[member_key, authority] : _authorities) {
-            const auto member = decode_direct_actor_authority_payload (authority.payload);
-            if (!member || member->current_spot_kind != actor_authority_spot_kind_t::user
-                || member->current_spot_id != request.key.global_id
-                || member->current_spot_generation != spot.object_generation)
-                continue;
-            if (authority.allocation.state != placement_allocation_state_t::active
-                || member->state != actor_authority_state_t::ready || member->has_relocation_state
-                || authority.aggregate || authority_mutation_locked_on_lane (member_key))
-                throw framework_exception_t (
-                  framework_error_kind_t::unavailable,
-                  "User Spot still has a relocating or unactivated member");
-            if (owner_token_is_live (authority.owner, now))
-                throw framework_exception_t (
-                  framework_error_kind_t::unavailable,
-                  "User Spot still has a member with a live owner lease");
-            if (!authority_release_wait_elapsed (authority.owner))
-                wait_elapsed = false;
-            members.push_back (member_key);
-            batch_keys.insert ("authority:" + member_key);
-            batch_keys.insert ("aggregate-lock:" + member_key);
-            batch_keys.insert ("owner:" + authority.owner.owner_id);
-            batch_keys.insert ("capacity:" + node (authority.allocation.target));
-        }
-        if (!wait_elapsed)
-            throw framework_exception_t (framework_error_kind_t::unavailable,
-                                         "Member owner lease release observation is still waiting");
-        if (batch_keys.size () > location_store_limits::write_keys)
-            throw framework_exception_t (
-              framework_error_kind_t::unavailable,
-              "User Spot member release exceeds one Location Store batch");
-        return members;
-    }
+                                                         clock_t::time_point now);
 
-    bool owner_token_is_live (const location_owner_token_t &token, clock_t::time_point now) const
-    {
-        const auto lease = _leases.find (token.owner_id);
-        const auto generation = _active_lease_generations.find (token.owner_id);
-        return lease != _leases.end () && generation != _active_lease_generations.end ()
-               && lease->second.lease_expires_at > now
-               && generation->second == token.lease_generation;
-    }
+    bool owner_token_is_live (const location_owner_token_t &token, clock_t::time_point now) const;
 
-    // MeshNode §5.1: placement weight 0 excludes the node only from a new target selection
-    // (a new reservation or a new-owner aggregate); it does not cancel a reservation or an
-    // authority the node already holds.
     const mesh_node_descriptor_t *live_target_descriptor (const object_creation_target_t &target,
                                                           placement_object_kind_t kind,
                                                           const std::string &stable_type,
                                                           clock_t::time_point now,
-                                                          bool new_target_selection) const
-    {
-        const auto found = _mesh_nodes.find (
-          mesh_node_key (target.mesh_name, std::string (target.node_rid.value ())));
-        if (found == _mesh_nodes.end ())
-            return nullptr;
-        const auto &descriptor = found->second;
-        if (descriptor.lifecycle_generation != target.node_lifecycle_generation
-            || descriptor.owner_id != target.owner.owner_id
-            || descriptor.lease_generation != target.owner.lease_generation
-            || descriptor.state != framework_runtime_state_t::serving
-            || descriptor.object_role != object_role_t::server
-            || (new_target_selection && descriptor.placement_weight == 0)
-            || !owner_token_is_live (target.owner, now))
-            return nullptr;
-        return find_object_capability (descriptor, kind, stable_type) ? &descriptor : nullptr;
-    }
+                                                          bool new_target_selection) const;
 
-    static bool valid_mesh_node_descriptor (const mesh_node_descriptor_t &descriptor)
-    {
-        if (descriptor.mesh_name.empty () || descriptor.rid.size () == 0
-            || descriptor.lifecycle_generation == 0 || descriptor.descriptor_revision == 0
-            || descriptor.descriptor_revision > max_generation || descriptor.endpoint.empty ()
-            || descriptor.application_version < 0 || descriptor.placement_weight < 0
-            || descriptor.placement_weight > 10000 || descriptor.activation_concurrency.limit <= 0
-            || descriptor.activation_concurrency.active
-                 > static_cast<std::uint32_t> (descriptor.activation_concurrency.limit)
-            || descriptor.security_identity.empty () || descriptor.owner_id.empty ()
-            || descriptor.lease_generation <= 0
-            || descriptor.object_capabilities.size () > mesh_descriptor_list_item_limit
-            || descriptor.capacity.actors.limit < 0 || descriptor.capacity.spots.limit < 0
-            || (descriptor.capacity.actors.limit > 0
-                && descriptor.capacity.actors.active + descriptor.capacity.actors.reserved
-                     > static_cast<std::uint64_t> (descriptor.capacity.actors.limit))
-            || (descriptor.capacity.spots.limit > 0
-                && descriptor.capacity.spots.active + descriptor.capacity.spots.reserved
-                     > static_cast<std::uint64_t> (descriptor.capacity.spots.limit))
-            || descriptor.capacity.spot_types.size () > mesh_descriptor_list_item_limit
-            || (descriptor.object_role != object_role_t::server
-                && !descriptor.object_capabilities.empty ()))
-            return false;
-        for (const auto &[name, weight] : descriptor.channel_weights) {
-            if (name.empty () || weight < 0 || weight > 10000)
-                return false;
-        }
-        std::pair<int, std::string> previous;
-        bool first = true;
-        for (const auto &capability : descriptor.object_capabilities) {
-            if (capability.stable_type.empty ()
-                || ((capability.policy == maintenance_policy_kind_t::snapshot)
-                    != capability.has_snapshot_adapter)
-                || capability.spot_limit < 0
-                || (capability.object_kind == placement_object_kind_t::actor
-                    && capability.spot_limit != 0))
-                return false;
-            const auto key =
-              std::make_pair (static_cast<int> (capability.object_kind), capability.stable_type);
-            if (!first && previous >= key)
-                return false;
-            previous = key;
-            first = false;
-        }
-        std::pair<int, std::string> previous_capacity;
-        first = true;
-        for (const auto &typed : descriptor.capacity.spot_types) {
-            if (typed.stable_type.empty () || typed.object_kind == placement_object_kind_t::actor
-                || typed.usage.limit < 0
-                || (typed.usage.limit > 0
-                    && typed.usage.active + typed.usage.reserved
-                         > static_cast<std::uint64_t> (typed.usage.limit)))
-                return false;
-            const auto key =
-              std::make_pair (static_cast<int> (typed.object_kind), typed.stable_type);
-            if (!first && previous_capacity >= key)
-                return false;
-            previous_capacity = key;
-            first = false;
-        }
-        return true;
-    }
+    static bool valid_mesh_node_descriptor (const mesh_node_descriptor_t &descriptor);
 
-    static bool same_capability (const object_capability_t &left, const object_capability_t &right)
-    {
-        return left.object_kind == right.object_kind && left.stable_type == right.stable_type
-               && left.policy == right.policy
-               && left.has_snapshot_adapter == right.has_snapshot_adapter
-               && left.spot_limit == right.spot_limit
-               && left.entry_accepted == right.entry_accepted;
-    }
+    static bool same_capability (const object_capability_t &left, const object_capability_t &right);
 
     static bool same_capabilities (const std::vector<object_capability_t> &left,
-                                   const std::vector<object_capability_t> &right)
-    {
-        return left.size () == right.size ()
-               && std::equal (left.begin (), left.end (), right.begin (), same_capability);
-    }
+                                   const std::vector<object_capability_t> &right);
 
     static bool same_mesh_node_identity (const mesh_node_descriptor_t &left,
-                                         const mesh_node_descriptor_t &right)
-    {
-        return left.mesh_name == right.mesh_name && left.rid == right.rid
-               && left.lifecycle_generation == right.lifecycle_generation
-               && left.endpoint == right.endpoint && left.entry_spot_id == right.entry_spot_id
-               && left.application_version == right.application_version
-               && same_channel_names (left.channel_weights, right.channel_weights)
-               && same_capabilities (left.object_capabilities, right.object_capabilities)
-               && left.object_role == right.object_role
-               && left.capacity.actors.limit == right.capacity.actors.limit
-               && left.capacity.spots.limit == right.capacity.spots.limit
-               && std::equal (left.capacity.spot_types.begin (), left.capacity.spot_types.end (),
-                              right.capacity.spot_types.begin (), right.capacity.spot_types.end (),
-                              [] (const auto &lhs, const auto &rhs) {
-                                  return lhs.object_kind == rhs.object_kind
-                                         && lhs.stable_type == rhs.stable_type
-                                         && lhs.usage.limit == rhs.usage.limit;
-                              })
-               && left.activation_concurrency.limit == right.activation_concurrency.limit
-               && left.security_identity == right.security_identity;
-    }
+                                         const mesh_node_descriptor_t &right);
 
     static bool same_mesh_node_descriptor (const mesh_node_descriptor_t &left,
-                                           const mesh_node_descriptor_t &right)
-    {
-        return same_mesh_node_identity (left, right)
-               && left.descriptor_revision == right.descriptor_revision
-               && left.channel_weights == right.channel_weights
-               && left.placement_weight == right.placement_weight
-               && left.capacity.actors.active == right.capacity.actors.active
-               && left.capacity.actors.reserved == right.capacity.actors.reserved
-               && left.capacity.spots.active == right.capacity.spots.active
-               && left.capacity.spots.reserved == right.capacity.spots.reserved
-               && std::equal (left.capacity.spot_types.begin (), left.capacity.spot_types.end (),
-                              right.capacity.spot_types.begin (), right.capacity.spot_types.end (),
-                              [] (const auto &lhs, const auto &rhs) {
-                                  return lhs.object_kind == rhs.object_kind
-                                         && lhs.stable_type == rhs.stable_type
-                                         && lhs.usage.active == rhs.usage.active
-                                         && lhs.usage.reserved == rhs.usage.reserved
-                                         && lhs.usage.limit == rhs.usage.limit;
-                              })
-               && left.activation_concurrency.active == right.activation_concurrency.active
-               && left.maintenance_wave == right.maintenance_wave && left.state == right.state
-               && left.owner_id == right.owner_id
-               && left.lease_generation == right.lease_generation;
-    }
-
-    static bool valid_client_server_descriptor (const client_server_server_descriptor_t &descriptor)
-    {
-        return !descriptor.channel_name.empty () && descriptor.server_rid.size () != 0
-               && descriptor.lifecycle_generation != 0 && descriptor.descriptor_revision != 0
-               && descriptor.descriptor_revision <= max_generation && !descriptor.endpoint.empty ()
-               && descriptor.weight >= 0 && descriptor.weight <= 10000
-               && !descriptor.security_identity.empty () && !descriptor.owner_id.empty ()
-               && descriptor.lease_generation > 0;
-    }
-
-    static bool same_client_server_identity (const client_server_server_descriptor_t &left,
-                                             const client_server_server_descriptor_t &right)
-    {
-        return left.channel_name == right.channel_name && left.server_rid == right.server_rid
-               && left.lifecycle_generation == right.lifecycle_generation
-               && left.endpoint == right.endpoint
-               && left.security_identity == right.security_identity;
-    }
-
-    static bool same_client_server_descriptor (const client_server_server_descriptor_t &left,
-                                               const client_server_server_descriptor_t &right)
-    {
-        return same_client_server_identity (left, right)
-               && left.descriptor_revision == right.descriptor_revision
-               && left.weight == right.weight && left.state == right.state
-               && left.owner_id == right.owner_id
-               && left.lease_generation == right.lease_generation;
-    }
-
-    static bool valid_fanout_descriptor (const fanout_publisher_descriptor_t &descriptor)
-    {
-        return valid_fanout_descriptor_text (descriptor.channel_name)
-               && descriptor.publisher_rid.size () != 0 && descriptor.lifecycle_generation != 0
-               && descriptor.lifecycle_generation <= max_generation
-               && descriptor.descriptor_revision != 0
-               && descriptor.descriptor_revision <= max_generation
-               && valid_fanout_descriptor_text (descriptor.endpoint)
-               && valid_fanout_descriptor_text (descriptor.security_identity)
-               && valid_fanout_descriptor_text (descriptor.owner_id)
-               && descriptor.lease_generation > 0
-               && static_cast<unsigned int> (descriptor.state)
-                    <= static_cast<unsigned int> (framework_runtime_state_t::error);
-    }
-
-    static bool valid_fanout_descriptor_text (std::string_view value) noexcept
-    {
-        return !value.empty () && value.size () <= protocol::shortTextBytes
-               && value.find ('\0') == std::string_view::npos;
-    }
-
-    static std::size_t fanout_descriptor_encoded_size_upper_bound (
-      const fanout_publisher_descriptor_t &descriptor) noexcept
-    {
-        const auto escaped_text_bytes =
-          descriptor.channel_name.size () + descriptor.endpoint.size ()
-          + descriptor.security_identity.size () + descriptor.owner_id.size ();
-        return 512u + escaped_text_bytes * 6u + descriptor.publisher_rid.size () * 2u;
-    }
-
-    static bool same_fanout_identity (const fanout_publisher_descriptor_t &left,
-                                      const fanout_publisher_descriptor_t &right)
-    {
-        return left.channel_name == right.channel_name && left.publisher_rid == right.publisher_rid
-               && left.lifecycle_generation == right.lifecycle_generation
-               && left.endpoint == right.endpoint
-               && left.security_identity == right.security_identity;
-    }
-
-    static bool same_fanout_descriptor (const fanout_publisher_descriptor_t &left,
-                                        const fanout_publisher_descriptor_t &right)
-    {
-        return same_fanout_identity (left, right)
-               && left.descriptor_revision == right.descriptor_revision && left.state == right.state
-               && left.owner_id == right.owner_id
-               && left.lease_generation == right.lease_generation;
-    }
-
-    static bool same_channel_names (const std::map<std::string, int> &left,
-                                    const std::map<std::string, int> &right)
-    {
-        if (left.size () != right.size ())
-            return false;
-        return std::equal (left.begin (), left.end (), right.begin (),
-                           [] (const auto &l, const auto &r) { return l.first == r.first; });
-    }
-
-    static std::string mesh_node_key (const std::string &mesh_name, const zlink::routing_id_t &rid)
-    {
-        return mesh_node_key (mesh_name, rid.to_string ());
-    }
-
-    static std::string mesh_node_key (const std::string &mesh_name, const std::string &rid)
-    {
-        return mesh_name + location_composite_key::separator + rid;
-    }
-
-    static std::string client_server_key (const std::string &channel_name,
-                                          const zlink::routing_id_t &rid)
-    {
-        return channel_name + location_composite_key::separator + rid.to_hex ();
-    }
-
-    static std::string fanout_key (const std::string &channel_name, const zlink::routing_id_t &rid)
-    {
-        return channel_name + location_composite_key::separator + rid.to_hex ();
-    }
+                                           const mesh_node_descriptor_t &right);
 
     static bool
-    issue_generations (std::initializer_list<std::pair<std::uint64_t *, std::size_t>> counters)
-    {
-        for (const auto &[counter, count] : counters) {
-            if (count > max_generation || *counter > max_generation - count)
-                return false;
-        }
-        for (const auto &[counter, count] : counters)
-            *counter += count;
-        return true;
-    }
+    valid_client_server_descriptor (const client_server_server_descriptor_t &descriptor);
 
-    bool store_revisions_available (std::size_t count = 1) const
-    {
-        return count <= max_generation
-               && _store_revision <= max_generation - static_cast<std::uint64_t> (count);
-    }
+    static bool same_client_server_identity (const client_server_server_descriptor_t &left,
+                                             const client_server_server_descriptor_t &right);
 
-    std::string next_store_version ()
-    {
-        ++_store_revision;
-        return std::to_string (_store_revision);
-    }
+    static bool same_client_server_descriptor (const client_server_server_descriptor_t &left,
+                                               const client_server_server_descriptor_t &right);
 
-    static std::string object_key (const object_creation_key_t &key)
-    {
-        return (key.kind == placement_object_kind_t::actor ? actor_authority_key (key.global_id)
-                                                           : spot_authority_key (key.global_id))
-          .value;
-    }
+    static bool valid_fanout_descriptor (const fanout_publisher_descriptor_t &descriptor);
 
-    static std::string creation_operation_key (const creation_operation_identity_t &identity)
-    {
-        return std::string (identity.source_node_rid.value ()) + ":"
-               + std::to_string (identity.source_node_generation) + ":"
-               + std::to_string (identity.operation_id.high) + ":"
-               + std::to_string (identity.operation_id.low);
-    }
+    static bool valid_fanout_descriptor_text (std::string_view value) noexcept;
 
+    static std::size_t fanout_descriptor_encoded_size_upper_bound (
+      const fanout_publisher_descriptor_t &descriptor) noexcept;
 
-    static bool same_owner (const location_owner_token_t &left, const location_owner_token_t &right)
-    {
-        return left.owner_id == right.owner_id && left.lease_generation == right.lease_generation;
-    }
+    static bool same_fanout_identity (const fanout_publisher_descriptor_t &left,
+                                      const fanout_publisher_descriptor_t &right);
+
+    static bool same_fanout_descriptor (const fanout_publisher_descriptor_t &left,
+                                        const fanout_publisher_descriptor_t &right);
+
+    static bool same_channel_names (const std::map<std::string, int> &left,
+                                    const std::map<std::string, int> &right);
+
+    static std::string mesh_node_key (const std::string &mesh_name, const zlink::routing_id_t &rid);
+
+    static std::string mesh_node_key (const std::string &mesh_name, const std::string &rid);
+
+    static std::string client_server_key (const std::string &channel_name,
+                                          const zlink::routing_id_t &rid);
+
+    static std::string fanout_key (const std::string &channel_name, const zlink::routing_id_t &rid);
+
+    static bool
+    issue_generations (std::initializer_list<std::pair<std::uint64_t *, std::size_t>> counters);
+
+    bool store_revisions_available (std::size_t count = 1) const;
+
+    std::string next_store_version ();
+
+    static std::string object_key (const object_creation_key_t &key);
+
+    static std::string creation_operation_key (const creation_operation_identity_t &identity);
+
+    static bool same_owner (const location_owner_token_t &left,
+                            const location_owner_token_t &right);
 
     static bool same_target (const object_creation_target_t &left,
-                             const object_creation_target_t &right)
-    {
-        return left.mesh_name == right.mesh_name
-               && left.node_rid.value () == right.node_rid.value ()
-               && left.node_lifecycle_generation == right.node_lifecycle_generation
-               && same_owner (left.owner, right.owner);
-    }
+                             const object_creation_target_t &right);
 
     static bool same_fence (const object_reservation_fence_t &left,
-                            const object_reservation_fence_t &right)
-    {
-        return left.reservation_id == right.reservation_id
-               && left.expected_store_version == right.expected_store_version
-               && left.object_generation == right.object_generation
-               && left.authority_owner_generation == right.authority_owner_generation
-               && same_capacity_bundle (left.capacity_bundle, right.capacity_bundle)
-               && same_target (left.target, right.target);
-    }
+                            const object_reservation_fence_t &right);
 
     static bool same_aggregate_request (const aggregate_prepare_request_t &left,
-                                        const aggregate_prepare_request_t &right)
-    {
-        if (left.aggregate_id.value != right.aggregate_id.value
-            || left.aggregate_generation != right.aggregate_generation
-            || left.inventory_digest.value != right.inventory_digest.value
-            || !same_owner (left.target_owner, right.target_owner)
-            || left.participants.size () != right.participants.size ()
-            || left.target_descriptor.mesh_name != right.target_descriptor.mesh_name
-            || left.target_descriptor.rid != right.target_descriptor.rid
-            || left.target_descriptor_lifecycle_generation
-                 != right.target_descriptor_lifecycle_generation
-            || !same_capacity_bundle (left.capacity_bundle, right.capacity_bundle))
-            return false;
-        for (std::size_t index = 0; index < left.participants.size (); ++index) {
-            const auto &l = left.participants[index];
-            const auto &r = right.participants[index];
-            if (l.key.value != r.key.value || l.expected_store_version != r.expected_store_version
-                || l.authority_payload != r.authority_payload
-                || l.membership_mutation != r.membership_mutation
-                || l.owner_transition != r.owner_transition)
-                return false;
-        }
-        return true;
-    }
+                                        const aggregate_prepare_request_t &right);
 
-    static std::string capacity_node_key (const object_creation_target_t &target)
-    {
-        return target.mesh_name + location_composite_key::separator
-               + std::string (target.node_rid.value ()) + location_composite_key::separator
-               + std::to_string (target.node_lifecycle_generation);
-    }
+    static std::string capacity_node_key (const object_creation_target_t &target);
 
-    static std::string actor_capacity_key (const object_creation_target_t &target)
-    {
-        return capacity_node_key (target) + location_composite_key::separator + "actor";
-    }
+    static std::string actor_capacity_key (const object_creation_target_t &target);
 
-    static std::string spot_capacity_key (const object_creation_target_t &target)
-    {
-        return capacity_node_key (target) + location_composite_key::separator + "spot";
-    }
+    static std::string spot_capacity_key (const object_creation_target_t &target);
 
     static std::string spot_type_capacity_key (const object_creation_target_t &target,
-                                               const spot_type_capacity_delta_t &spot_type)
-    {
-        return spot_capacity_key (target) + location_composite_key::separator
-               + std::to_string (static_cast<int> (spot_type.object_kind))
-               + location_composite_key::separator + spot_type.stable_type;
-    }
+                                               const spot_type_capacity_delta_t &spot_type);
 
-    static bool valid_capacity_bundle (const placement_capacity_bundle_t &bundle)
-    {
-        if (bundle.actor_slots
-              > static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ())
-            || bundle.spot_slots > 1 || (bundle.actor_slots == 0 && bundle.spot_slots == 0)
-            || (bundle.spot_slots == 0 && bundle.spot_type)
-            || (bundle.spot_slots == 1
-                && (!bundle.spot_type || bundle.spot_type->slots != 1
-                    || bundle.spot_type->stable_type.empty ()
-                    || bundle.spot_type->object_kind == placement_object_kind_t::actor)))
-            return false;
-        return true;
-    }
+    static bool valid_capacity_bundle (const placement_capacity_bundle_t &bundle);
 
     static bool bundle_matches_object (const placement_capacity_bundle_t &bundle,
                                        placement_object_kind_t kind,
-                                       const std::string &stable_type)
-    {
-        if (!valid_capacity_bundle (bundle))
-            return false;
-        if (kind == placement_object_kind_t::actor)
-            return bundle.actor_slots == 1 && bundle.spot_slots == 0;
-        return bundle.actor_slots == 0 && bundle.spot_slots == 1 && bundle.spot_type
-               && bundle.spot_type->object_kind == kind
-               && bundle.spot_type->stable_type == stable_type;
-    }
+                                       const std::string &stable_type);
 
     static bool same_capacity_bundle (const placement_capacity_bundle_t &left,
-                                      const placement_capacity_bundle_t &right)
-    {
-        if (left.actor_slots != right.actor_slots || left.spot_slots != right.spot_slots
-            || left.spot_type.has_value () != right.spot_type.has_value ())
-            return false;
-        return !left.spot_type
-               || (left.spot_type->object_kind == right.spot_type->object_kind
-                   && left.spot_type->stable_type == right.spot_type->stable_type
-                   && left.spot_type->slots == right.spot_type->slots);
-    }
+                                      const placement_capacity_bundle_t &right);
 
     bool capacity_available (const mesh_node_descriptor_t &descriptor,
                              const object_creation_target_t &target,
-                             const placement_capacity_bundle_t &bundle) const
-    {
-        const auto available = [&] (const std::string &key, std::uint32_t delta,
-                                    std::int32_t limit) {
-            if (delta == 0 || limit == 0)
-                return true;
-            const auto active = _active_by_placement.find (key);
-            const auto reserved = _pending_by_placement.find (key);
-            const auto current =
-              (active == _active_by_placement.end () ? 0u : active->second)
-              + (reserved == _pending_by_placement.end () ? 0u : reserved->second);
-            return current
-                     <= static_cast<std::uint64_t> (limit)
-                          - std::min<std::uint64_t> (delta, static_cast<std::uint64_t> (limit))
-                   && delta <= static_cast<std::uint32_t> (limit);
-        };
-        if (!available (actor_capacity_key (target), bundle.actor_slots,
-                        descriptor.capacity.actors.limit)
-            || !available (spot_capacity_key (target), bundle.spot_slots,
-                           descriptor.capacity.spots.limit))
-            return false;
-        if (bundle.spot_type) {
-            const auto typed = std::find_if (
-              descriptor.capacity.spot_types.begin (), descriptor.capacity.spot_types.end (),
-              [&] (const spot_type_capacity_t &candidate) {
-                  return candidate.object_kind == bundle.spot_type->object_kind
-                         && candidate.stable_type == bundle.spot_type->stable_type;
-              });
-            const auto limit =
-              typed == descriptor.capacity.spot_types.end () ? 0 : typed->usage.limit;
-            if (!available (spot_type_capacity_key (target, *bundle.spot_type),
-                            bundle.spot_type->slots, limit))
-                return false;
-        }
-        return true;
-    }
+                             const placement_capacity_bundle_t &bundle) const;
 
     static void apply_capacity_bundle (std::map<std::string, std::uint64_t> &counters,
                                        const object_creation_target_t &target,
                                        const placement_capacity_bundle_t &bundle,
-                                       bool add)
-    {
-        const auto apply = [&] (const std::string &key, std::uint32_t delta) {
-            if (delta == 0)
-                return;
-            auto &current = counters[key];
-            if (add)
-                current += delta;
-            else
-                current = current >= delta ? current - delta : 0;
-        };
-        apply (actor_capacity_key (target), bundle.actor_slots);
-        apply (spot_capacity_key (target), bundle.spot_slots);
-        if (bundle.spot_type)
-            apply (spot_type_capacity_key (target, *bundle.spot_type), bundle.spot_type->slots);
-    }
+                                       bool add);
 
     static bool capacity_bundle_present (const std::map<std::string, std::uint64_t> &counters,
                                          const object_creation_target_t &target,
-                                         const placement_capacity_bundle_t &bundle)
-    {
-        const auto present = [&] (const std::string &key, std::uint32_t delta) {
-            if (delta == 0)
-                return true;
-            const auto found = counters.find (key);
-            return found != counters.end () && found->second >= delta;
-        };
-        return present (actor_capacity_key (target), bundle.actor_slots)
-               && present (spot_capacity_key (target), bundle.spot_slots)
-               && (!bundle.spot_type
-                   || present (spot_type_capacity_key (target, *bundle.spot_type),
-                               bundle.spot_type->slots));
-    }
+                                         const placement_capacity_bundle_t &bundle);
 
-    void apply_capacity_projection (mesh_node_descriptor_t &descriptor) const
-    {
-        descriptor.capacity.actors.active = 0;
-        descriptor.capacity.actors.reserved = 0;
-        descriptor.capacity.spots.active = 0;
-        descriptor.capacity.spots.reserved = 0;
-        const object_creation_target_t target{descriptor.mesh_name,
-                                              node_rid_t::from_string (descriptor.rid.to_string ()),
-                                              descriptor.lifecycle_generation,
-                                              {descriptor.owner_id, descriptor.lease_generation}};
-        const auto count = [] (const std::map<std::string, std::uint64_t> &values,
-                               const std::string &key) {
-            const auto found = values.find (key);
-            return found == values.end () ? 0u : found->second;
-        };
-        descriptor.capacity.actors.active =
-          count (_active_by_placement, actor_capacity_key (target));
-        descriptor.capacity.actors.reserved =
-          count (_pending_by_placement, actor_capacity_key (target));
-        descriptor.capacity.spots.active = count (_active_by_placement, spot_capacity_key (target));
-        descriptor.capacity.spots.reserved =
-          count (_pending_by_placement, spot_capacity_key (target));
-        for (auto &typed : descriptor.capacity.spot_types) {
-            const spot_type_capacity_delta_t delta{typed.object_kind, typed.stable_type, 1};
-            typed.usage.active =
-              count (_active_by_placement, spot_type_capacity_key (target, delta));
-            typed.usage.reserved =
-              count (_pending_by_placement, spot_type_capacity_key (target, delta));
-        }
-    }
+    void apply_capacity_projection (mesh_node_descriptor_t &descriptor) const;
 
-    void release_pending (const reservation_state_t &reservation)
-    {
-        apply_capacity_bundle (_pending_by_placement, reservation.fence.target,
-                               reservation.fence.capacity_bundle, false);
-    }
+    void release_pending (const reservation_state_t &reservation);
 
-    static bool all_zero (const std::array<std::byte, 16> &value)
-    {
-        return std::all_of (value.begin (), value.end (),
-                            [] (std::byte item) { return item == std::byte{0}; });
-    }
+    static bool all_zero (const std::array<std::byte, 16> &value);
 
-    static std::string aggregate_id_key (const aggregate_id_t &id)
-    {
-        return zlink::framework::detail::encode_hex (std::span<const std::byte> (id.value));
-    }
+    static std::string aggregate_id_key (const aggregate_id_t &id);
 
-    void cleanup_scans (clock_t::time_point now)
-    {
-        for (auto scan = _authority_scans.begin (); scan != _authority_scans.end ();) {
-            if (now - scan->second.created_at > std::chrono::minutes (1))
-                scan = _authority_scans.erase (scan);
-            else
-                ++scan;
-        }
-    }
+    void cleanup_scans (clock_t::time_point now);
 
-    static std::size_t parse_offset (const std::string &value)
-    {
-        try {
-            return static_cast<std::size_t> (std::stoull (value));
-        }
-        catch (...) {
-            return 0;
-        }
-    }
+    static std::size_t parse_offset (const std::string &value);
 
     runtime::state_lane_t _lane;
     std::map<std::string, mesh_node_descriptor_t> _mesh_nodes;
@@ -2136,6 +340,7 @@ class in_memory_location_repository_t : public location_repository_t
     std::map<std::string, reservation_state_t> _reservations;
     std::map<std::string, creation_terminal_record_t> _creation_terminals;
     std::map<std::string, aggregate_state_t> _aggregates;
+    std::map<std::string, sealed_inventory_t> _sealed_inventories;
     std::map<std::string, std::uint64_t> _pending_by_placement;
     std::map<std::string, std::uint64_t> _active_by_placement;
     std::uint64_t _object_generation = 0;

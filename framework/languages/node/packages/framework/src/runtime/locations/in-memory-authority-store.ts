@@ -1006,10 +1006,8 @@ export class ZLinkInMemoryAuthorityStore {
         row,
         changesOwner: participant.ownerTransition === 'newOwner',
         relocation:
-          commitAuthorityRelocation(
-            row.snapshot.relocation,
-            fence.aggregateId.value
-          ) ?? row.snapshot.relocation
+          commitAuthorityRelocation(row.snapshot.relocation, fence.aggregateId.value) ??
+          row.snapshot.relocation
       });
     }
     if (
@@ -1313,9 +1311,6 @@ function validateAggregateRequest(request: ZLinkAggregatePrepareRequest): void {
   if (request.aggregateGeneration < 1n || request.participants.length < 1) {
     throw new RangeError('Aggregate generation and participant count are invalid.');
   }
-  if (request.inventoryDigest.byteLength !== SHA256_DIGEST_BYTES) {
-    throw new TypeError(`Aggregate inventory digest must contain ${SHA256_DIGEST_BYTES} bytes.`);
-  }
   validateCapacityVector(request.capacity);
   for (const participant of request.participants) {
     if (participant.relocation !== undefined)
@@ -1543,7 +1538,7 @@ function sameAggregateRequest(
     left.aggregateId.value !== right.aggregateId.value ||
     left.aggregateGeneration !== right.aggregateGeneration ||
     !sameOwner(left.targetOwner, right.targetOwner) ||
-    !Buffer.from(left.inventoryDigest).equals(Buffer.from(right.inventoryDigest)) ||
+    left.sealedInventoryDigest !== right.sealedInventoryDigest ||
     left.participants.length !== right.participants.length ||
     !sameDescriptor(left.targetDescriptor, right.targetDescriptor) ||
     left.targetDescriptorLifecycleGeneration !== right.targetDescriptorLifecycleGeneration ||
@@ -1573,7 +1568,6 @@ function cloneAggregateRequest(
     targetOwner: { ...request.targetOwner },
     targetDescriptor: { ...request.targetDescriptor },
     capacity: cloneCapacity(request.capacity),
-    inventoryDigest: Buffer.from(request.inventoryDigest),
     participants: request.participants.map((participant) => ({
       ...participant,
       authorityKey: { ...participant.authorityKey },

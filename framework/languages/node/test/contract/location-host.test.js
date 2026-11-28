@@ -2670,7 +2670,7 @@ test('degraded host rejects factory and restore confirmation until owner lease r
   }
 });
 
-test('degraded host rejects stateful target, relocation and peer capacity admission until owner lease recovery', async t => {
+test('degraded host rejects stateful target and relocation admission until owner lease recovery', async t => {
   let monotonicMs = 0;
   t.mock.method(performance, 'now', () => monotonicMs);
   const scenario = recoverableHostScenario();
@@ -2683,7 +2683,8 @@ test('degraded host rejects stateful target, relocation and peer capacity admiss
         return true;
       });
     assert.equal(scenario.runtime.status.acceptingWork, false);
-    assert.equal(scenario.runtime.spotNodeRuntime.options.peerAdmissionSealed('play'), true);
+    // Location runtime §5 fences stateful work. MeshNode §7.1 owns the transport handshake.
+    assert.equal(scenario.runtime.spotNodeRuntime.options.peerAdmissionSealed('play'), false);
     await assert.rejects(
       scenario.runtime.dispatchMeshRecord(() => 'remote',
         'play',

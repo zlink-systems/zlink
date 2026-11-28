@@ -647,8 +647,11 @@ int main ()
                 .result ()
                 .value ()));
         };
-        seed_counter ("zlink:v11:object-counter", "7");
-        seed_counter ("zlink:v11:authority-owner-counter", "3");
+        seed_counter (std::string ("zlink:v12:object-counter") + '\0' + "actor" + '\0' + "user:42",
+                      "7");
+        seed_counter (std::string ("zlink:v12:authority-owner-counter") + '\0' + "actor" + '\0'
+                        + "user:42",
+                      "3");
 
         object_creation_target_t target{"main", node_rid_t::from_string (rid_raw), 1, claim->token};
         object_reserve_request_t actor_request;
@@ -662,10 +665,17 @@ int main ()
         assert (reservation != nullptr);
         assert (reservation->fence.object_generation == 7);
         assert (reservation->fence.authority_owner_generation == 3);
-        const auto object_counter =
-          std::get<store_found_t> (store.read ({"zlink:v11:object-counter"}).result ().value ());
-        const auto authority_owner_counter = std::get<store_found_t> (
-          store.read ({"zlink:v11:authority-owner-counter"}).result ().value ());
+        const auto object_counter = std::get<store_found_t> (
+          store
+            .read ({std::string ("zlink:v12:object-counter") + '\0' + "actor" + '\0' + "user:42"})
+            .result ()
+            .value ());
+        const auto authority_owner_counter =
+          std::get<store_found_t> (store
+                                     .read ({std::string ("zlink:v12:authority-owner-counter")
+                                             + '\0' + "actor" + '\0' + "user:42"})
+                                     .result ()
+                                     .value ());
         assert (object_counter.value.bytes == bytes ("8"));
         assert (authority_owner_counter.value.bytes == bytes ("4"));
 

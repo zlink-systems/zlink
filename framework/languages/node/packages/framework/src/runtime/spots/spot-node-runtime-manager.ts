@@ -108,7 +108,6 @@ import type { ZLinkSpotRouteResolver } from './spot-routing-internal';
 import type {
   ZLinkEntryActorRuntime,
   ZLinkSpotActorHandoffRuntime,
-  ZLinkSpotActorTransferRuntime,
   ZLinkSpotBoundSessionRuntime
 } from './spot-runtime-ports';
 
@@ -145,7 +144,6 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
   readonly entryActorRuntime?: ZLinkEntryActorRuntime;
-  readonly actorTransferRuntime?: ZLinkSpotActorTransferRuntime;
   readonly boundSessionRuntime?: ZLinkSpotBoundSessionRuntime;
   readonly actorHandoffRuntime?: ZLinkSpotActorHandoffRuntime;
   readonly detachedTaskRunner: ZLinkDetachedTaskRunner;
@@ -1179,7 +1177,6 @@ export class ZLinkSpotNodeRuntimeManager {
       actorRequestHandlers: spotNode.entrySpotActorRequestHandlers,
       messageSerializers: this.options.registration.messageSerializers,
       entryActorRuntime: this.options.entryActorRuntime,
-      actorTransferRuntime: this.options.actorTransferRuntime,
       boundSessionRuntime: this.options.boundSessionRuntime,
       actorHandoffRuntime: this.options.actorHandoffRuntime,
       detachedTaskRunner: this.options.detachedTaskRunner,

@@ -21,7 +21,7 @@ internal sealed record ZLinkAuthorityRelocation(
     [property: JsonConverter(typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter))]
         ulong ApplicationVersion,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        JsonElement? Completion = null
+        ZLinkRelocationCompletionProgress? Completion = null
 )
 {
     internal record Fence(
@@ -60,24 +60,62 @@ internal sealed record ZLinkAuthorityRelocation(
         [property: JsonPropertyOrder(4)] string ExpectedStoreVersion
     ) : Fence(NodeRid, NodeGeneration, OwnerId, OwnerLeaseGeneration);
 
+    internal static ZLinkCanonicalRelocationAuthorityState? FinishingTarget(
+        ZLinkAuthoritySnapshot snapshot
+    ) =>
+        ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(snapshot, out var state)
+        && IsCommittedTargetAuthority(
+            snapshot,
+            (ServiceWireCodec.RelocationPhase)state.Phase,
+            state.State.TargetNodeRid,
+            state.State.TargetNodeGeneration,
+            state.TargetOwnerId,
+            state.TargetOwnerLeaseGeneration
+        )
+            ? state.State
+            : null;
+
+    internal ZLinkAuthorityRelocation WithAcceptedRequests(ulong? acceptedRequests) =>
+        acceptedRequests is { } count
+            ? this with
+            {
+                Completion = ZLinkRelocationCompletionProgress.Start(count),
+            }
+            : this;
+
     internal static bool MatchesCommittedTarget(
         ZLinkAuthoritySnapshot authority,
         Guid relocationId,
         ulong attemptGeneration
     ) =>
-        authority.Relocation
-            is {
-                Phase: >= ServiceWireCodec.RelocationPhase.Committed
-                    and <= ServiceWireCodec.RelocationPhase.Completed,
-                Target: { } target,
-            } relocation
+        authority.Relocation is { Target: { } target } relocation
         && relocation.RelocationId == relocationId
         && target.AttemptGeneration == attemptGeneration
-        && target.NodeRid == authority.Allocation.Descriptor.Rid.ToHex()
-        && target.NodeGeneration == authority.Allocation.DescriptorLifecycleGeneration
-        && target.OwnerId == authority.OwnerId
+        && IsCommittedTargetAuthority(
+            authority,
+            relocation.Phase,
+            target.NodeRid,
+            target.NodeGeneration,
+            target.OwnerId,
+            target.OwnerLeaseGeneration
+        );
+
+    internal static bool IsCommittedTargetAuthority(
+        ZLinkAuthoritySnapshot authority,
+        ServiceWireCodec.RelocationPhase phase,
+        string targetNodeRid,
+        ulong targetNodeGeneration,
+        string targetOwnerId,
+        ulong targetOwnerLeaseGeneration
+    ) =>
+        phase
+            is >= ServiceWireCodec.RelocationPhase.Committed
+                and <= ServiceWireCodec.RelocationPhase.Completed
+        && targetNodeRid == authority.Allocation.Descriptor.Rid.ToHex()
+        && targetNodeGeneration == authority.Allocation.DescriptorLifecycleGeneration
+        && targetOwnerId == authority.OwnerId
         && authority.OwnerLeaseGeneration > 0
-        && target.OwnerLeaseGeneration == (ulong)authority.OwnerLeaseGeneration;
+        && targetOwnerLeaseGeneration == (ulong)authority.OwnerLeaseGeneration;
 
     internal bool HoldsCapturedSource(
         Guid relocationId,
@@ -102,7 +140,7 @@ internal sealed record ZLinkAuthorityRelocation(
         Guid id,
         ZLinkCanonicalRelocationAuthorityState state,
         string inventorySha256,
-        JsonElement? completion = null
+        ZLinkRelocationCompletionProgress? completion = null
     ) =>
         new(
             id,
@@ -246,7 +284,7 @@ internal static class ZLinkAuthorityAggregateCodec
             )
         )
             throw InvalidRecord();
-        JsonElement? completion = null;
+        ZLinkRelocationCompletionProgress? completion = null;
         if (value.TryGetProperty("completion", out var progress))
         {
             var accepted = Number(progress, "acceptedRequests");
@@ -266,7 +304,13 @@ internal static class ZLinkAuthorityAggregateCodec
                 )
             )
                 throw InvalidRecord();
-            completion = progress.Clone();
+            completion = new(
+                accepted,
+                completed,
+                pending,
+                completed == 0 ? null : reference.GetString(),
+                completed == 0 ? null : sha.GetString()
+            );
         }
         return new(
             relocationId,

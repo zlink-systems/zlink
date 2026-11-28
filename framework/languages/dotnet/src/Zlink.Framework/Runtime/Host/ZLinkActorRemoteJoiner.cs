@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
@@ -206,6 +207,8 @@ internal sealed class ZLinkActorRemoteJoiner(
         CancellationToken cancellationToken
     )
     {
+        if (actorState.RegisteredJoinWithPendingCapturedRequest)
+            throw CapturedRequestWaitCycle();
         var authorityStore =
             registration.Locations.ResolveStore()
             ?? throw new InvalidOperationException("Actor handoff requires a location store.");
@@ -245,7 +248,7 @@ internal sealed class ZLinkActorRemoteJoiner(
             );
         var completionTransferred = false;
         TargetAdmissionReservationRoute? targetReservationRoute = null;
-        var sourceCaptureStarted = false;
+        ZLinkAuthoritySnapshot? capturedSourceAuthority = null;
         // Spec 25 §5: source admission seal through the one-way cutover
         // submission terminal, independently of target commit observation.
         var interruption = Diagnostics.ZLinkRelocationInterruptionOperation.Disabled;
@@ -283,9 +286,9 @@ internal sealed class ZLinkActorRemoteJoiner(
                         deadline,
                         reservation => targetReservationRoute = reservation,
                         () => interruption.Complete(),
-                        () =>
+                        snapshot =>
                         {
-                            sourceCaptureStarted = true;
+                            capturedSourceAuthority = snapshot;
                             interruption = runtime.RelocationInterruption.Start(
                                 Diagnostics.ZLinkRelocationUnitKind.Actor
                             );
@@ -307,12 +310,12 @@ internal sealed class ZLinkActorRemoteJoiner(
                     await RollbackSourceHandoffAsync(
                             actor,
                             actorState,
-                            sourceCaptureStarted,
+                            capturedSourceAuthority is not null,
                             targetReservationRoute,
                             handoffId,
                             precommit,
                             authorityStore,
-                            authority.Snapshot,
+                            capturedSourceAuthority ?? authority.Snapshot,
                             sourceAuthority,
                             actorRef
                         )
@@ -336,7 +339,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                             await RollbackSourceHandoffAsync(
                                     actor,
                                     actorState,
-                                    sourceCaptureStarted,
+                                    capturedSourceAuthority is not null,
                                     targetReservationRoute,
                                     handoffId,
                                     precommit,
@@ -373,12 +376,12 @@ internal sealed class ZLinkActorRemoteJoiner(
             await RollbackSourceHandoffAsync(
                     actor,
                     actorState,
-                    sourceCaptureStarted,
+                    capturedSourceAuthority is not null,
                     targetReservationRoute,
                     handoffId,
                     precommit,
                     authorityStore,
-                    authority.Snapshot,
+                    capturedSourceAuthority ?? authority.Snapshot,
                     sourceAuthority,
                     actorRef
                 )
@@ -519,7 +522,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         (DateTimeOffset Utc, TimeSpan Monotonic) deadline,
         Action<TargetAdmissionReservationRoute> setTargetReservation,
         Action markCutoverTerminal,
-        Action markSourceCaptureStarted,
+        Action<ZLinkAuthoritySnapshot> markSourceCaptureStarted,
         ZLinkRuntimeMetrics.ZLinkRelocationMetricOperation relocationMetric,
         CancellationToken cancellationToken
     )
@@ -711,9 +714,10 @@ internal sealed class ZLinkActorRemoteJoiner(
             CancellationToken cancellationToken
         )
         {
-            var authorityRecheck = await authorityStore
-                .ReadAuthorityAsync(
+            var authorityRecheck = await ReadCaptureAuthorityAsync(
+                    authorityStore,
                     ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.Context.ActorId),
+                    actorState,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -727,6 +731,8 @@ internal sealed class ZLinkActorRemoteJoiner(
                     ZLinkFrameworkErrorKind.InvalidOperation,
                     $"Actor '{actor.Context.ActorId}' authority changed during relocation preflight."
                 );
+            ZLinkRelocationCompletionStore.RequireCompletionSettled(currentAuthority.Snapshot);
+            sourceAuthoritySnapshot = currentAuthority.Snapshot;
             var hasBoundSession = actorState.TryGetBoundSession(out var boundSession);
             //  The seal branch is conditional, so its trace being absent means
             //  "skipped" just as often as "never reached". Record the condition.
@@ -797,7 +803,7 @@ internal sealed class ZLinkActorRemoteJoiner(
             ZLinkCapturedActorRelocationState relocationState;
             relocationMetric.Start();
             _ = await actorState.BeginHandoffCaptureAsync(cancellationToken).ConfigureAwait(false);
-            markSourceCaptureStarted();
+            markSourceCaptureStarted(sourceAuthoritySnapshot);
             relocationState = await CaptureRelocationStateAsync(
                     relocation,
                     actor,
@@ -1109,7 +1115,8 @@ internal sealed class ZLinkActorRemoteJoiner(
                             ),
                         registration.Locations.Options.PollingInterval,
                         cancellationToken,
-                        () => sourceNode.Node.ObservePeerRoute(targetNodeRid)
+                        () => sourceNode.Node.ObservePeerRoute(targetNodeRid),
+                        runtime.ForceStopToken
                     )
                     .ConfigureAwait(false);
                 //  Relocation flow §4.4: a confirmed Preserve returns the retained
@@ -1201,6 +1208,57 @@ internal sealed class ZLinkActorRemoteJoiner(
             }
         }
     }
+
+    private async ValueTask<ZLinkAuthorityReadResult> ReadCaptureAuthorityAsync(
+        IZLinkLocationRepository store,
+        ZLinkAuthorityKey key,
+        ZLinkActorRuntimeState actorState,
+        CancellationToken cancellationToken
+    )
+    {
+        var read = await store.ReadAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
+        if (
+            read is not ZLinkAuthorityReadResult.Found found
+            || ZLinkAuthorityRelocation.FinishingTarget(found.Snapshot) is not { } previous
+        )
+            return read;
+
+        var terminal =
+            runtime.StandaloneActorRelocationRuntime.FindTargetTerminal(
+                previous,
+                key,
+                out var hasCapturedRequests
+            )
+            ?? services
+                .GetService<ZLinkSpotRetireTargetRuntime>()
+                ?.FindTargetTerminal(previous, key, out hasCapturedRequests);
+        if (terminal is not null)
+        {
+            if (actorState.OwnsCurrentDispatch && hasCapturedRequests && !terminal.IsCompleted)
+                throw CapturedRequestWaitCycle();
+            await terminal.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        // Publication may have been cleared between the Store read and the attempt lookup.
+        read = await store.ReadAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (
+            read is ZLinkAuthorityReadResult.Found current
+            && ZLinkAuthorityRelocation.FinishingTarget(current.Snapshot) is not null
+        )
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "The previous relocation still holds the Actor authority publication."
+            );
+        return read;
+    }
+
+    private static ZLinkFrameworkException CapturedRequestWaitCycle() =>
+        new(
+            ZLinkFrameworkErrorKind.Unavailable,
+            "Actor Join cannot wait for captured request delivery in its own Actor turn."
+        );
 
     private ZLinkBackendCanonicalActorJoinRequest CreateCanonicalActorJoinRequest(
         ZLinkBackendActorRef actor,

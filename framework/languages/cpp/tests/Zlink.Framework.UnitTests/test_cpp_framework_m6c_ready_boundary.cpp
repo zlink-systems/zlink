@@ -78,7 +78,7 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
               co_return co_await restore_release.task ();
           co_return true;
       },
-      [] (const auto &) { return true; },
+      [] (const auto &, const auto &) { return true; },
       [&] (const auto &) -> f::task_t<void> {
           ++aborts;
           co_return;

@@ -112,11 +112,28 @@ void sub_socket_t::unset_subscription (const std::string &filter_)
         throw_config_error (rc);
 }
 
-void sub_socket_t::subscription_at (size_t index_, std::string &filter_out_, bool *is_pattern_out_)
+std::optional<subscription_filter_t> subscriber_socket_t::subscription_at (size_t index_)
 {
-    const int rc = socket_t::subscription_at (index_, filter_out_, is_pattern_out_);
-    if (rc != 0)
+    subscription_filter_t entry;
+    const int rc = socket_t::subscription_at (index_, entry.filter, &entry.is_pattern);
+    if (rc == ZLINK_CONFIG_NOT_FOUND)
+        return std::nullopt;
+    if (rc != ZLINK_CONFIG_OK)
         throw_config_error (rc);
+    return entry;
+}
+
+bool subscriber_socket_t::subscription_at (size_t index_,
+                                           std::string &filter_out_,
+                                           bool *is_pattern_out_)
+{
+    auto entry = subscription_at (index_);
+    if (!entry)
+        return false;
+    filter_out_ = std::move (entry->filter);
+    if (is_pattern_out_)
+        *is_pattern_out_ = entry->is_pattern;
+    return true;
 }
 
 xsub_socket_t::xsub_socket_t (context_t &ctx_) : subscriber_socket_t (ctx_, socket_type::xsub)
@@ -133,13 +150,6 @@ void xsub_socket_t::set_subscription (const std::string &filter_)
 void xsub_socket_t::unset_subscription (const std::string &filter_)
 {
     const int rc = socket_t::unset_subscription (filter_);
-    if (rc != 0)
-        throw_config_error (rc);
-}
-
-void xsub_socket_t::subscription_at (size_t index_, std::string &filter_out_, bool *is_pattern_out_)
-{
-    const int rc = socket_t::subscription_at (index_, filter_out_, is_pattern_out_);
     if (rc != 0)
         throw_config_error (rc);
 }

@@ -434,8 +434,10 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                 return spot_node_runtime_t (spot_state)
                   .materialize_relocation_state (frozen, object, spot, cancellation);
             },
-            [spot_state = state->spot_state] (const std::vector<stateful::object_ref_t> &objects) {
-                return spot_node_runtime_t (spot_state).commit_relocation_materialization (objects);
+            [spot_state = state->spot_state] (const std::vector<stateful::object_ref_t> &objects,
+                                              const auto &before_join_completion) {
+                return spot_node_runtime_t (spot_state)
+                  .commit_relocation_materialization (objects, before_join_completion);
             },
             [spot_state = state->spot_state] (const std::vector<stateful::object_ref_t> &objects) {
                 return spot_node_runtime_t (spot_state)
@@ -734,7 +736,7 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
     target_spots.set_route_client (route_client_t{});
     // OnLeave travels node-level (the source Entry Spot is fixed to node
     // lifecycle and is never published into mesh spot routing), mirroring
-    // how production (app.cpp) wires actor_leave_notification_sender to
+    // how production (app_framework_assembly.cpp) wires actor_leave_notification_sender to
     // application_mesh->send_to_node.
     target_spots.on_actor_leave_notification (
       [&target] (const zlink::routing_id_t &node_rid,

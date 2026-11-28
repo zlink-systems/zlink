@@ -1,3 +1,4 @@
+const { relocationInventoryStore } = require('./fixtures/relocation-authority-store');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate: turn } = require('node:timers/promises');
@@ -121,7 +122,8 @@ for (const phase of ['preparing', 'captured', 'prepared']) {
       ownerId: 'source-owner',
       ownerLeaseGeneration: 3n
     };
-    const key = encodeAuthorityKey('actor', 'aborted');
+    const key = encodeAuthorityKey('user_spot', 'aborted');
+    const member = encodeAuthorityKey('actor', 'member');
     const phases = [];
     let current = {
       kind: 'snapshot',
@@ -143,10 +145,12 @@ for (const phase of ['preparing', 'captured', 'prepared']) {
     const original = current.relocation;
     const runtime = new ZLinkHostServiceRelocationRuntime({
       locationStore: () => ({
-        async readAuthority() {
+        async readAuthority(requested) {
+          assert.equal(requested.value, key.value);
           return current;
         },
-        async compareExchangeAuthority(_key, expected, mutation) {
+        async compareExchangeAuthority(requested, expected, mutation) {
+          assert.equal(requested.value, key.value);
           assert.equal(expected.value, current.storeVersion.value);
           assert.deepEqual(mutation.payload, Buffer.from('opaque'));
           if (mutation.relocation != null)
@@ -161,12 +165,13 @@ for (const phase of ['preparing', 'captured', 'prepared']) {
         }
       })
     });
-    await runtime.releaseParticipantAuthorities(
-      { participants: [{ key: key.value }], memberships: [] },
-      '',
-      undefined,
-      'aborted'
-    );
+    await runtime.releaseSourceAuthority({
+      participants: [
+        { key: member.value, objectKind: 'actor' },
+        { key: key.value, objectKind: 'user_spot' }
+      ],
+      memberships: []
+    });
     assert.deepEqual(phases, ['aborted', undefined]);
   });
 }
@@ -270,6 +275,7 @@ for (const outcome of ['accepted', 'publication', 'deadline', 'unavailable']) {
       let joining = false;
       let captureCount = 0;
       const store = {
+        ...relocationInventoryStore(),
         async readAuthority() {
           if (joining) joinRead();
           return current;

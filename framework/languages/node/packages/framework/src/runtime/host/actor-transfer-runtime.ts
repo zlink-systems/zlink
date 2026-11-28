@@ -4,7 +4,6 @@ import {
 } from '../framework-errors-internal';
 import { encodeActorReply } from '../actors/actor-reply';
 import { ZLinkStreamMessageKind } from '../streams/protocol';
-import { createHash } from 'node:crypto';
 import {
   type ActorRef,
   type RoutingId,
@@ -14,14 +13,12 @@ import {
   type ZLinkMessageSerializer,
   type ZLinkSpot,
   ZLinkEncodedPayload,
-  ZLinkMessage,
-  ZLinkSpotKind
+  ZLinkMessage
 } from '../../contracts';
 
 import type { Message } from '../../contracts/Common/Message';
 import {
   createDeferredJoinCompletion,
-  rewriteActorAuthorityRoute,
   toFrameworkActorRef,
   type ZLinkActorHandoffCoordinator,
   type ZLinkActorHandoffPrefixAdmission,
@@ -56,7 +53,6 @@ import {
 import type { ZLinkLocationLifecycle } from '../locations';
 import { encodeAuthorityKey } from '../locations/authority-key-codec';
 import type {
-  ZLinkAggregateId,
   ZLinkAuthoritySnapshot,
   ZLinkLocationOwnerToken
 } from '../locations/internal-location-contracts';
@@ -161,13 +157,6 @@ export interface ZLinkActorTransferRuntimeActorManager {
     actorCreateRequest?: unknown,
     signal?: AbortSignal
   ): Promise<ZLinkActor>;
-  materializeTransferredActor(
-    actorId: string,
-    actorType: string,
-    adapterKey: string | undefined,
-    transferState: ZLinkMessage,
-    signal?: AbortSignal
-  ): Promise<{ readonly actor: ZLinkActor; readonly actorRef: ActorRef }>;
   prepareRelocationActor(
     actorId: string,
     actorType: string,
@@ -183,7 +172,6 @@ export interface ZLinkActorTransferRuntimeActorManager {
     }
   ): Promise<ZLinkActor>;
   publishRelocationActor(actorId: string): void;
-  rollbackTransferredActor(actor: ZLinkActor, signal?: AbortSignal): Promise<void>;
 }
 
 export interface ZLinkActorTransferRuntimeOptions {
@@ -1009,215 +997,10 @@ export class ZLinkActorTransferRuntime {
     return { actor, actorRef: state.ensureNativeActorRef(this.options.primaryMeshNode()) };
   }
 
-  async materializeRoutedActor(
-    actorId: string,
-    actorType: string,
-    adapterKey: string | undefined,
-    transferState: Message,
-    actorEntryNodeRid: RoutingId | undefined,
-    remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-    signal?: AbortSignal
-  ): Promise<{ readonly actor: ZLinkActor; readonly actorRef: ZLinkBackendActorRef }> {
-    const actorManager = this.requireActorManager(
-      'Routed actor transfer requires ZLINK_ACTOR_MANAGER.'
-    );
-    const materialized = await actorManager.materializeTransferredActor(
-      actorId,
-      actorType,
-      adapterKey,
-      wrapFrameworkPayloadMessage(transferState, this.options.messageSerializers),
-      signal
-    );
-    const state = actorManager.getState(actorId);
-    if (state === undefined) {
-      throw new Error(`Actor '${actorId}' transfer state was not created.`);
-    }
-    if (actorEntryNodeRid !== undefined) state.setEntryNodeRid(actorEntryNodeRid);
-    // The relocation delivers the binding it carried; the target installs it
-    // through the one install rule (Session–Actor binding §6, §8).
-    if (remoteBoundSessionTarget !== undefined) {
-      state.installBoundSessionBinding(remoteBoundSessionTarget);
-    }
-    return {
-      actor: materialized.actor,
-      actorRef: materialized.actorRef as unknown as ZLinkBackendActorRef
-    };
-  }
-
-  async commitRoutedActorAuthority(
-    actor: ZLinkActor,
-    sourceActorRef: ActorRef,
-    transferId: string,
-    spotId: RoutingId,
-    spotGeneration: bigint,
-    membershipEpoch: bigint,
-    deadlineUnixMs: number,
-    signal?: AbortSignal
-  ): Promise<ZLinkAuthoritySnapshot> {
-    const deadlineAtMs = performance.now() + (deadlineUnixMs - Date.now());
-    const store = this.options.authorityStore();
-    const owner = this.options.currentOwner();
-    const state = this.options.actorManager()?.getState(actor.context.actorId);
-    const actorType = state?.actorType;
-    const local = this.options.primaryMeshNode().status();
-    const targetActorRef =
-      state?.nativeActorRef === undefined
-        ? undefined
-        : toFrameworkActorRef(state.nativeActorRef, actor.context.meshName);
-    if (
-      store === undefined ||
-      owner === undefined ||
-      state === undefined ||
-      actorType === undefined ||
-      targetActorRef === undefined ||
-      local.lifecycleGeneration <= 0n ||
-      spotGeneration <= 0n ||
-      membershipEpoch <= 0n ||
-      !Number.isSafeInteger(deadlineUnixMs)
-    ) {
-      throw new Error(
-        `Actor '${actor.context.actorId}' target authority commit has an incomplete materialization fence.`
-      );
-    }
-    const key = encodeAuthorityKey('actor', actor.context.actorId);
-    const expected = await store.readAuthority(key, signal);
-    if (expected.kind !== 'snapshot') {
-      throw new Error(
-        `Actor '${actor.context.actorId}' source authority is missing at the target.`
-      );
-    }
-    const exactTarget = (value: ZLinkAuthoritySnapshot): boolean =>
-      value.allocation.state === 'active' &&
-      value.allocation.objectKind === 'actor' &&
-      value.allocation.stableType === actorType &&
-      value.objectGeneration === targetActorRef.objectGeneration &&
-      value.ownerId === owner.ownerId &&
-      value.ownerLeaseGeneration === owner.leaseGeneration &&
-      value.allocation.descriptor.meshName === actor.context.meshName &&
-      routingIdsEqual(value.allocation.descriptor.rid, local.routingId) &&
-      value.allocation.descriptorLifecycleGeneration === local.lifecycleGeneration;
-    const adopt = (value: ZLinkAuthoritySnapshot): ZLinkAuthoritySnapshot => {
-      state.setLocationGeneration(value.authorityOwnerGeneration);
-      state.setJoinedSpot(spotId, state.spot, membershipEpoch, spotGeneration);
-      state.markLocationOwned();
-      return value;
-    };
-    if (exactTarget(expected)) return adopt(expected);
-    if (
-      expected.allocation.state !== 'active' ||
-      expected.allocation.objectKind !== 'actor' ||
-      expected.allocation.stableType !== actorType ||
-      expected.objectGeneration !== sourceActorRef.objectGeneration ||
-      expected.allocation.descriptor.meshName !== sourceActorRef.meshName ||
-      !routingIdsEqual(expected.allocation.descriptor.rid, sourceActorRef.nodeRid)
-    ) {
-      throw new Error(
-        `Actor '${actor.context.actorId}' relocation source authority is stale at the target.`
-      );
-    }
-    const membershipMutation = Buffer.from(
-      JSON.stringify({
-        actorId: actor.context.actorId,
-        actorGeneration: targetActorRef.objectGeneration.toString(),
-        spotId: String(spotId),
-        spotGeneration: spotGeneration.toString(),
-        membershipEpoch: membershipEpoch.toString()
-      }),
-      'utf8'
-    );
-    const request = {
-      aggregateId: { value: transferId } as ZLinkAggregateId,
-      aggregateGeneration: local.lifecycleGeneration,
-      participants: [
-        {
-          authorityKey: key,
-          expectedStoreVersion: expected.storeVersion,
-          ownerTransition: 'newOwner' as const,
-          authorityPayload: rewriteActorAuthorityRoute(
-            expected.payload,
-            targetActorRef,
-            String(spotId),
-            spotGeneration,
-            ZLinkSpotKind.User,
-            local.lifecycleGeneration,
-            owner
-          ),
-          membershipMutation
-        }
-      ],
-      inventoryDigest: createHash('sha256').update(membershipMutation).digest(),
-      targetDescriptor: {
-        meshName: actor.context.meshName,
-        rid: local.routingId
-      },
-      targetDescriptorLifecycleGeneration: local.lifecycleGeneration,
-      capacity: expected.allocation.capacity,
-      targetOwner: owner
-    };
-    let prepared: Awaited<ReturnType<typeof store.prepareAggregate>> | undefined;
-    let firstError: unknown;
-    for (;;) {
-      signal?.throwIfAborted();
-      try {
-        prepared = await store.prepareAggregate(request, signal, BigInt(deadlineUnixMs));
-      } catch (error) {
-        firstError ??= error;
-      }
-      if (prepared?.kind === 'prepared' || prepared?.kind === 'alreadyPrepared') break;
-      const observed = await this.readActorAuthorityForRelocation(store, key, signal);
-      if (observed !== undefined && exactTarget(observed)) return adopt(observed);
-      if (
-        prepared !== undefined ||
-        (observed !== undefined && !sameSourceActorAuthority(observed, expected))
-      ) {
-        throw new Error(`Actor '${actor.context.actorId}' target authority prepare was rejected.`, {
-          cause: firstError
-        });
-      }
-      await waitForActorAuthorityRetry(deadlineAtMs, signal, firstError);
-    }
-    for (;;) {
-      signal?.throwIfAborted();
-      let committed: Awaited<ReturnType<typeof store.commitAggregate>> | undefined;
-      try {
-        committed = await store.commitAggregate(prepared.fence, signal);
-      } catch (error) {
-        firstError ??= error;
-      }
-      const observed = await this.readActorAuthorityForRelocation(store, key, signal);
-      if (observed !== undefined && exactTarget(observed)) return adopt(observed);
-      if (
-        committed?.kind === 'stale' ||
-        committed?.kind === 'generationExhausted' ||
-        (observed !== undefined && !sameSourceActorAuthority(observed, expected))
-      ) {
-        throw new Error(
-          `Actor '${actor.context.actorId}' target authority commit did not converge.`,
-          { cause: firstError }
-        );
-      }
-      await waitForActorAuthorityRetry(deadlineAtMs, signal, firstError);
-    }
-  }
-
-  private async readActorAuthorityForRelocation(
-    store: ZLinkAuthorityStore,
-    key: ReturnType<typeof encodeAuthorityKey>,
-    signal?: AbortSignal
-  ): Promise<ZLinkAuthoritySnapshot | undefined> {
-    try {
-      const current = await store.readAuthority(key, signal);
-      return current.kind === 'snapshot' ? current : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
   commitRoutedActor(actor: ZLinkActor, spotId: RoutingId, spot: ZLinkSpot): void {
     const state = this.options.actorManager()?.getState(actor.context.actorId);
     state?.setJoinedSpot(spotId, spot);
     const actorRef = state?.nativeActorRef;
-    // The legacy routed transfer stages this input before its native Actor exists.
     const binding = state?.boundSessionValue;
     if (
       actorRef !== undefined &&
@@ -1379,39 +1162,6 @@ export class ZLinkActorTransferRuntime {
 
   async openRoutedActorSession(_actor: ZLinkActor): Promise<void> {}
 
-  clearRoutedActor(actor: ZLinkActor): void {
-    this.options.actorManager()?.getState(actor.context.actorId)?.clearJoinedSpot();
-    this.options.clearRemoteActorPacketTarget(actor.context.actorId);
-  }
-
-  async rollbackRoutedActor(actor: ZLinkActor, signal?: AbortSignal): Promise<void> {
-    const manager = this.options.actorManager();
-    const state = manager?.getState(actor.context.actorId);
-    const actorType = state?.actorType;
-    const lifecycle = this.options.locationLifecycle();
-    let locationError: unknown;
-    if (state?.ownsLocation === true && actorType !== undefined && lifecycle !== undefined) {
-      try {
-        await lifecycle.releaseActor(actorType, actor.context.actorId);
-        state.markLocationReleased();
-      } catch (error) {
-        locationError = error;
-      }
-    }
-    try {
-      await manager?.rollbackTransferredActor(actor, signal);
-    } catch (rollbackError) {
-      if (locationError !== undefined) {
-        throw new AggregateError(
-          [locationError, rollbackError],
-          `Actor '${actor.context.actorId}' target transfer rollback failed.`
-        );
-      }
-      throw rollbackError;
-    }
-    if (locationError !== undefined) throw locationError;
-  }
-
   actorEntryNodeRid(actor: ZLinkActor): RoutingId | undefined {
     return this.options.actorManager()?.getState(actor.context.actorId)?.entryNodeRid;
   }
@@ -1518,47 +1268,5 @@ function waitForOperation<T>(operation: Promise<T>, signal?: AbortSignal): Promi
         reject(error);
       }
     );
-  });
-}
-
-function sameSourceActorAuthority(
-  current: ZLinkAuthoritySnapshot,
-  expected: ZLinkAuthoritySnapshot
-): boolean {
-  return (
-    current.storeVersion.value === expected.storeVersion.value &&
-    current.objectGeneration === expected.objectGeneration &&
-    current.authorityOwnerGeneration === expected.authorityOwnerGeneration &&
-    current.ownerId === expected.ownerId &&
-    current.ownerLeaseGeneration === expected.ownerLeaseGeneration &&
-    current.allocation.state === expected.allocation.state &&
-    current.allocation.objectKind === expected.allocation.objectKind &&
-    current.allocation.stableType === expected.allocation.stableType &&
-    current.allocation.descriptor.meshName === expected.allocation.descriptor.meshName &&
-    routingIdsEqual(current.allocation.descriptor.rid, expected.allocation.descriptor.rid) &&
-    current.allocation.descriptorLifecycleGeneration ===
-      expected.allocation.descriptorLifecycleGeneration
-  );
-}
-
-async function waitForActorAuthorityRetry(
-  deadlineAtMs: number,
-  signal: AbortSignal | undefined,
-  cause: unknown
-): Promise<void> {
-  signal?.throwIfAborted();
-  const remaining = deadlineAtMs - performance.now();
-  if (remaining <= 0) {
-    throw new Error('Actor target authority deadline expired.', { cause });
-  }
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, Math.min(TRANSFER_POLL_INTERVAL_MS, remaining));
-    timer.unref();
-    const abort = () => {
-      clearTimeout(timer);
-      reject(signal?.reason);
-    };
-    signal?.addEventListener('abort', abort, { once: true });
-    timer.refresh();
   });
 }

@@ -1,7 +1,12 @@
 import { RequestRuntime } from '../foundation/request-runtime';
 import type { PendingOperation } from '../foundation/operation-registry';
 import { inspectRuntime } from '../internal-observation';
-import { type ActorRef, type RoutingId, ZLinkFrameworkException } from '../../contracts';
+import {
+  type ActorRef,
+  type RoutingId,
+  type ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException
+} from '../../contracts';
 
 import type { Message } from '../../contracts/Common/Message';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
@@ -99,7 +104,7 @@ export interface ZLinkActorHandoffResult {
   readonly ok: boolean;
   readonly response?: unknown;
   readonly error?: string;
-  readonly errorKind?: ZLinkFrameworkInternalErrorKind;
+  readonly errorKind?: ZLinkFrameworkInternalErrorKind | ZLinkFrameworkErrorKind;
 }
 
 export type ZLinkActorHandoffDispatch = (
@@ -553,16 +558,7 @@ export class ZLinkActorHandoffCoordinator {
             reportResult(packet, { index: packet.index, ok: true, response });
           }
         },
-        reject: (error) =>
-          reportResult(packet, {
-            index: packet.index,
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
-            errorKind:
-              error instanceof ZLinkFrameworkException
-                ? internalFrameworkErrorKind(error)
-                : undefined
-          })
+        reject: (error) => reportResult(packet, handoffFailure(packet.index, error))
       });
       handoff.nextIndex = Math.max(handoff.nextIndex, packet.index + 1);
       handoff.pendingBytes += packetBytes(packet);
@@ -841,13 +837,7 @@ export class ZLinkActorHandoffCoordinator {
       pending.resolve?.(result.response);
       return;
     }
-    const error =
-      result.errorKind === undefined
-        ? new Error(result.error ?? 'Actor provisional packet replay failed.')
-        : createInternalFrameworkException(
-            result.errorKind,
-            result.error ?? 'Actor provisional packet replay failed.'
-          );
+    const error = handoffError(result, 'Actor provisional packet replay failed.');
     if (pending.reject !== undefined) {
       pending.reject(error);
       return;
@@ -1356,7 +1346,7 @@ export class ZLinkActorHandoffCoordinator {
     } else if (result.errorKind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded) {
       route.reject(actorDeadlineExceeded(route.actorId));
     } else {
-      route.reject(new Error(result.error ?? 'Actor handoff replay failed.'));
+      route.reject(handoffError(result, 'Actor handoff replay failed.'));
     }
     return 'terminalReceived';
   }
@@ -1982,18 +1972,33 @@ export async function replayActorHandoffBacklog(
       );
       results.push({ index: packet.index, ok: true, response });
     } catch (error) {
-      results.push({
-        index: packet.index,
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-        errorKind:
-          error instanceof ZLinkFrameworkException ? internalFrameworkErrorKind(error) : undefined
-      });
+      results.push(handoffFailure(packet.index, error));
     } finally {
       decoded.parts.forEach((part) => part.close());
     }
   }
   return results;
+}
+
+function handoffFailure(index: number, error: unknown): ZLinkActorHandoffResult {
+  return {
+    index,
+    ok: false,
+    error: error instanceof Error ? error.message : String(error),
+    errorKind:
+      error instanceof ZLinkFrameworkException
+        ? (internalFrameworkErrorKind(error) ?? error.kind)
+        : undefined
+  };
+}
+
+function handoffError(result: ZLinkActorHandoffResult, fallback: string): Error {
+  const message = result.error ?? fallback;
+  const kind = result.errorKind;
+  if (kind === undefined) return new Error(message);
+  return typeof kind === 'number'
+    ? new ZLinkFrameworkException(kind, message)
+    : createInternalFrameworkException(kind, message);
 }
 
 function encodePacket(

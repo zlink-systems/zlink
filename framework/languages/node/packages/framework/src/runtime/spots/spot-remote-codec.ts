@@ -1,12 +1,10 @@
-import { ZLINK_MAX_SPOT_ID_BYTES } from '../../contracts/Common/CoreTypes';
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import type { ZLinkBackendActorRef } from '../backend/contracts';
-import { decodeActorMessageFollowContext, type ZLinkRemoteBoundSessionTarget } from '../actors';
-import type { RoutingId, ZLinkActor } from '../../contracts';
+import { decodeActorMessageFollowContext } from '../actors';
+import type { ZLinkActor } from '../../contracts';
 import type { ZLinkActorHandoffPacket } from '../actors/actor-handoff';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import type { ZLinkBackendReceived as BackendReceived } from '../backend/runtime-values';
 import { decodeChannelEnvelope } from '../channels/channel-envelope';
 import { decodeRoutingId as decodeWireRoutingId, routingIdsEqual } from '../routing-id';
 import {
@@ -22,16 +20,6 @@ export interface ZLinkRemoteActorJoinActor {
   readonly actorRef: ZLinkBackendActorRef;
 }
 
-export type ZLinkRoutedActorTransferProvider = (
-  actorId: string,
-  actorType: string,
-  adapterKey: string | undefined,
-  transferState: Message,
-  actorEntryNodeRid: RoutingId | undefined,
-  remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
-  signal?: AbortSignal
-) => Promise<ZLinkRemoteActorJoinActor>;
-
 export interface ZLinkDecodedRemoteActorJoinRequest {
   readonly envelope?: ReturnType<typeof decodeChannelEnvelope>;
   readonly raw: boolean;
@@ -39,16 +27,11 @@ export interface ZLinkDecodedRemoteActorJoinRequest {
   readonly actorType: string;
   readonly actorRef?: ZLinkBackendActorRef;
   readonly expectedMembershipEpoch: bigint;
-  readonly actorEntryNodeRid?: RoutingId;
-  readonly remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget;
   readonly actorCreateRequest?: Message;
   readonly request: Message;
   readonly requestContentType: string;
-  readonly phase?: 'admission' | 'commit';
+  readonly phase?: 'admission';
   readonly transferId?: string;
-  readonly transferAdapterKey?: string;
-  readonly transferState?: Message;
-  readonly handoffBacklog: readonly ZLinkActorHandoffPacket[];
 }
 
 export type { ZLinkRemoteActorJoinWirePayload };
@@ -83,13 +66,9 @@ export function decodeRemoteActorJoinPayload(
     readonly actorType: string;
   },
   request: Message,
-  received: BackendReceived,
   raw: boolean,
   envelope?: ReturnType<typeof decodeChannelEnvelope>
 ): ZLinkDecodedRemoteActorJoinRequest {
-  const phase =
-    payload.phase === 'admission' || payload.phase === 'commit' ? payload.phase : undefined;
-  const transferProtocol = phase !== undefined;
   return {
     envelope,
     raw,
@@ -105,45 +84,12 @@ export function decodeRemoteActorJoinPayload(
       typeof payload.expectedMembershipEpoch === 'string'
         ? BigInt(payload.expectedMembershipEpoch)
         : 0n,
-    actorEntryNodeRid:
-      typeof payload.actorEntryNodeRid === 'string'
-        ? decodeWireRoutingId(payload.actorEntryNodeRid, payload.actorEntryNodeRidHex)
-        : undefined,
     actorCreateRequest:
       typeof payload.actorCreateRequest === 'string'
         ? RuntimeMessage.from(Buffer.from(payload.actorCreateRequest, 'base64'))
         : undefined,
-    phase,
+    phase: payload.phase === 'admission' ? payload.phase : undefined,
     transferId: typeof payload.transferId === 'string' ? payload.transferId : undefined,
-    transferAdapterKey:
-      typeof payload.transferAdapterKey === 'string' ? payload.transferAdapterKey : undefined,
-    transferState:
-      typeof payload.transferState === 'string'
-        ? RuntimeMessage.from(Buffer.from(payload.transferState, 'base64'))
-        : undefined,
-    handoffBacklog: decodeHandoffBacklog(payload.handoffBacklog),
-    remoteBoundSessionTarget: decodeRemoteBoundSessionTarget(
-      transferProtocol
-        ? payload.boundSessionRouterChannelId
-        : (payload.boundSessionRouterChannelId ?? payload.routerChannelId),
-      transferProtocol
-        ? payload.boundSessionTargetNodeRid
-        : (payload.boundSessionTargetNodeRid ??
-            (received.routingId === null ? payload.actorNodeRid : String(received.routingId))),
-      payload.boundSessionTargetNodeRidHex,
-      transferProtocol
-        ? payload.boundSessionSpotId
-        : (payload.boundSessionSpotId ?? payload.sourceSpotId),
-      payload.boundSessionNodeRid,
-      payload.boundSessionNodeRidHex,
-      payload.boundSessionRid,
-      payload.boundSessionRidHex,
-      payload.boundSessionBindingGeneration,
-      payload.boundSessionPreviousAuthorityOwnerGeneration,
-      payload.boundSessionPreviousOwnerLeaseGeneration,
-      payload.boundSessionRelocationSealId,
-      payload.boundSessionServiceWireRelocation
-    ),
     request,
     requestContentType:
       typeof payload.requestContentType === 'string'
@@ -207,115 +153,4 @@ export function decodeRemoteActorRef(
     actorId,
     generation: typeof generation === 'string' ? BigInt(generation) : 0n
   } as ZLinkBackendActorRef;
-}
-
-export function decodeRemoteBoundSessionTarget(
-  routerChannelId: unknown,
-  targetNodeRid: unknown,
-  targetNodeRidHex: unknown,
-  spotId: unknown,
-  sessionNodeRid: unknown,
-  sessionNodeRidHex: unknown,
-  sessionRid: unknown,
-  sessionRidHex: unknown,
-  bindingGeneration: unknown,
-  previousAuthorityOwnerGeneration?: unknown,
-  previousOwnerLeaseGeneration?: unknown,
-  relocationSealId?: unknown,
-  serviceWireRelocation?: unknown
-): ZLinkRemoteBoundSessionTarget | undefined {
-  if (
-    typeof routerChannelId !== 'string' ||
-    typeof targetNodeRid !== 'string' ||
-    spotId === undefined ||
-    spotId === null
-  ) {
-    return undefined;
-  }
-  return {
-    routerChannelId,
-    targetNodeRid: decodeWireRoutingId(targetNodeRid, targetNodeRidHex),
-    spotId: requireSpotId(String(spotId)),
-    sessionNodeRid:
-      typeof sessionNodeRid === 'string'
-        ? decodeWireRoutingId(sessionNodeRid, sessionNodeRidHex)
-        : undefined,
-    sessionRid:
-      typeof sessionRid === 'string' ? decodeWireRoutingId(sessionRid, sessionRidHex) : undefined,
-    bindingGeneration:
-      typeof bindingGeneration === 'string' ? BigInt(bindingGeneration) : undefined,
-    previousAuthorityOwnerGeneration:
-      typeof previousAuthorityOwnerGeneration === 'string'
-        ? BigInt(previousAuthorityOwnerGeneration)
-        : undefined,
-    previousOwnerLeaseGeneration:
-      typeof previousOwnerLeaseGeneration === 'string'
-        ? BigInt(previousOwnerLeaseGeneration)
-        : undefined,
-    relocationSealId: typeof relocationSealId === 'string' ? relocationSealId : undefined,
-    serviceWireRelocation: decodeBoundSessionServiceWireRelocation(serviceWireRelocation)
-  };
-}
-
-function decodeBoundSessionServiceWireRelocation(
-  value: unknown
-): ZLinkRemoteBoundSessionTarget['serviceWireRelocation'] {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'object' || value === null) {
-    throw new TypeError('Remote bound Session service-wire relocation fence is invalid.');
-  }
-  const text = (key: string): string => {
-    const candidate = (value as Record<string, unknown>)[key];
-    if (typeof candidate !== 'string' || candidate.length === 0) {
-      throw new TypeError(`Remote bound Session service-wire '${key}' is invalid.`);
-    }
-    return candidate;
-  };
-  const nonNegative = (key: string): bigint => {
-    const candidate = BigInt(text(key));
-    if (candidate < 0n)
-      throw new TypeError(`Remote bound Session service-wire '${key}' is invalid.`);
-    return candidate;
-  };
-  const positive = (key: string): bigint => {
-    const candidate = nonNegative(key);
-    if (candidate === 0n)
-      throw new TypeError(`Remote bound Session service-wire '${key}' is invalid.`);
-    return candidate;
-  };
-  const relocation = {
-    high: nonNegative('relocationHigh'),
-    low: nonNegative('relocationLow')
-  };
-  if (relocation.high === 0n && relocation.low === 0n) {
-    throw new TypeError('Remote bound Session service-wire relocation identity is zero.');
-  }
-  return {
-    relocation,
-    coordinator: {
-      ownerId: text('coordinatorOwnerId'),
-      leaseGeneration: positive('coordinatorLeaseGeneration'),
-      nodeRid: text('coordinatorNodeRid'),
-      nodeGeneration: positive('coordinatorNodeGeneration'),
-      expectedAuthorityStoreVersion: text('coordinatorExpectedAuthorityStoreVersion')
-    },
-    session: {
-      sessionOwnerNodeRid: text('sessionOwnerNodeRid'),
-      sessionOwnerNodeGeneration: positive('sessionOwnerNodeGeneration'),
-      sessionOwnerId: text('sessionOwnerId'),
-      sessionOwnerLeaseGeneration: positive('sessionOwnerLeaseGeneration'),
-      sessionRid: text('sessionRid'),
-      bindingGeneration: positive('bindingGeneration')
-    }
-  };
-}
-
-function requireSpotId(value: string): string {
-  const bytes = Buffer.byteLength(value, 'utf8');
-  if (bytes < 1 || bytes > ZLINK_MAX_SPOT_ID_BYTES) {
-    throw new Error(
-      `Remote bound session SpotId must contain 1..${ZLINK_MAX_SPOT_ID_BYTES} UTF-8 bytes.`
-    );
-  }
-  return value;
 }

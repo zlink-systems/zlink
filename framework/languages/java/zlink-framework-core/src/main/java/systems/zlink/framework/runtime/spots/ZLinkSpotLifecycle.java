@@ -18,10 +18,10 @@ import systems.zlink.framework.spots.ZLinkSpotCloseReason;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -42,7 +42,7 @@ final class ZLinkSpotLifecycle {
     private final ZLinkSpotLocationCoordinator locations;
     private final ZLinkSpotActivationFactory activationFactory;
     private final ActorOccupancy actorOccupancy;
-    private final Set<Class<? extends ZLinkSpot<?>>> registeredSpotTypes;
+    private final Map<Class<?>, Class<? extends ZLinkSpot<?>>> registeredSpotTypes;
     private final List<EntrySpotActivation> entrySpots;
     private final Map<String, SpotActivation> spots = new ConcurrentHashMap<>();
 
@@ -66,7 +66,11 @@ final class ZLinkSpotLifecycle {
         this.meshSpotNodes = meshSpotNodes;
         this.backendExecutor = backendExecutor;
         this.locations = locations;
-        this.registeredSpotTypes = Set.copyOf(registeredSpotTypes);
+        Map<Class<?>, Class<? extends ZLinkSpot<?>>> types = new HashMap<>();
+        for (var type : registeredSpotTypes) {
+            types.put(Objects.requireNonNull(type, "spot type"), type);
+        }
+        this.registeredSpotTypes = Map.copyOf(types);
         this.entrySpots = new ArrayList<>();
         this.activationFactory = activationFactory;
         this.actorOccupancy = actorOccupancy;
@@ -193,11 +197,11 @@ final class ZLinkSpotLifecycle {
 
     CompletionStage<PreparedUserSpot> prepareRelocationReserved(
             String admittingMeshName,
-            Class<? extends ZLinkSpot<?>> spotType,
+            Class<?> spotType,
             String spotId,
             long objectGeneration,
             byte[] timerEnvelope) {
-        requireRegistered(spotType);
+        var registeredType = requireRegistered(spotType);
         requireSpotId(spotId);
         if (objectGeneration == 0) {
             return CompletableFuture.failedFuture(
@@ -214,7 +218,7 @@ final class ZLinkSpotLifecycle {
                         backendSpot ->
                                 activationFactory
                                         .activateRelocation(
-                                                spotType,
+                                                registeredType,
                                                 backendSpot,
                                                 node.routingId(),
                                                 timerEnvelope)
@@ -265,7 +269,7 @@ final class ZLinkSpotLifecycle {
         return CompletableFuture.completedFuture(null);
     }
 
-    Object preparedSpot(PreparedUserSpot prepared) {
+    ZLinkSpot<?> preparedSpot(PreparedUserSpot prepared) {
         requireNewPrepared(prepared);
         return prepared.created().activation().spot();
     }
@@ -275,25 +279,23 @@ final class ZLinkSpotLifecycle {
         return activationFactory.initializeRelocation(prepared.created().activation());
     }
 
-    CompletionStage<Object> beginReservedIngressHold(PreparedUserSpot prepared) {
+    CompletionStage<ZLinkSerialExecutionQueue.RelocationSeal> beginReservedIngressHold(
+            PreparedUserSpot prepared) {
         requireNewPrepared(prepared);
-        return prepared.created()
-                .activation()
-                .context
-                .relocationPreparationSeal()
-                .thenApply(seal -> seal);
+        return prepared.created().activation().context.relocationPreparationSeal();
     }
 
-    CompletionStage<Void> resumeReservedIngress(PreparedUserSpot prepared, Object ingressHold) {
+    CompletionStage<Void> resumeReservedIngress(
+            PreparedUserSpot prepared, ZLinkSerialExecutionQueue.RelocationSeal ingressHold) {
         requireNewPrepared(prepared);
-        if (!(ingressHold instanceof ZLinkSerialExecutionQueue.RelocationSeal seal)) {
+        if (ingressHold == null) {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("reserved relocation target ingress hold was lost"));
         }
         return prepared.created()
                 .activation()
                 .context
-                .abortRelocation(seal)
+                .abortRelocation(ingressHold)
                 .thenAccept(
                         restored -> {
                             if (!restored)
@@ -695,14 +697,16 @@ final class ZLinkSpotLifecycle {
                         .count();
     }
 
-    private void requireRegistered(Class<? extends ZLinkSpot<?>> spotType) {
+    private Class<? extends ZLinkSpot<?>> requireRegistered(Class<?> spotType) {
         if (spotType == null) {
             throw new ZLinkConfigurationException("spot type is required");
         }
-        if (!registeredSpotTypes.contains(spotType)) {
+        var registered = registeredSpotTypes.get(spotType);
+        if (registered == null) {
             throw new ZLinkConfigurationException(
                     "spot type is not registered: " + spotType.getName());
         }
+        return registered;
     }
 
     private static void requireSpotId(String spotId) {

@@ -67,11 +67,18 @@ int main ()
       root / "extensions/framework-locations-redis/include/zlink/locations/redis.hpp");
     const auto redis_cpp =
       read_text_file (root / "extensions/framework-locations-redis/src/redis.cpp");
-    const auto spot_runtime =
-      read_text_file (root / "framework/src/runtime/spots/spot_runtime.cpp");
-    const auto spot_runtime_header =
-      read_text_file (root / "framework/src/runtime/spots/spot_runtime.hpp");
-    const auto spot_runtime_surface = spot_runtime + spot_runtime_header;
+    const auto spot_runtime_dir = root / "framework/src/runtime/spots";
+    std::string spot_runtime;
+    for (const auto &entry : std::filesystem::directory_iterator (spot_runtime_dir)) {
+        const auto &path = entry.path ();
+        if (path.extension () == ".cpp" && path.stem ().string ().starts_with ("spot_runtime")) {
+            spot_runtime += read_text_file (path) + '\n';
+        }
+    }
+    const auto spot_runtime_header = read_text_file (spot_runtime_dir / "spot_runtime.hpp");
+    const auto spot_runtime_surface =
+      spot_runtime + spot_runtime_header
+      + read_text_file (spot_runtime_dir / "spot_runtime_internal.hpp");
     const auto actor_serial_executor =
       read_text_file (root / "framework/src/runtime/actors/actor_serial_executor.hpp");
     const auto spot_route_packets =
@@ -80,8 +87,13 @@ int main ()
       read_text_file (root / "framework/src/runtime/spots/spot_route_packets.hpp");
     const auto spot_route_dispatcher =
       read_text_file (root / "framework/src/runtime/spots/spot_route_internal_dispatcher.cpp");
-    const auto stream_host =
-      read_text_file (root / "framework/src/runtime/streams/stream_host_service.cpp");
+    const auto stream_host_core =
+      read_text_file (root / "framework/src/runtime/streams/stream_host_core.cpp");
+    const auto stream_host_session =
+      read_text_file (root / "framework/src/runtime/streams/stream_host_session.cpp");
+    const auto stream_host_transport =
+      read_text_file (root / "framework/src/runtime/streams/stream_host_transport.cpp");
+    const auto stream_host_transports = stream_host_core + stream_host_transport;
     const auto call_hpp =
       read_text_file (include_root / "zlink/framework/contracts/channels/call.hpp");
     const auto mesh_node_hpp =
@@ -134,9 +146,11 @@ int main ()
     const auto authority_key_codec =
       read_text_file (root / "framework/src/runtime/locations/authority_key_codec.hpp");
     const auto in_memory_location_store =
-      read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.hpp");
+      read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.hpp")
+      + read_text_file (root / "framework/src/runtime/locations/in_memory_location_store.cpp");
     const auto provider_location_repository =
-      read_text_file (root / "framework/src/runtime/locations/provider_location_repository.hpp");
+      read_text_file (root / "framework/src/runtime/locations/provider_location_repository.hpp")
+      + read_text_file (root / "framework/src/runtime/locations/provider_location_repository.cpp");
     const auto public_store_adapters =
       read_text_file (root / "framework/src/runtime/stateful/public_store_adapters.hpp");
     const auto actor_client =
@@ -145,7 +159,14 @@ int main ()
       read_text_file (root / "framework/src/runtime/utils/relocation_id_generator.hpp");
     const auto live_location_reader =
       read_text_file (root / "framework/src/runtime/locations/live_location_reader.hpp");
-    const auto app_runtime = read_text_file (root / "framework/src/runtime/host/app.cpp");
+    const auto app_host = root / "framework/src/runtime/host";
+    const auto app_runtime = read_text_file (app_host / "app.cpp")
+                             + read_text_file (app_host / "app_actor_gateway.cpp")
+                             + read_text_file (app_host / "app_framework_assembly.cpp")
+                             + read_text_file (app_host / "app_instance_spot.cpp")
+                             + read_text_file (app_host / "app_maintenance.cpp")
+                             + read_text_file (app_host / "app_store_repositories.cpp")
+                             + read_text_file (app_host / "app_internal.hpp");
     const auto dispatch_events =
       read_text_file (root / "framework/src/runtime/diagnostics/dispatch_events.hpp");
     const auto mesh_node_runtime =
@@ -153,7 +174,17 @@ int main ()
     const auto actor_transfer_coordinator =
       read_text_file (root / "framework/src/runtime/spots/actor_transfer_coordinator.cpp");
     const auto mesh_node_host_service =
-      read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp");
+      read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_service.cpp")
+      + read_text_file (root
+                        / "framework/src/runtime/mesh/mesh_node_host_actor_creation_completion.cpp")
+      + read_text_file (root
+                        / "framework/src/runtime/mesh/mesh_node_host_actor_creation_target.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_actor_lifecycle.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_descriptors.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_dispatch.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_operations.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_placement.cpp")
+      + read_text_file (root / "framework/src/runtime/mesh/mesh_node_host_user_spot.cpp");
     const auto framework_message =
       read_text_file (include_root / "zlink/framework/contracts/messaging/message.hpp");
     const auto serializer_header =
@@ -174,8 +205,13 @@ int main ()
       read_text_file (root / "framework/src/runtime/protocol/service_wire_codec.hpp");
     const auto generated_service_wire_constants =
       read_text_file (root / "../../runtime/protocol/generated/cpp/service_wire_constants.hpp");
+    const auto stateful_runtime = root / "framework/src/runtime/stateful";
     const auto public_host_runtime =
-      read_text_file (root / "framework/src/runtime/stateful/public_host_runtime.cpp");
+      read_text_file (stateful_runtime / "public_host_runtime.cpp")
+      + read_text_file (stateful_runtime / "public_host_runtime_authority.cpp")
+      + read_text_file (stateful_runtime / "public_host_runtime_messaging.cpp")
+      + read_text_file (stateful_runtime / "public_host_runtime_relocation.cpp")
+      + read_text_file (stateful_runtime / "public_host_runtime_internal.hpp");
     const auto raw_stateful_dispatch =
       read_text_file (root / "framework/src/runtime/stateful/raw_stateful_dispatch.cpp");
     const auto raw_stateful_dispatch_header =
@@ -252,8 +288,8 @@ int main ()
     const auto bound_session_registration =
       app_runtime.find ("actor_gateway_runtime.on_bound_session");
     const auto local_session_route =
-      stream_host.find ("local_node->to_hex () == actor_route->node_rid.to_hex ()");
-    const auto remote_session_route = stream_host.find ("bind_application_actor_session");
+      stream_host_session.find ("local_node->to_hex () == actor_route->node_rid.to_hex ()");
+    const auto remote_session_route = stream_host_session.find ("bind_application_actor_session");
     gate.require (
       bound_session_registration != std::string::npos && local_session_route != std::string::npos
         && remote_session_route != std::string::npos && local_session_route < remote_session_route,
@@ -279,11 +315,12 @@ int main ()
                   "dispatch options still expose the no-op unhandled policy");
 
     /* IMP-CP-08 — session-owned transport failures reach the session callback. */
-    gate.require (stream_host.find ("stream_session_error_t::transport_error") != std::string::npos,
+    gate.require (stream_host_transports.find ("stream_session_error_t::transport_error")
+                    != std::string::npos,
                   "IMP-CP-08", "STREAM host does not classify a session transport failure");
-    gate.require (stream_host.find ("_runtime.dispatch_error_async (") != std::string::npos,
-                  "IMP-CP-08",
-                  "STREAM host does not dispatch a session transport failure callback");
+    gate.require (
+      stream_host_transports.find ("_runtime.dispatch_error_async (") != std::string::npos,
+      "IMP-CP-08", "STREAM host does not dispatch a session transport failure callback");
 
     /* IMP-CP-05 — automatic RouteMesh discovery uses MeshNode descriptors. */
     gate.require (
@@ -502,7 +539,7 @@ int main ()
     gate.require (framework_json_header.find ("<zlink/json_profile.hpp>") != std::string::npos,
                   "CPP-WIRE-003", "server JSON codec does not use the shared profile");
     for (const std::string required :
-         {"zlink::detail::json_profile::encode", "zlink::detail::json_profile::decode"}) {
+         {"zlink::detail::json_profile::try_encode", "zlink::detail::json_profile::try_decode"}) {
         gate.require (serializer_header.find (required) != std::string::npos, "CPP-WIRE-003",
                       "default typed serializer bypasses the JSON profile: " + required);
     }
@@ -751,11 +788,12 @@ int main ()
                       == std::string::npos
                     && mesh_node_runtime.find ("emit_backlog_enqueued_marker") == std::string::npos,
                   "E2E-CP-57", "actor bridge still emits environment-gated stderr handoff markers");
-    const auto stream_bind_begin = stream_host.find ("bind_actor_session (");
+    const auto stream_bind_begin = stream_host_session.find ("bind_actor_session (");
     const auto stream_remote_bind =
-      stream_host.find ("_mesh_node->bind_application_actor_session", stream_bind_begin);
+      stream_host_session.find ("_mesh_node->bind_application_actor_session", stream_bind_begin);
     gate.require (stream_bind_begin != std::string::npos && stream_remote_bind != std::string::npos
-                    && stream_host.find ("request_to_node", stream_bind_begin) == std::string::npos,
+                    && stream_host_session.find ("request_to_node", stream_bind_begin)
+                         == std::string::npos,
                   "E2E-CP-14", "SM-D2 Session binding still depends on a RouteMesh request path");
 
     /* IMP-CP-28 — unsupported extension placeholders are not public package surface. */
@@ -1225,10 +1263,10 @@ int main ()
     gate.require (
       call_hpp.find ("stream_send_call_t &timeout") == std::string::npos
         && stream_runtime.find ("_submit (header, payload)") != std::string::npos
-        && stream_host.find ("_core_socket->options ().send_timeout") == std::string::npos
-        && stream_host.find ("_core_socket->send (rid).message (std::move (frame)).async ()")
+        && stream_host_core.find ("_core_socket->options ().send_timeout") == std::string::npos
+        && stream_host_core.find ("_core_socket->send (rid).message (std::move (frame)).async ()")
              != std::string::npos
-        && stream_host.find ("co_await std::move (*pending)") != std::string::npos,
+        && stream_host_core.find ("co_await std::move (*pending)") != std::string::npos,
       "CPP-CONTRACT-STREAM-001", "STREAM send still accepts or applies a timeout");
 
     /* CPP-CONTRACT-MESH-SOCKET-001 — MeshNode ReceiveTimeout follows the
@@ -1276,7 +1314,7 @@ int main ()
     /* CPP-OWN-004 — the default JSON serializer writes and reads the encoded
      * payload directly instead of round-tripping through a binding message. */
     gate.require (
-      serializer_header.find ("zlink::detail::json_profile::encode (") != std::string::npos
+      serializer_header.find ("zlink::detail::json_profile::try_encode (") != std::string::npos
         && serializer_header.find ("nlohmann::json (value)") == std::string::npos
         && serializer_header.find ("payload.to_raw ().template parse_json") == std::string::npos
         && serializer_header.find ("zlink::message_t::from_json (value)") == std::string::npos,
@@ -1380,15 +1418,15 @@ int main ()
     /* CPP-SESS-004 — replacement callback completion must schedule the close
      * with an asynchronous timer. Sleeping in the callback would hold the
      * session serial lane and prevent unrelated sessions from progressing. */
-    const auto replacement_begin = stream_host.find ("begin_actor_binding_replacement (");
+    const auto replacement_begin = stream_host_session.find ("begin_actor_binding_replacement (");
     const auto replacement_end =
       replacement_begin == std::string::npos
         ? std::string::npos
-        : stream_host.find ("register_replacement_session (", replacement_begin);
+        : stream_host_session.find ("register_replacement_session (", replacement_begin);
     const auto replacement_source =
       replacement_begin == std::string::npos || replacement_end == std::string::npos
         ? std::string{}
-        : stream_host.substr (replacement_begin, replacement_end - replacement_begin);
+        : stream_host_session.substr (replacement_begin, replacement_end - replacement_begin);
     gate.require (
       replacement_source.find ("asio::steady_timer") != std::string::npos
         && replacement_source.find ("expires_after (std::chrono::milliseconds (100))")

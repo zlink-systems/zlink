@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Locations;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Actors;
@@ -48,6 +49,7 @@ internal sealed class ZLinkActorRuntimeState(
     private ZLinkActorHandlerActivation? _handlerActivation;
     private bool _handlerActivationClosed;
     private Task? _terminalLifecycleCompletion;
+    private ZLinkAuthorityRelocation? _relocationCompletionCandidate;
     private int _contextInvalidated;
 
     internal ZLinkActorRuntimeState(
@@ -100,6 +102,18 @@ internal sealed class ZLinkActorRuntimeState(
     public ZLinkActorContext? Context { get; private set; }
 
     public IZLinkActor? Actor { get; private set; }
+
+    internal ZLinkAuthorityRelocation? RelocationCompletionCandidate =>
+        Volatile.Read(ref _relocationCompletionCandidate);
+
+    internal void TrackRelocationCompletion(ZLinkAuthorityRelocation? relocation)
+    {
+        if (relocation is { Target: not null, Completion.IsReady: false })
+            Volatile.Write(ref _relocationCompletionCandidate, relocation);
+    }
+
+    internal void ClearRelocationCompletionCandidate(ZLinkAuthorityRelocation candidate) =>
+        Interlocked.CompareExchange(ref _relocationCompletionCandidate, null, candidate);
 
     /// <summary>MeshNode that activated this Actor in the current process.</summary>
     internal string? MeshName => Activation?.MeshName ?? Context?.MeshName;
@@ -183,6 +197,10 @@ internal sealed class ZLinkActorRuntimeState(
 
     internal bool OwnsCurrentDispatch =>
         AmbientDispatch.Value is { IsActive: true } ownership
+        && ReferenceEquals(ownership.State, this);
+
+    internal bool RegisteredJoinWithPendingCapturedRequest =>
+        AmbientDispatch.Value is { IsActive: true, PendingCapturedRequestAtJoin: true } ownership
         && ReferenceEquals(ownership.State, this);
 
     private async Task<T> CompleteHandlerActivationCoreAsync<T>(
@@ -363,6 +381,29 @@ internal sealed class ZLinkActorRuntimeState(
     private volatile ZLinkActorDestroyPhase _destroyPhase;
     private volatile bool _reservedCreationPending;
     internal int _deferredJoinPending;
+    private JoinCompletionSeal? _joinCompletionSeal;
+
+    internal void SealFailedJoinCompletion(Exception failure) =>
+        Volatile.Write(ref _joinCompletionSeal, new JoinCompletionSeal(failure));
+
+    internal void EnsureJoinCompletionAvailable()
+    {
+        if (Volatile.Read(ref _joinCompletionSeal) is { } seal)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{ActorId}' is sealed after Join completion failed.",
+                innerException: seal
+            )
+            {
+                Origin = ZLinkErrorOrigin.Framework,
+            };
+    }
+
+    internal static bool IsJoinCompletionRefusal(ZLinkFrameworkException failure) =>
+        failure.InnerException is JoinCompletionSeal;
+
+    private sealed class JoinCompletionSeal(Exception cause)
+        : Exception("Join completion failed.", cause);
 
     public bool IsDispatchBlocked => DispatchBlockKind() is not null;
 
@@ -549,6 +590,7 @@ internal sealed class ZLinkActorRuntimeState(
             return Context;
 
         Interlocked.Exchange(ref _contextInvalidated, 0);
+        Volatile.Write(ref _joinCompletionSeal, null);
         Context = createContext();
         EnsureActorMetric();
         return Context;
@@ -1869,8 +1911,10 @@ internal sealed class ZLinkActorRuntimeState(
     )
     {
         EnsureDispatchNotBlocked();
+        EnsureJoinCompletionAvailable();
         using var turn = await _dispatchMailbox.EnterAsync(cancellationToken).ConfigureAwait(false);
         EnsureDispatchAvailable();
+        EnsureJoinCompletionAvailable();
         using var dispatch = EnterDispatch();
         await operation(cancellationToken).ConfigureAwait(false);
     }
@@ -1884,6 +1928,7 @@ internal sealed class ZLinkActorRuntimeState(
     )
     {
         EnsureDispatchNotBlocked();
+        EnsureJoinCompletionAvailable();
         if (replayReservation is not null)
         {
             T result = default!;
@@ -1893,6 +1938,7 @@ internal sealed class ZLinkActorRuntimeState(
                     async ct =>
                     {
                         EnsureDispatchAvailable(allowRelocationReplay);
+                        EnsureJoinCompletionAvailable();
                         using var dispatch = EnterDispatch();
                         result = await operation(ct).ConfigureAwait(false);
                     },
@@ -1905,6 +1951,7 @@ internal sealed class ZLinkActorRuntimeState(
             .EnterAsync(cancellationToken, countAsPendingRequest)
             .ConfigureAwait(false);
         EnsureDispatchAvailable(allowRelocationReplay);
+        EnsureJoinCompletionAvailable();
         using var dispatch = EnterDispatch();
         return await operation(cancellationToken).ConfigureAwait(false);
     }
@@ -2015,15 +2062,16 @@ internal sealed class ZLinkActorRuntimeState(
         );
     }
 
-    public DispatchScope EnterDispatch()
+    public DispatchScope EnterDispatch(bool pendingCapturedRequestAtJoin = false)
     {
         var previousAmbient = AmbientDispatch.Value;
-        var ownership = new DispatchOwnership(this);
+        var ownership = new DispatchOwnership(this, pendingCapturedRequestAtJoin);
         AmbientDispatch.Value = ownership;
         return new DispatchScope(previousAmbient, ownership);
     }
 
-    public DispatchScope EnterDeferredJoinExecution() => EnterDispatch();
+    public DispatchScope EnterDeferredJoinExecution(bool pendingCapturedRequestAtJoin = false) =>
+        EnterDispatch(pendingCapturedRequestAtJoin);
 
     public DispatchScope EnterForwardedDispatchExecution() => EnterDispatch();
 
@@ -2094,11 +2142,15 @@ internal sealed class ZLinkActorRuntimeState(
         }
     }
 
-    internal sealed class DispatchOwnership(ZLinkActorRuntimeState state)
+    internal sealed class DispatchOwnership(
+        ZLinkActorRuntimeState state,
+        bool pendingCapturedRequestAtJoin
+    )
     {
         private int _active = 1;
 
         public ZLinkActorRuntimeState State { get; } = state;
+        public bool PendingCapturedRequestAtJoin { get; } = pendingCapturedRequestAtJoin;
 
         public bool IsActive => Volatile.Read(ref _active) != 0;
 

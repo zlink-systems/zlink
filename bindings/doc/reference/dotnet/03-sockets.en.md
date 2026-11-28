@@ -243,10 +243,15 @@ if (sub.Subscribe(msg)) { /* ... */ }
 | Member | Default | Meaning |
 | --- | --- | --- |
 | `SetSubscription(string)` / `UnsetSubscription(string)` | — | adds/removes a topic filter; subscriptions accumulate |
-| `SubscriptionAt(int index)` | `SubscriptionEntry?` | the filter at that index, `null` when out of range |
+| `SubscriptionAt(int index)` | `SubscriptionEntry?` | the filter and pattern flag at that index, or `null` if the entry is absent |
 | `Subscribe(TopicMessage result, RecvFlags flags)` | `RecvFlags.None` | populates `result` with the next matching publish |
 | `Options.TopicsCount` (`int`) | read-only | number of active subscription filters |
 | `SetRoutingId(RoutingId)` / `GetRoutingId()` | — | assigns/reads this socket's own routing id; `ISubSocket` only |
+
+`SubscriptionAt` supplies a buffer owned by the binding and returns an empty filter as a
+successful entry. If Core returns `ZLINK_CONFIG_BUFFER_TOO_SMALL`, the binding retries once
+with the length Core returned. `ZLINK_CONFIG_NOT_FOUND` returns `null`. Other Core failures
+raise `ZlinkConfigException`. A negative index raises `ArgumentOutOfRangeException`.
 
 **`IXSubSocket` adds nothing beyond `ISubscriberSocket`** — no `SetRoutingId`/`GetRoutingId`, no
 unique members; every operation is the shared surface (its own `Options` is the same

@@ -1,6 +1,10 @@
 import { startActorTeardown } from '../actors/actor-runtime-state';
 import type { ZLinkExecutionPolicy } from '../admission';
-import { ZLinkUserSpotExecutionMode } from '../../contracts';
+import {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException,
+  ZLinkUserSpotExecutionMode
+} from '../../contracts';
 import { ZLinkActorSerialExecutor } from '../actors';
 import type {
   ZLinkActorHandoffDispatch,
@@ -21,9 +25,12 @@ export type ZLinkActorPacketTurnDispatch = (
   ...args: Parameters<ZLinkActorHandoffDispatch>
 ) => ReturnType<ZLinkActorHandoffDispatch>;
 
-class ActorJoinCompletionSealedError extends Error {
+class ActorJoinCompletionSealedError extends ZLinkFrameworkException {
   constructor() {
-    super('Actor Join completion did not release application dispatch.');
+    super(
+      ZLinkFrameworkErrorKind.Unavailable,
+      'Actor Join completion did not release application dispatch.'
+    );
   }
 }
 
@@ -181,12 +188,7 @@ export class ZLinkSpotSerialExecutor {
             try {
               return await operation();
             } catch (error) {
-              // A failed Join completion seals application work in this Actor's mailbox.
-              const sealed = new ActorJoinCompletionSealedError();
-              executor.scheduler.setExecutionPolicy(() => ({
-                executionDecision: () => 'lost',
-                executionFailure: () => sealed
-              }));
+              this.sealActorAfterFailedJoinCompletion(actorId, executor);
               return onFailure(error);
             }
           },
@@ -194,6 +196,17 @@ export class ZLinkSpotSerialExecutor {
         ),
       { lane: 'lifecycle' }
     );
+  }
+
+  sealActorAfterFailedJoinCompletion(
+    actorId: string,
+    executor = this.actorExecutor(actorId)
+  ): void {
+    const sealed = new ActorJoinCompletionSealedError();
+    executor.scheduler.setExecutionPolicy(() => ({
+      executionDecision: () => 'lost',
+      executionFailure: () => sealed
+    }));
   }
 
   /** Admits held packets through the same Actor FIFO as ordinary ingress. */

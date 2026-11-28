@@ -240,7 +240,7 @@ Actor에게 보내는 typed message인 `actorSend`(24)와 `actorRequest`(25)는 
 
 ## 3. Command space
 
-Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `55..255`는 reserved이며
+Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `56..255`는 reserved이며
 다른 의미로 재사용하지 않는다. 괄호 안의 이전 command 이름은 호환 진단용 이름일 뿐 decode하거나
 전송하는 command가 아니다.
 
@@ -291,6 +291,7 @@ Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `55..25
 | 52 | `relocationState` | infrastructure | 없음 | — | source memory에서 target으로 직접 전달하는 payload chunk 전송(base·final stage) |
 | 53 | `relocationFailed` | infrastructure | 없음 | — | 대응하는 `relocationPrepare`에 대한 assembly·준비 실패 명시 reply |
 | 54 | `boundSessionClose` | infrastructure | 없음 | — | current binding의 physical connection close를 Session owner에 요청한다 |
+| 55 | `instanceSpotFollow` | application | 필수 | `metadata` | Message Follow로 전달하는 Ready Instance Spot one-way(operation ID 0, reply route 없음). [Location runtime §7.3](../05-location-relocation/01-location-runtime.ko.md#73-이전-owner로-도착한-message를-새-owner에게-전달한다) |
 
 표의 "계층"·"application payload"·"사용할 수 있는 flag" 열은 schema 선언을 그대로 옮긴 것이다.
 **application 계층 command만 application handler로 들어간다.** infrastructure command는 runtime이
@@ -781,6 +782,7 @@ Transport, target과 Session owner가 수행하는 검증과 그 경계는
 - Target은 terminal result를 [Location runtime §9.3](../05-location-relocation/01-location-runtime.ko.md#93-source가-바뀐-뒤-끝난-request를-처리한다)의 그 request row에 CAS로 기록(`accepted` → `pending`)한 뒤에만 `replyRelay`를 보낸다.
 - `replyRelay`는 원래 reply route와 그 요청을 가리키는 source lease fence를 사용한다. 목적지는 row의 request source node(원 requester node)다. 그 node는 자기 request registry로 결과를 받았는지(`terminalReceived`) 이미 끝났는지(`alreadyTerminal`) 판정해 relay를 보낸 target에게 `replyRelayAck`(command 46)을 보낸다. Registry는 아직 결과를 기다리는 request만 둔다: 결과를 받으면(직접 reply든 relay든) 바로 지우고 끝난 request의 기록을 따로 보관하지 않는다. Registry에 없는 operation의 relay는 `alreadyTerminal`로 답하고 결과는 버린다(그 requester는 이미 결과를 받았거나 기다리지 않는다; 같은 relay의 재전송도 이렇게 걸러진다). 따라서 registry 크기는 진행 중 request 수를 넘지 않는다. Relay는 기존 peer authority fence(coordinator RID·generation·owner lease)로 인증하고 Store를 다시 읽지 않는다.
 - Source는 원래 requester가 terminal result를 수락하거나 이미 terminal임을 확인한 뒤에만 authenticated `replyRelayAck`을 보낸다. 중간 node의 submit 성공은 근거가 아니다. Target은 이 ACK로 row를 terminal 상태로 바꾼다.
+- Request source fence의 node generation은 받은 request 기록이 실어 온 송신 node의 generation(ingress source node generation)이다. 그 값이 없는 기록(이 node에서 만든 local request)만 이 node의 lifecycle generation을 쓴다.
 - Physical connection close는 terminal delivery의 증거가 아니다.
 
 ### `Completed` 조건

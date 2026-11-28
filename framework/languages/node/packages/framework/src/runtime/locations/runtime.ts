@@ -172,9 +172,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     renewal: ZLinkOwnerLeaseRenewed,
     wasOwnerLeaseUsable: boolean
   ) => void;
-  private readonly ownerLeaseRenewedHandlers = new Set<
-    ZLinkOwnerLeaseRenewedHandler
-  >();
+  private readonly ownerLeaseRenewedHandlers = new Set<ZLinkOwnerLeaseRenewedHandler>();
   private readonly ownerLeaseRenewalFailedHandlers = new Set<() => void>();
   private heartbeatTimer: unknown;
   private heartbeatRenewal?: Promise<unknown>;
@@ -623,9 +621,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     this.ownerLeaseRecoveryPublication = handler;
   }
 
-  addOwnerLeaseRenewedHandler(
-    handler: ZLinkOwnerLeaseRenewedHandler
-  ): void {
+  addOwnerLeaseRenewedHandler(handler: ZLinkOwnerLeaseRenewedHandler): void {
     this.ownerLeaseRenewedHandlers.add(handler);
   }
 
@@ -639,9 +635,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       handler(renewal, wasOwnerLeaseUsable, previousStoreNow);
   }
 
-  removeOwnerLeaseRenewedHandler(
-    handler: ZLinkOwnerLeaseRenewedHandler
-  ): void {
+  removeOwnerLeaseRenewedHandler(handler: ZLinkOwnerLeaseRenewedHandler): void {
     this.ownerLeaseRenewedHandlers.delete(handler);
   }
 

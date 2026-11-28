@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::RecvError;
-use crate::domain::recv_state_error;
-use crate::error::CloseError;
-use crate::message::{Message, RoutingId};
+use crate::contracts::errors::errors::CloseError;
+use crate::contracts::messaging::message::{Message, RoutingId};
+use crate::contracts::messaging::received::recv_state_error;
 
 /// A received publish: its topic, source routing id, and message parts.
 ///
@@ -15,8 +15,8 @@ pub struct TopicMessage {
     topic: smol_str::SmolStr,
     /// The message parts, owned by this envelope.
     parts: Vec<Message>,
-    receive_scratch: Vec<Message>,
-    native_receive_scratch: Vec<crate::ffi::zlink_msg_t>,
+    pub(crate) receive_scratch: Vec<Message>,
+    pub(crate) native_receive_scratch: crate::internal::NativeReceiveScratch,
 }
 
 impl TopicMessage {
@@ -27,14 +27,8 @@ impl TopicMessage {
             topic: smol_str::SmolStr::default(),
             parts: Vec::new(),
             receive_scratch: Vec::new(),
-            native_receive_scratch: Vec::new(),
+            native_receive_scratch: crate::internal::NativeReceiveScratch::default(),
         }
-    }
-
-    pub(crate) fn receive_scratch(
-        &mut self,
-    ) -> (&mut Vec<Message>, &mut Vec<crate::ffi::zlink_msg_t>) {
-        (&mut self.receive_scratch, &mut self.native_receive_scratch)
     }
 
     pub(crate) fn replace_received_parts(
@@ -75,13 +69,7 @@ impl TopicMessage {
 
     /// Consumes the envelope and returns its only part, transferring ownership;
     /// errors unless it holds exactly one part.
-    pub fn single_part(self) -> Result<Message, RecvError> {
-        self.single_part_or_error()
-    }
-
-    /// Consumes the envelope and returns its only part, transferring ownership;
-    /// errors unless it holds exactly one part.
-    pub fn single_part_or_error(mut self) -> Result<Message, RecvError> {
+    pub fn single_part(mut self) -> Result<Message, RecvError> {
         if self.parts.len() != 1 {
             return Err(recv_state_error());
         }
@@ -89,6 +77,12 @@ impl TopicMessage {
             .into_iter()
             .next()
             .expect("single part"))
+    }
+
+    /// Deprecated name of [`single_part`](Self::single_part).
+    #[deprecated(note = "use single_part")]
+    pub fn single_part_or_error(self) -> Result<Message, RecvError> {
+        self.single_part()
     }
 
     /// Consumes the envelope and returns ownership of all its parts.

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include <zlink/framework.hpp>
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "stream_capture.hpp"
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -128,11 +129,10 @@ template <typename TEntry, typename TOwner> bool verify_handler_owner (bool exac
       .server ()
       .template add_entry_spot<TEntry> ();
     app.add_hosted_service (std::make_unique<stop_after_start_t> (app));
-    std::ostringstream errors;
-    auto *previous = std::cerr.rdbuf (errors.rdbuf ());
+    zlink::framework::test::stream_capture_t errors (std::cerr);
     const auto result = app.run (0, nullptr);
-    std::cerr.rdbuf (previous);
-    const auto message = errors.str ();
+    errors.close ();
+    const auto message = errors.text ();
     if (exact) {
         if (result != 0)
             std::cerr << "exact handler owner startup failed: " << message << '\n';

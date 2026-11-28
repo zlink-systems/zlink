@@ -29,9 +29,47 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 abstract class SpotActivationBase<C extends SpotDispatchLine> {
+    CompletionStage<List<byte[]>> replayAccepted(
+            ZLinkSpotAcceptedJournal.Record record,
+            Function<ZLinkBackendReceived, CompletionStage<Void>> dispatch) {
+        Objects.requireNonNull(record, "record");
+        CompletableFuture<List<byte[]>> reply = new CompletableFuture<>();
+        List<Message> parts = record.parts().stream().map(Message::from).toList();
+        var received =
+                new ZLinkBackendReceived(
+                        record.result(),
+                        record.routingId(),
+                        record.spotId(),
+                        record.requestSequence(),
+                        record.applicationMetadata(),
+                        new byte[0],
+                        parts,
+                        values -> {
+                            try {
+                                reply.complete(values.stream().map(Message::toByteArray).toList());
+                            } finally {
+                                values.forEach(Message::close);
+                            }
+                        },
+                        () -> {});
+        CompletionStage<Void> dispatched;
+        try {
+            dispatched = dispatch.apply(received);
+        } catch (RuntimeException failure) {
+            received.close();
+            return CompletableFuture.failedFuture(failure);
+        }
+        return dispatched.thenCompose(
+                ignored ->
+                        record.requestSequence().isPresent()
+                                ? reply
+                                : CompletableFuture.completedFuture(List.of()));
+    }
+
     static <T> CompletionStage<T> finishCleanup(Throwable failure, CompletionStage<T> cleanup) {
         Throwable primary = unwrapCompletion(failure);
         return cleanup.handle(
@@ -47,7 +85,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                 });
     }
 
-    private static Throwable unwrapCompletion(Throwable failure) {
+    static Throwable unwrapCompletion(Throwable failure) {
         while (failure instanceof CompletionException && failure.getCause() != null) {
             failure = failure.getCause();
         }
@@ -211,15 +249,13 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
 
     final CompletionStage<Void> dispatchActorMessages(
             List<ZLinkBackendActorReceived> actorMessages,
-            java.util.function.Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>>
-                    admission) {
+            Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>> admission) {
         return dispatchActorMessages(actorMessages, admission, null);
     }
 
     final CompletionStage<Void> dispatchActorMessages(
             List<ZLinkBackendActorReceived> actorMessages,
-            java.util.function.Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>>
-                    admission,
+            Function<Supplier<CompletionStage<Void>>, CompletionStage<Void>> admission,
             CompletableFuture<Void> requestAdmission) {
         List<CompletionStage<Void>> dispatches = new ArrayList<>();
         int index = 0;
@@ -269,7 +305,8 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                 ZLinkDispatchErrorReason.STALE_TARGET,
                                 context.spotId(),
                                 headerPart.actor().actorId(),
-                                headerPart.sourceNodeRid());
+                                headerPart.sourceNodeRid(),
+                                null);
                         if (packetHeader.requestSeq().isPresent()) {
                             ZLinkBackendActorReceived headerCopy =
                                     pendingHeader ? headerPart : host.copyActorReceived(headerPart);

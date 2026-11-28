@@ -11,8 +11,8 @@ title: "Go Bindings Public Contract"
 > **What this chapter defines** — the public type, ownership, and error
 > contract the Go binding provides on top of the Core raw C API.
 
-This document defines how Go exposes the socket capabilities in the common spec. The public declarations in
-`bindings/go/contracts/` and the module root define the exact names and signatures.
+This document defines how Go exposes the socket capabilities in the common spec. The module root declares
+the exact names and signatures of the public API.
 
 | Section | Covers |
 |---|---|
@@ -32,13 +32,17 @@ This document defines how Go exposes the socket capabilities in the common spec.
 
 The Go module's import path is `zlink.systems/zlink`. A typical
 consumer imports the `zlink` package at the module root.
-`zlink.systems/zlink/contracts` is a public projection that declares
-the same contract split by category, and the root package re-exports it.
+`zlink.systems/zlink/contracts` defines enums, constants, results, errors,
+and value structs that do not reference runtime resources; the root package
+re-exports them. `internal/native` implements concrete handles and public types
+containing native state, which the root package exposes. Whether the concrete
+Context, socket, Poller, Timer, and SocketMonitor handles need separate contract
+interfaces remains a later decision.
 
-Runtime handles, cgo declarations, native structs, completion-drain state, and
-buffer marshalling are implementation
-details of `internal/native`. These types and this package are not part of
-the consumer contract.
+The internal fields of concrete handles exposed at the root, cgo declarations,
+native structs, completion-drain state, and buffer marshalling are implementation
+details of `internal/native`. This internal state and package are outside the
+consumer contract.
 
 - The package contract projects the Core raw C API.
 - It includes Context, Message, raw sockets, monitor, poller, timer, and utility, but not Spot, Actor, MeshNode, or service operations.
@@ -124,7 +128,7 @@ storage. `Size()` and `IsEmpty()` report payload size and emptiness, `String()` 
 string, and `RefCount()` reports the storage reference count.
 
 Routing ID constructors are `NewRoutingID`, `NewRoutingIDString`, `NewRoutingIDUint32`,
-`NewRoutingIDUUIDBytes`, and `NewRoutingIDFromHex`.
+`NewRoutingIDUUIDBytes`, and `NewRoutingIDFromHex`. To receive a size or input error at creation, `TryNewRoutingID` and `TryNewRoutingIDFromHex` return a `*ConfigError` (`ConfigInvalidArgument`); `New*` drops the error and returns the empty value. `RoutingID.Uint32()` and `UUIDBytes()` extract 4-byte and 16-byte IDs as typed values and return `ok=false` for other shapes.
 
 | Builder path | Ownership rule |
 |---|---|
@@ -192,8 +196,8 @@ of the system CA store before connect. Every raw socket exposes both methods. Co
 failures return `*ConfigError`.
 
 `SubSocket` and `XSubSocket` provide `SetSubscription(filter string) error`,
-`UnsetSubscription(filter string) error`, and `SubscriptionAt(index int) (string, bool, error)`. The query
-returns the filter and whether it is a pattern.
+`UnsetSubscription(filter string) error`, and `SubscriptionAt(index int) (Subscription, bool, error)`. The query
+returns the filter and whether it is a pattern as `Subscription{Filter string; Pattern bool}`; the `bool` is `false` when the index has no entry. The query rule is [the common Subscription Query](../README.en.md#subscription-query).
 `XPubSocket.ReceiveSubscriptionEvent(out *SubscriptionEvent, flags RecvFlags) (bool, error)` fills
 caller-provided storage.
 
@@ -211,7 +215,7 @@ capacity private.
 Core currently selects. `RouterRoute` exposes `RoutingID`, `RouteGeneration`. The route generation is a
 nonzero opaque token. Compare it only for equality. `PollRoute` signals a change in a selected route.
 
-A connection-attempt snapshot returns one row per outbound connect registration. The target surface (**not implemented yet**, #5749) is
+A connection-attempt snapshot returns one row per outbound connect registration. The surface is
 `ConnectionAttemptsSnapshot() ([]ConnectionAttempt, error)` on raw sockets other than STREAM, with Poller
 readiness `PollConnect`. `ConnectionAttempt` contains `Endpoint`, `IntentID`, `Revision`, `LastFailureID`,
 `State`, `LastFailure`. `ConnectionFailure` contains `Kind`, `Stage`, `NormalizedErrno`,
@@ -252,7 +256,7 @@ selects all events, and multiple masks are ORed. `MonitorHwmBytes(0)` selects
 the Core default; a positive value is passed unchanged as the exact byte HWM.
 If the option is supplied more than once, the last value in call order wins.
 A `MonitorStatus` exposes `SndPendingBytes` and `RcvPendingBytes` separately
-from pending-message counts. `CoreHwmBudgetSnapshot` projects ABI version/size,
+from pending-message counts. `State()` and `Detail()` return `StateFlags` and `DetailFlags` (`uint32`) as typed `MonitorStateFlags` and `MonitorStatusDetailFlags` values; check bits with `Has(flag)`. The socket-level raw-int `SetRidDuplicatePolicy` and `RidDuplicatePolicy` are Deprecated in favour of the typed `CommonOptions()` methods. `CoreHwmBudgetSnapshot` projects ABI version/size,
 configured/resolved memory limits, configured/effective budgets,
 planned/applied/manual-reserved HWM, Core-queue/application/current/peak/
 provisional accounted bytes, completion current/peak/pending and total-

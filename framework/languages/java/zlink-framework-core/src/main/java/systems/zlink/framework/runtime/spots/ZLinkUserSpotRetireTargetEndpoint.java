@@ -22,9 +22,11 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceFrozenRecordCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.spots.ZLinkSpot;
@@ -64,7 +66,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
     private final long localNodeGeneration;
     final ZLinkAggregateRelocationCoordinator coordinator;
     private final ZLinkUserSpotAggregateStagingOwner staging;
-    private final Function<String, Class<? extends ZLinkSpot<?>>> spotTypes;
+    private final BiFunction<ZLinkPlacementObjectKind, String, Class<?>> spotTypes;
     private final ZLinkUserSpotAggregateStagingOwner.JournalReplayer fallbackReplayer;
     private final ZLinkSessionRelocationPeerClient sessionRoutes;
     private final Duration routeTimeout;
@@ -100,7 +102,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 localNodeGeneration,
                 coordinator,
                 staging,
-                spotTypes,
+                (kind, stableType) -> spotTypes.apply(stableType),
                 replayer,
                 sessionRoutes,
                 routeTimeout,
@@ -132,7 +134,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                 localNodeGeneration,
                 coordinator,
                 staging,
-                spotTypes,
+                (kind, stableType) -> spotTypes.apply(stableType),
                 replayer,
                 sessionRoutes,
                 routeTimeout,
@@ -150,7 +152,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
             long localNodeGeneration,
             ZLinkAggregateRelocationCoordinator coordinator,
             ZLinkUserSpotAggregateStagingOwner staging,
-            Function<String, Class<? extends ZLinkSpot<?>>> spotTypes,
+            BiFunction<ZLinkPlacementObjectKind, String, Class<?>> spotTypes,
             ZLinkUserSpotAggregateStagingOwner.JournalReplayer replayer,
             ZLinkSessionRelocationPeerClient sessionRoutes,
             Duration routeTimeout,
@@ -322,6 +324,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                 "published relocation payload does not match the"
                                                         + " target Spot"));
                             }
+                            staging.setCommittedSpotAuthority(
+                                    target.staged(),
+                                    snapshots.get(ZLinkAuthorityKeyCodec.spot(request.spotId())));
                             Map<String, Long> actorOwnerGenerations = new HashMap<>();
                             for (var participant : request.participants()) {
                                 if (participant.objectKind()
@@ -348,8 +353,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                                             request
                                                                                     .participants()) {
                                                                         if (participant.objectKind()
-                                                                                == ZLinkPlacementObjectKind
-                                                                                        .USER_SPOT
+                                                                                != ZLinkPlacementObjectKind
+                                                                                        .ACTOR
                                                                                         .value()) {
                                                                             sourceReplies
                                                                                     .rememberRecoveredSpot(
@@ -389,17 +394,11 @@ final class ZLinkUserSpotRetireTargetEndpoint
             ActorTargetStage target = requireActorStage(request);
             return actorStaging.stageRelayedRecord(target.staged(), frozenRecord);
         }
-        ZLinkActorAcceptedJournal.Record actorRecord;
-        try {
-            actorRecord = ZLinkActorAcceptedJournal.decode(frozenRecord);
-        } catch (IllegalArgumentException notActorRecord) {
-            actorRecord = null;
-        }
+        boolean actor = ZLinkServiceFrozenRecordCodec.isActorRecord(frozenRecord);
+        String objectId =
+                actor ? ZLinkActorAcceptedJournal.decode(frozenRecord).actorId() : request.spotId();
         return staging.stageRelayedRecord(
-                requireStage(request).staged(),
-                actorRecord == null ? request.spotId() : actorRecord.actorId(),
-                actorRecord != null,
-                frozenRecord);
+                requireStage(request).staged(), objectId, actor, frozenRecord);
     }
 
     @Override
@@ -683,7 +682,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                     || stage.targetNodeGeneration() != nodeGeneration
                     || stage.targetOwnerLeaseGeneration() != ownerLeaseGeneration) return null;
             for (var member : stage.participants()) {
-                if (member.objectKind() == kind.value()
+                if ((member.objectKind() == ZLinkPlacementObjectKind.ACTOR.value())
+                                == (kind == ZLinkPlacementObjectKind.ACTOR)
                         && member.objectId().equals(objectId)
                         && member.objectGeneration() == objectGeneration
                         && (acceptDirect
@@ -1241,9 +1241,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
         return ZLinkSerialExecutionQueue.yieldCurrent(
                         coordinator.readTargetOwnerGenerations(
                                 expectedParticipants(request),
-                                new ZLinkAggregateFence(
-                                        request.fence().aggregateId(),
-                                        request.fence().aggregateGeneration()),
+                                ZLinkAggregateFence.markerlessRelocation(
+                                        request.fence().aggregateId()),
                                 new ZLinkLocationOwnerToken(
                                         request.targetOwnerId(),
                                         request.targetOwnerLeaseGeneration()),
@@ -1309,15 +1308,13 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                                 })
                                                         .thenCompose(
                                                                 failure ->
-                                                                        ZLinkSerialExecutionQueue
-                                                                                .manageCurrent(
-                                                                                        actorJoin
-                                                                                                .notifyTargetCompletion(
-                                                                                                        target
-                                                                                                                .directAdmission(),
-                                                                                                        target
-                                                                                                                .staged(),
-                                                                                                        failure))
+                                                                        actorJoin
+                                                                                .notifyTargetCompletion(
+                                                                                        target
+                                                                                                .directAdmission(),
+                                                                                        target
+                                                                                                .staged(),
+                                                                                        failure)
                                                                                 .thenApply(
                                                                                         ignored ->
                                                                                                 failure))

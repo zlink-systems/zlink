@@ -98,6 +98,14 @@ public interface IZlinkStreamConnector : IAsyncDisposable
 
     IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler);
 
+    /// <summary>Registers a callback for this connection entering the login queue.</summary>
+    IDisposable OnAdmissionQueued(Func<CancellationToken, ValueTask> handler);
+
+    /// <summary>Registers a callback for login queue position updates.</summary>
+    IDisposable OnAdmissionPosition(
+        Func<ZlinkStreamAdmissionPosition, CancellationToken, ValueTask> handler
+    );
+
     IDisposable OnAdmissionWaiting(
         Func<ZlinkStreamAdmissionWaiting, CancellationToken, ValueTask> handler
     );

@@ -7,12 +7,11 @@ const wire = require('../../packages/framework/dist/runtime/foundation/service-s
 function deliverCutover(runtime, meshName, cutover) {
   const bytes = wire.encodeMaintenanceRelocationControl(cutover);
   return runtime.tryHandleControl(meshName, {
-    sourceNodeRid: 'source', parts: [{ data: () => bytes, close() {} }]
+    sourceNodeRid: 'source',
+    parts: [{ data: () => bytes, close() {} }]
   });
 }
-const {
-  ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/internal');
+const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
 
 function deferred() {
   let resolve;
@@ -211,17 +210,13 @@ test(
     const fixture = targetFixture();
     const prepare = fixture.stage.offer.prepare;
     await assert.rejects(
-      deliverCutover(
-        fixture.runtime,
-        'mesh',
-        {
-          ...prepare,
-          kind: 'cutover',
-          senderRole: 'source',
-          boundaryRecordCount: 0n,
-          boundaryChecksumCrc32c: 1
-        }
-      ),
+      deliverCutover(fixture.runtime, 'mesh', {
+        ...prepare,
+        kind: 'cutover',
+        senderRole: 'source',
+        boundaryRecordCount: 0n,
+        boundaryChecksumCrc32c: 1
+      }),
       /boundary confirmation mismatch/
     );
     await assert.rejects(fixture.runtime.dispose(), /boundary confirmation mismatch/);
@@ -321,7 +316,7 @@ function newPrepare() {
 }
 
 test('a Shutdown-sealed target rejects a new PREPARE with ShuttingDown before staging', async () => {
-  const runtime = new ZLinkHostServiceRelocationRuntime({ targetAdmissionSealed: () => true });
+  const runtime = new ZLinkHostServiceRelocationRuntime({ shutdownRequested: AbortSignal.abort });
   await assert.rejects(
     runtime.handlePrepareControl('mesh', '0:99:1', newPrepare(), 'source'),
     (error) => {
@@ -333,7 +328,7 @@ test('a Shutdown-sealed target rejects a new PREPARE with ShuttingDown before st
 });
 
 test('an open target does not report ShuttingDown for a new PREPARE', async () => {
-  const runtime = new ZLinkHostServiceRelocationRuntime({ targetAdmissionSealed: () => false });
+  const runtime = new ZLinkHostServiceRelocationRuntime({});
   await assert.rejects(
     runtime.handlePrepareControl('mesh', '0:99:1', newPrepare(), 'source'),
     (error) => {

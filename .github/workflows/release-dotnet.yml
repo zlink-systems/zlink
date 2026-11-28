@@ -338,6 +338,21 @@ jobs:
           done
           ls dist/framework-dotnet
 
+      - name: Pack and verify the network-sync server package
+        env:
+          CI: true
+          FRAMEWORK_VERSION: ${{ steps.versions.outputs.version }}
+        shell: bash
+        run: |
+          package_dir="${GITHUB_WORKSPACE}/dist/framework-dotnet"
+          dotnet pack plugins/network-sync/server/Server/Zlink.NetworkSync.Server.csproj -c Release \
+            -p:PackageOutputPath="${package_dir}" \
+            -p:RestoreAdditionalProjectSources="${package_dir}"
+          package="${package_dir}/Zlink.NetworkSync.Server.${FRAMEWORK_VERSION}"
+          unzip -tq "${package}.nupkg"
+          unzip -Z1 "${package}.nupkg" | grep -Fx 'lib/net8.0/Zlink.NetworkSync.Server.dll'
+          unzip -tq "${package}.snupkg"
+
       - uses: actions/upload-artifact@v6
         with:
           name: framework-dotnet-${{ steps.versions.outputs.version }}

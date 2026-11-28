@@ -417,7 +417,9 @@ declines isn't an error, so it's `Rejected`, not `Failed`.
 mean the completion callback execution has finished too. The framework
 runs the completion callback after processing the lifecycle callback and
 source membership cleanup. If completion keeps failing, the Actor is kept
-sealed, and regular messages behind the barrier aren't run.
+sealed, and regular messages behind the barrier aren't run. A regular request that arrives after that isn't left waiting: it ends at
+once as `Unavailable` without running. A sender on another node gets the same `Unavailable` (handoff, Message Follow,
+and the relocation terminal relay carry the error kind unchanged).
 `OnJoinedActor` and the completion callback run after the location change is committed, so an
 exception from them or a failed application send inside them does not undo the committed `Accepted`
 or target publication, nor turn them into a failure.
@@ -591,7 +593,7 @@ the following order after the handler ends normally.
    queue, but doesn't run application work yet.
 5. Source ingress hold and pre-boundary relay follow the order in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). Target uses the temporary queue registered during Join approval.
 6. After cutover verification, the target's owner, membership, capacity, and generation CAS follows [common relocation §4.4–§4.5](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). This CAS includes the Join membership change.
-7. Queue merge and regular-route transition after CAS follow [common relocation §4.6](../05-location-relocation/04-relocation-flow.en.md#46-target-opens-the-queue-progressively-starting-with-existing-work). Target calls the target Spot's `OnJoinedActor`, sends the source Spot `OnLeaveActor` one-way, finishes the Actor's Join completion callback, then opens dispatch. When the target opens dispatch, it releases the relocation publication and normalizes the authority's relocation record to steady ([Location runtime §9.3](../05-location-relocation/01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed), [common relocation §4.6](../05-location-relocation/04-relocation-flow.en.md#46-target-opens-the-queue-progressively-starting-with-existing-work)). Result delivery for accepted requests continues through the §9.3 rows and doesn't hold normalization back. The Join completion callback and the dispatch opening don't wait for the normalization CAS's terminal.
+7. Queue merge and regular-route transition after CAS follow [common relocation §4.6](../05-location-relocation/04-relocation-flow.en.md#46-target-opens-the-queue-progressively-starting-with-existing-work). Target calls the target Spot's `OnJoinedActor`, sends the source Spot `OnLeaveActor` one-way, finishes the Actor's Join completion callback, then opens dispatch. The target normalizes the authority's relocation record to steady after the completion conditions of [Location runtime §9.3](../05-location-relocation/01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed) hold. With no accepted request, it normalizes before the Join completion callback. With accepted requests, it normalizes when it opens dispatch, and reply rows deliver the remaining completion results for them ([Location runtime §9.3](../05-location-relocation/01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed)). Normalization doesn't wait for row states. The Join completion callback and the dispatch opening don't wait for normalization.
 8. For a bound Actor, after CAS and queue opening the target runtime submits a
    command 44 `sessionRelocationRoute` commit to the Session owner one-way.
    [Session–Actor binding §8](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation)

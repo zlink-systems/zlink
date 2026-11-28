@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 
 from ..core.options import (
-    ContextOption,
     AutoHwmProfile,
     AutoHwmRecalcReason,
 )
@@ -32,7 +31,6 @@ from ..eventing.codes import (
     PollSourceKind,
 )
 __all__ = [
-    "ContextOption",
     "AutoHwmProfile",
     "AutoHwmRecalcReason",
     "SocketType",

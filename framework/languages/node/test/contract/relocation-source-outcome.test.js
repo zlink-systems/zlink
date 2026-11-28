@@ -1,7 +1,13 @@
+const { relocationInventoryStore } = require('./fixtures/relocation-authority-store');
 const { MessageChannel } = require('node:worker_threads');
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
+const {
+  createFrameworkRegistrationWithBuilder,
+  ZLinkFrameworkRuntimeHost,
+  ZLinkFrameworkTerminationOutcome,
+  ZLinkHostServiceRelocationRuntime
+} = require('../../packages/framework/dist/internal');
 const {
   ZLinkActorTransferRuntime
 } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
@@ -87,7 +93,7 @@ for (const path of ['coordinator', 'shell', 'wide']) {
         'cancel-after-commit',
         'cancel-without-preserve',
         ...(path === 'coordinator'
-          ? ['window-preserve-cleanup', 'window-target-cleanup', 'window-store-primary']
+          ? ['draining', 'window-preserve-cleanup', 'window-target-cleanup', 'window-store-primary']
           : [])
       ]) {
     test(`source relocation ${path} outcome: ${scenario}`, async () => {
@@ -152,7 +158,23 @@ for (const path of ['coordinator', 'shell', 'wide']) {
         applicationVersion: 1n
       };
       let storedAuthority = primary;
-      const runtime = new ZLinkHostServiceRelocationRuntime({
+      const stopDeadlineMs = 500;
+      const host =
+        scenario === 'draining'
+          ? new ZLinkFrameworkRuntimeHost({
+              registration: createFrameworkRegistrationWithBuilder((builder) => {
+                builder
+                  .addRouteMesh('mesh')
+                  .listen(`inproc://source-relocation-drain-${process.pid}`)
+                  .routingId('source');
+              })
+            })
+          : undefined;
+      await host?.start();
+      const restoreDeadlineAtMs = performance.now() + 10_000;
+      let shutdown;
+      let preserveWrites = 0;
+      const runtimeOptions = {
         metrics,
         sourceQuiescenceChanged: () => {
           if (!windowControl || !runtime.isSafeToShutdown()) return;
@@ -190,8 +212,29 @@ for (const path of ['coordinator', 'shell', 'wide']) {
           completeRelocationSource: async () => {}
         }),
         locationStore: () => ({
-          readAuthority: async () => storedAuthority,
-          async compareExchangeAuthority(_key, expected, mutation) {
+          ...relocationInventoryStore(),
+          async readAuthority(_key, storeSignal) {
+            if (shutdown !== undefined) assert.equal(storeSignal, undefined);
+            return storedAuthority;
+          },
+          async readOwnerLease(ownerId, storeSignal) {
+            assert.equal(storeSignal, undefined);
+            return {
+              kind: 'found',
+              token: { ownerId, leaseGeneration: primary.ownerLeaseGeneration },
+              storeNow: new Date(0),
+              leaseExpiresAt: new Date(60_000)
+            };
+          },
+          async compareExchangeAuthority(_key, expected, mutation, storeSignal) {
+            if (
+              (scenario === 'shutdown' || scenario === 'draining') &&
+              mutation.relocation === undefined
+            ) {
+              assert.equal(storeSignal, undefined);
+              assert.equal(mutation.generationTransition, 'preserve');
+              preserveWrites += 1;
+            }
             assert.equal(expected.value, storedAuthority.storeVersion.value);
             storedAuthority = {
               ...storedAuthority,
@@ -205,7 +248,10 @@ for (const path of ['coordinator', 'shell', 'wide']) {
             return { ...storedAuthority, kind: 'stored' };
           }
         })
-      });
+      };
+      const runtime =
+        host?.serviceRelocation ?? new ZLinkHostServiceRelocationRuntime(runtimeOptions);
+      if (host !== undefined) Object.assign(runtime.options, runtimeOptions);
       runtime.sendControl = async (
         _mesh,
         _rid,
@@ -224,8 +270,12 @@ for (const path of ['coordinator', 'shell', 'wide']) {
         if (scenario.startsWith('preserve-request')) throw requestFailure;
         return { ...prepare, kind: 'ready', senderRole: 'target' };
       };
-      runtime.submitControlFrame = async () => {
+      runtime.submitControlFrame = async (_mesh, _rid, _frame, kind) => {
         if (scenario === 'shutdown') await runtime.dispose();
+        if (host !== undefined && kind === 'cutover') {
+          assert.ok(performance.now() + stopDeadlineMs < restoreDeadlineAtMs);
+          shutdown = host.shutdown({ deadlineMs: stopDeadlineMs });
+        }
       };
       const settle = runtime.settleSourceAuthority.bind(runtime);
       runtime.settleSourceAuthority = async (...args) => {
@@ -234,7 +284,7 @@ for (const path of ['coordinator', 'shell', 'wide']) {
         if (scenario.startsWith('preserve') || scenario === 'window-preserve-cleanup')
           return 'source';
         if (scenario === 'missing') return 'lost';
-        if (scenario === 'shutdown') {
+        if (scenario === 'shutdown' || scenario === 'draining') {
           return settle(...args);
         }
         if (scenario === 'cancel-without-preserve') {
@@ -286,19 +336,22 @@ for (const path of ['coordinator', 'shell', 'wide']) {
       const keepAlive = windowControl ? new MessageChannel() : undefined;
       keepAlive?.port1.on('message', () => {});
       try {
-        if (path === 'coordinator')
-          await runtime.runCoordinator(
-            'mesh',
-            target,
-            primary,
-            captured,
-            signal.signal,
-            [],
-            undefined,
-            undefined,
-            metric
-          );
-        else {
+        if (path === 'coordinator') {
+          const relocate = () =>
+            runtime.runCoordinator(
+              'mesh',
+              target,
+              primary,
+              captured,
+              signal.signal,
+              [],
+              undefined,
+              host === undefined ? undefined : restoreDeadlineAtMs,
+              metric
+            );
+          if (host === undefined) await relocate();
+          else await host.admission.run('mesh', 'source relocation', relocate);
+        } else {
           const activation = {
             spotId: 'player',
             serial: new ZLinkSpotSerialTurnExecutor(),
@@ -343,6 +396,7 @@ for (const path of ['coordinator', 'shell', 'wide']) {
               'preserve',
               'missing',
               'shutdown',
+              'draining',
               'shutdown-during-session-wait',
               'cleanup-error',
               'cancel-without-preserve'
@@ -352,14 +406,27 @@ for (const path of ['coordinator', 'shell', 'wide']) {
       } finally {
         keepAlive?.port1.close();
         keepAlive?.port2.close();
-        await runtime.dispose();
+        if (host === undefined) await runtime.dispose();
+        else await host.stop();
+      }
+      if (scenario === 'shutdown' || scenario === 'draining') {
+        assert.equal(preserveWrites, 1, 'source authority must reach Preserve');
+        assert.equal(storedAuthority.ownerId, primary.ownerId);
+        assert.equal(storedAuthority.authorityOwnerGeneration, primary.authorityOwnerGeneration);
+        if (host !== undefined) {
+          assert.equal((await shutdown).outcome, ZLinkFrameworkTerminationOutcome.Stopped);
+          assert.equal(runtime.isSafeToShutdown(), true);
+        }
       }
       const expected =
-        scenario.startsWith('preserve') || scenario === 'window-preserve-cleanup'
+        scenario.startsWith('preserve') ||
+        scenario === 'window-preserve-cleanup' ||
+        scenario === 'shutdown' ||
+        scenario === 'draining'
           ? scenario.includes('restore-failure') || scenario === 'preserve-stale-seal'
             ? 'failed'
             : 'aborted'
-          : scenario === 'shutdown' || scenario === 'shutdown-during-session-wait'
+          : scenario === 'shutdown-during-session-wait'
             ? 'shutdown'
             : ['missing', 'cancel-without-preserve', 'window-store-primary'].includes(scenario)
               ? 'failed'

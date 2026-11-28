@@ -78,9 +78,16 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
 
 ### PUBSUB multi latency
 
-- catch-up은 paced 시작 뒤 `max(1, target_rate × 1 ms)` 이하의 추정 in-flight가
-  연속 0.5초 유지된 시각으로 판정한다. 추정 in-flight는 목표 송신 일정의 누적 수에서
-  최소 수신 subscriber의 누적 수를 뺀 값이며, 음수는 0으로 취급한다.
+- catch-up은 적체가 더 늘지 않는 상태로 판정한다. paced 시작 뒤 0.5초 창에서 추정 in-flight의
+  최댓값이 그 창 시작 값 이하이고, 그 창에서 최소 수신 subscriber의 수신율이 목표 송신률 이상이면
+  그 창의 끝을 catch-up 시각으로 본다. 추정 in-flight는 목표 송신 일정의 누적 수에서 최소 수신
+  subscriber의 누적 수를 뺀 값이며, 음수는 0으로 취급한다. 전송 중인 메시지도 in-flight에 들어가므로
+  정상 상태의 in-flight는 목표율 × 단방향 지연이다. 그래서 in-flight의 절대 크기로 판정하지 않는다
+  (그렇게 하면 지연 상한을 묻게 되어 fanout이 큰 작은 메시지에서 항상 실패한다). 지연은 catch-up 뒤
+  표본으로 따로 보고한다. 판정은 C `perf_multi_measurement`의 catch-up tracker 한 곳이 소유한다.
+  수신율은 같은 창에서 목표 일정이 예정한 송신 개수와 개수로 비교한다(목표율 × 경과 시간을 실수로 비교하지 않는다).
+  관측 시점이 두 도착 사이에 걸릴 수 있으므로 subscriber마다 1건 부족까지는 목표 이상으로 본다. 이 허용값은
+  tracker의 상수 하나(`receive_quantum`)가 소유한다.
   catch-up은 기존 latency duration 동안 허용하고, 도달 뒤 같은 시간만큼 표본을 수집한다.
   deadline까지 도달하지 못하면 `latency`, `latency_p95`, `latency_p99`를
   `invalid:<reason>`으로 기록하고 throughput은 유효한 측정값을 유지한다.
@@ -1052,6 +1059,48 @@ bindings/java/perf/run_benchmarks_multi.sh --pattern ALL
   된다.
 
 ---
+
+### 3.5 측정 환경과 준비
+
+공식 측정(숫자를 비교·기록하는 실행)은 아래 세 가지를 확인한 뒤 시작한다. 측정 종류·횟수·판정은
+[성능 측정 가이드](https://kairos-docs.kairoscode.dev/handbook/performance-measurement/)를 따른다.
+
+**1. 머신 조건**
+
+- CPU 주파수를 고정하고 값을 기록한다. 노트북급 CPU(예: Ryzen 7 5825U)는 활성 코어 수에 따라
+  2.0~4.4 GHz로 움직여 언어 간 비교가 흔들린다. 예: governor `performance`, `scaling_min_freq`=`scaling_max_freq`=고정값.
+- 고정이 실제로 걸렸는지 확인한다. CPU 수만큼 busy loop을 걸고 `scaling_cur_freq`가 고정값 ±60 MHz 안인지 본다.
+  벗어나면 측정하지 않는다. 확인 전에 `taskset -pc $$`가 모든 CPU(예: 0-15)인지 본다. 셸이 일부 CPU로
+  제한되어 있으면(측정 guard의 CPU 분리가 풀리지 않은 경우 등) busy loop이 일부 CPU에서만 돌아
+  나머지 CPU가 유휴 주파수(400 MHz)로 읽혀 고정이 실패한 것처럼 보인다.
+- 시작 직전 1분 load가 1.0 미만이 되도록 기다린다. 기록에 시작 load와 측정 중 평균 주파수·load·CPU 상위 프로세스를 남긴다.
+- 끝나면 governor와 min/max를 원래 값으로 복구한다.
+- 기록에 머신(CPU 모델·코어·RAM·OS·커널), 측정 commit, Core 버전, 고정 주파수를 적는다.
+
+**2. 측정 중 금지**
+
+- 같은 머신에서 빌드·컴파일·시험·다른 에이전트 작업을 하지 않는다. 한 번 겹치면 처리량이 눈에 띄게 떨어진다
+  (DEALER_DEALER TCP 4096B: 약 31만 → 약 28만 msg/s, 컴파일이 겹친 run).
+- .NET 빌드 서버(VBCSCompiler 등)가 측정 lock fd를 물고 남으면 guard가 측정이 끝나지 않은 것으로 보고
+  CPU 배치를 계속 제한한다. 측정 전에 `dotnet build-server shutdown`을 하고, 측정 wrapper는
+  `DOTNET_CLI_USE_MSBUILD_SERVER=0 UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1`을 설정한다.
+- 빌드·시험이 필요하면 측정이 없는 시간이나 다른 머신에서 한다.
+
+**3. 작업 폴더 표준 경로**
+
+새 worktree·새 머신에서 시작하기 전에 runner가 기대하는 산출물이 있는지 확인한다. runner는 없는 것을
+스스로 찾아 주지 않거나 다른 폴더에 빌드한다.
+
+| 산출물 | 표준 경로 | 쓰는 곳 |
+|---|---|---|
+| 공용 STREAM client | `bindings/c/build/perf/perf_stream_client` | C++ (`run_binding_multi.sh`, `prepare_cpp_runtime.py`), Java·.NET·Node multi runner |
+| Core release runtime | `~/.cache/zlink/core/<버전>/<플랫폼>/lib/` | 모든 binding (`--core-version`) |
+
+- C를 `bindings/c/build-release-<버전>`처럼 다른 폴더에 빌드했다면 `bindings/c/build`가 그 폴더를 가리키게 링크한다.
+  (.NET은 `PERF_STREAM_CLIENT`로 경로를 줄 수 있다.)
+- 시작 전 `test -x bindings/c/build/perf/perf_stream_client`로 확인한다. 이 파일이 없으면
+  C++ multi는 `missing benchmark binaries ... current missing: STREAM`, Node multi는
+  `shared perf_stream_client not found`로 멈춘다.
 
 ## 4. 결과 파일 형식 (공통)
 
