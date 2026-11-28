@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Contracts.Actors;
@@ -85,9 +86,16 @@ public sealed partial class RelocationBehaviorConformanceTests
             .Async<BehaviorAck>()
             .AsTask();
         Task<BehaviorAck>? request = null;
+        var stopwatch = Stopwatch.StartNew();
+        long? relocationRequestedAtMs = null;
+        long? savedRequestSubmitReturnedAtMs = null;
+        long? lastHandoffObservationAtMs = null;
+        var lastFrameCount = 0;
+        var lastSourceHoldCount = 0;
         try
         {
             await trace.WaitAsync("relocationRequested");
+            relocationRequestedAtMs = stopwatch.ElapsedMilliseconds;
             if (captureRequest)
             {
                 request = client
@@ -95,8 +103,23 @@ public sealed partial class RelocationBehaviorConformanceTests
                     .Timeout(timeout)
                     .Async<BehaviorAck>()
                     .AsTask();
-                await WaitUntilAsync(() =>
-                    sourceState.Handoff._lane.RunAsync(() => sourceState.Handoff._frames.Count != 0)
+                savedRequestSubmitReturnedAtMs = stopwatch.ElapsedMilliseconds;
+                await WaitUntilAsync(
+                    async () =>
+                    {
+                        var counts = await sourceState.Handoff._lane.RunAsync(() =>
+                            (
+                                Frames: sourceState.Handoff._frames.Count,
+                                SourceHold: sourceState.Handoff._sourceHoldFrames.Count
+                            )
+                        );
+                        lastHandoffObservationAtMs = stopwatch.ElapsedMilliseconds;
+                        lastFrameCount = counts.Frames;
+                        lastSourceHoldCount = counts.SourceHold;
+                        return counts.Frames != 0;
+                    },
+                    timeoutDiagnostics: () =>
+                        $"timeline=[relocationRequested observed at {relocationRequestedAtMs} ms, saved request submit returned at {savedRequestSubmitReturnedAtMs} ms, last handoff observation at {lastHandoffObservationAtMs} ms]; lastHandoff=(frames={lastFrameCount}, sourceHold={lastSourceHoldCount})"
                 );
             }
             trace.ReleaseJoinHandler.TrySetResult();

@@ -3343,7 +3343,8 @@ public sealed partial class RelocationBehaviorConformanceTests
 
     private static async Task WaitUntilAsync(
         Func<ValueTask<bool>> predicate,
-        TimeSpan? timeout = null
+        TimeSpan? timeout = null,
+        Func<string>? timeoutDiagnostics = null
     )
     {
         var deadlineTimeout = timeout ?? TimeSpan.FromSeconds(15);
@@ -3354,7 +3355,15 @@ public sealed partial class RelocationBehaviorConformanceTests
                 return;
             await Task.Delay(10);
         }
-        Assert.True(await predicate(), "The runtime did not reach the expected behavior state.");
+        var reached = await predicate();
+        if (reached)
+            return;
+        Assert.True(
+            reached,
+            timeoutDiagnostics is null
+                ? "The runtime did not reach the expected behavior state."
+                : $"The runtime did not reach the expected behavior state. {timeoutDiagnostics()}"
+        );
     }
 }
 
