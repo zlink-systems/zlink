@@ -3519,18 +3519,24 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         if (authority == null || !authority.route().spotFence().equals(follow.target())) {
             return null;
         }
-        return new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
-                follow.flags(),
-                authority.route(),
-                true,
-                follow.sourceNodeGeneration(),
-                follow.sourceNodeRid(),
-                follow.sourceSpotId(),
-                false,
-                0,
-                0,
-                null,
-                true);
+        return follow.readyMessage(authority.route());
+    }
+
+    boolean enqueueStagedInstanceFollow(
+            ZLinkServiceM6BWireCodec.InstanceSpotFollow follow,
+            byte[] metadata,
+            byte[] payload,
+            Consumer<Throwable> failure) {
+        var staging = relocationStagingIngressHandler;
+        return staging != null
+                && staging.handleInstanceSpotFollow(
+                        () ->
+                                owner.resolveSourceAuthority(
+                                        follow.sourceNodeRid(), follow.sourceNodeGeneration()),
+                        follow,
+                        metadata,
+                        payload,
+                        failure);
     }
 
     boolean enqueueRemoteInstanceSpot(

@@ -2,6 +2,22 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { setTimeout: delay } = require('node:timers/promises');
+const { Injectable, Module } = require('@nestjs/common');
+const { NestFactory } = require('@nestjs/core');
+const { SubmitResult } = require('@zlink-systems/zlink');
+const framework = require('../../packages/framework/dist');
+const nest = require('../../packages/nestjs/dist');
+const deferred = require('./helpers/deferred.cjs');
+const telemetry = require('./helpers/telemetry-log-capture');
+const { MemoryRelocationStore } = require('./fixtures/instance-relocation-memory-store');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
+const {
+  encodeAuthorityKey
+} = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
+const {
+  ZLinkInMemoryProviderLocationStore
+} = require('../../packages/framework/dist/runtime/locations/in-memory-provider-location-store');
 const {
   ApplicationIngressRecordOwner
 } = require('../../packages/framework/dist/runtime/application-jobs/application-ingress-record-owner');
@@ -113,7 +129,7 @@ function readyParts(route = source) {
   ];
 }
 
-function followParts(route, hop) {
+function followParts(route, hop, followApplication = application) {
   return encodeInstanceSpotFollowCommand(
     {
       command: 'instanceSpotFollow',
@@ -131,7 +147,7 @@ function followParts(route, hop) {
         expectedAuthorityOwnerGeneration: route.authorityOwnerGeneration,
         expectedOwnerLeaseGeneration: route.leaseGeneration
       },
-      payload: application
+      payload: followApplication
     },
     context
   ).map((part) => Buffer.from(part));
@@ -291,6 +307,307 @@ test('Ready Instance one-way reaches the new owner with its original sender and 
   }
   assert.equal(previous.diagnostics.length + current.diagnostics.length, 0);
 });
+
+test(
+  'committed Instance Spot admits Follow before target publication',
+  { timeout: 30_000 },
+  committedFollowScenario(false)
+);
+
+test(
+  'pending Follow confirmation allows the next record on the same connection',
+  { timeout: 30_000 },
+  committedFollowScenario(true)
+);
+
+function committedFollowScenario(holdConfirmation) {
+  return async (t) => {
+    const hostClock = fixedRidHostClock(t);
+    const mesh = holdConfirmation ? 'instance-follow-pending' : 'instance-follow-barrier';
+    const spotId = 'room';
+    const callerRid = 'follow-caller';
+    const key = encodeAuthorityKey('instance_spot', spotId);
+    const locationStore = new ZLinkInMemoryProviderLocationStore();
+    const relocationStore = new MemoryRelocationStore();
+    const committed = deferred();
+    const publish = deferred();
+    const created = deferred();
+    const delivered = deferred();
+    const nextSpotCreated = deferred();
+    const nextRecordDelivered = deferred();
+    const handled = { previous: [], target: [] };
+    const apps = [];
+    let moving;
+    t.after(async () => {
+      publish.resolve();
+      try {
+        await moving;
+      } finally {
+        for (const app of apps.reverse()) await app.close();
+      }
+    });
+
+    async function start(rid, peer) {
+      const builder = nest
+        .zlinkFramework()
+        .addLocationStore(locationStore)
+        .addRelocationStore(relocationStore);
+      builder.configureDispatch().messageFlow('normal');
+      builder.configureLocations().pollingIntervalMs(20).ownerLeaseFencingMarginMs(1);
+      const route = builder.addRouteMesh(mesh).listen('tcp://127.0.0.1:0').routingId(rid);
+      route.channel(mesh).server();
+      if (peer !== undefined) route.peerConnections().connect(peer.rid, peer.descriptor.endpoint);
+      class App {}
+      class Room {}
+      class NoticeHandler {
+        handle(_spot, notice) {
+          if (notice.marker === 'create') {
+            created.resolve();
+            return;
+          }
+          if (notice.marker === 'create-next') {
+            nextSpotCreated.resolve();
+            return;
+          }
+          if (notice.marker === 'next') {
+            nextRecordDelivered.resolve();
+            return;
+          }
+          handled[rid].push(notice);
+          if (rid === 'target') delivered.resolve();
+        }
+      }
+      if (rid === callerRid) route.objects().client();
+      else {
+        Injectable()(Room);
+        Injectable()(NoticeHandler);
+        nest.zlinkSpotPacketHandler({ spot: () => Room, packetName: 'Notice' })(NoticeHandler);
+        route
+          .objects()
+          .server()
+          .addInstanceSpotFactory('room', Room, (factory) => factory.recreateOnRelocation());
+      }
+      Module({
+        imports: [nest.ZLinkModule.forRoot(builder.build())],
+        providers: rid === callerRid ? [] : [Room, NoticeHandler]
+      })(App);
+      const app = await NestFactory.createApplicationContext(App, {
+        logger: false,
+        abortOnError: false
+      });
+      apps.push(app);
+      const host = app.get(nest.ZLINK_FRAMEWORK_RUNTIME);
+      await finishFixedRidHostStartup(
+        host,
+        hostClock,
+        framework.ZLinkFrameworkRuntimeState.Preparing
+      );
+      const node = host.spotNodeRuntime.meshNode(mesh);
+      const query = app.get(nest.ZLINK_LOCATION_RUNTIME_QUERY);
+      while (!t.signal.aborted) {
+        const descriptor = (await query.listMeshNodeDescriptors(mesh)).items.find(
+          (item) => String(item.rid) === rid && item.state === 1
+        );
+        if (descriptor !== undefined) return { app, host, node, rid, descriptor };
+        await delay(10, undefined, { signal: t.signal });
+      }
+      t.signal.throwIfAborted();
+    }
+
+    function snapshotRoute(snapshot, targetSpotId = spotId) {
+      assert.equal(snapshot.kind, 'snapshot');
+      return {
+        targetSpotId,
+        targetNodeRid: String(snapshot.allocation.descriptor.rid),
+        targetNodeGeneration: snapshot.allocation.descriptorLifecycleGeneration,
+        objectGeneration: snapshot.objectGeneration,
+        authorityOwnerGeneration: snapshot.authorityOwnerGeneration,
+        leaseGeneration: snapshot.ownerLeaseGeneration,
+        ownerId: snapshot.ownerId,
+        storeVersion: snapshot.storeVersion.value
+      };
+    }
+
+    const drops = () =>
+      telemetry.records.filter(
+        (record) =>
+          record.eventId === 'zlink.dispatch_error' &&
+          record.meshName === mesh &&
+          record.spotId === spotId &&
+          record.action === 'drop'
+      );
+    await telemetry.observed();
+    const previous = await start('previous');
+    class Notice {
+      constructor(marker) {
+        this.marker = marker;
+      }
+    }
+    await previous.app
+      .get(nest.ZLINK_SPOT_OUTBOUND)
+      .sendToSpot(spotId, new Notice('create'))
+      .instanceSpot('room')
+      .inMesh(mesh)
+      .submit();
+    await created.promise;
+    const runtime = previous.host.serviceRelocation;
+    const oldRoute = snapshotRoute(await runtime.options.locationStore().readAuthority(key));
+    assert.equal(oldRoute.targetNodeRid, previous.rid);
+    const current = await start('target', previous);
+    const caller = await start(callerRid, previous);
+    let nextRoute;
+    if (holdConfirmation) {
+      const nextSpotId = 'next-room';
+      await current.app
+        .get(nest.ZLINK_SPOT_OUTBOUND)
+        .sendToSpot(nextSpotId, new Notice('create-next'))
+        .instanceSpot('room')
+        .inMesh(mesh)
+        .submit();
+      await nextSpotCreated.promise;
+      const nextKey = encodeAuthorityKey('instance_spot', nextSpotId);
+      const store = current.host.serviceRelocation.options.locationStore();
+      nextRoute = snapshotRoute(await store.readAuthority(nextKey), nextSpotId);
+    }
+    while (
+      !previous.node.stateful.raw.isPeerRouteReady(current.rid) ||
+      !current.node.stateful.raw.isPeerRouteReady(previous.rid) ||
+      !caller.node.stateful.raw.isPeerRouteReady(previous.rid)
+    ) {
+      await delay(10, undefined, { signal: t.signal });
+    }
+
+    const targetRuntime = current.host.serviceRelocation;
+    const progress = targetRuntime.targetProgress.bind(targetRuntime);
+    t.mock.method(targetRuntime, 'targetProgress', async (stage, authority, phase, signal) => {
+      if (phase === 'activating' && stage.staging.hidden.has(key.value)) {
+        committed.resolve(stage);
+        await publish.promise;
+      }
+      return progress(stage, authority, phase, signal);
+    });
+
+    const validFollow = deferred();
+    const invalidFollow = deferred();
+    const ingress = current.node.stateful.ingress.bind(current.node.stateful);
+    t.mock.method(current.node.stateful, 'ingress', async (record) => {
+      const result = await ingress(record);
+      if (record.command === M6bServiceWireCommand.instanceSpotFollow) {
+        const follow = decodeInstanceSpotFollowCommand(record.parts, context);
+        const receipt =
+          Buffer.from(follow.sourceNodeRid).toString() === caller.rid ? validFollow : invalidFollow;
+        receipt.resolve(result);
+      }
+      return result;
+    });
+
+    moving = previous.host.relocate({
+      mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
+      deadlineMs: 15_000
+    });
+    let validResult;
+    let validDrops;
+    let stage;
+    const releaseRead = deferred();
+    try {
+      stage = await Promise.race([
+        committed.promise,
+        moving.then((result) => {
+          assert.equal(result.outcome, framework.ZLinkFrameworkRelocationOutcome.Relocated);
+          return committed.promise;
+        })
+      ]);
+      const snapshot = await targetRuntime.options.locationStore().readAuthority(key);
+      const newRoute = snapshotRoute(snapshot);
+      assert.equal(snapshot.relocation.phase, 'committed');
+      assert.equal(newRoute.targetNodeRid, current.rid);
+      assert.equal(newRoute.objectGeneration, oldRoute.objectGeneration);
+      assert.equal((await moving).outcome, framework.ZLinkFrameworkRelocationOutcome.Relocated);
+
+      const readStarted = deferred();
+      if (holdConfirmation) {
+        const store = targetRuntime.options.locationStore();
+        const readAuthority = store.readAuthority.bind(store);
+        t.mock.method(store, 'readAuthority', async (authorityKey, signal) => {
+          if (authorityKey.value === key.value) {
+            readStarted.resolve();
+            await releaseRead.promise;
+          }
+          return readAuthority(authorityKey, signal);
+        });
+      }
+
+      assert.equal(
+        await caller.node.sendToInstanceSpot(
+          oldRoute,
+          encodeChannelEnvelopeParts(3, mesh, 'Notice', new Notice('follow'))
+        ),
+        SubmitResult.Ok
+      );
+      if (holdConfirmation) {
+        await readStarted.promise;
+        assert.equal(
+          await previous.node.sendToInstanceSpot(
+            nextRoute,
+            encodeChannelEnvelopeParts(3, mesh, 'Notice', new Notice('next'))
+          ),
+          SubmitResult.Ok
+        );
+        const timeout = new AbortController();
+        try {
+          await Promise.race([
+            nextRecordDelivered.promise,
+            delay(2_000, undefined, { signal: timeout.signal }).then(() =>
+              assert.fail('the next record did not dispatch while Follow confirmation was pending')
+            )
+          ]);
+          assert.deepEqual(handled, { previous: [], target: [] }, 'Follow must wait for publication');
+        } finally {
+          timeout.abort();
+          releaseRead.resolve();
+        }
+      }
+      validResult = await validFollow.promise;
+      await telemetry.observed();
+      validDrops = drops().length;
+
+      assert.equal(
+        await previous.node.stateful.raw.sendApplication(
+          current.rid,
+          followParts(
+            { ...newRoute, authorityOwnerGeneration: newRoute.authorityOwnerGeneration + 1n },
+            1,
+            {
+              ...application,
+              payload: encodeMultipartPayload(
+                encodeChannelEnvelopeParts(3, mesh, 'Notice', new Notice('wrong-fence'))
+              )
+            }
+          ),
+          newRoute.targetNodeGeneration
+        ),
+        true
+      );
+      await invalidFollow.promise;
+      assert.deepEqual(handled, { previous: [], target: [] }, 'handlers must wait for publication');
+    } finally {
+      releaseRead.resolve();
+      publish.resolve();
+    }
+
+    await stage.finalize;
+    if (validResult === 'application' || validResult === 'infrastructure') await delivered.promise;
+    await current.node.waitForInstanceApplicationQuiescence(spotId);
+    await telemetry.observed();
+    assert.deepEqual(
+      { previous: handled.previous, target: handled.target, drops: validDrops },
+      { previous: [], target: [{ marker: 'follow' }], drops: 0 }
+    );
+    assert.equal(drops().length, 1, 'wrong target generation must produce one drop');
+    assert.equal(drops()[0].reason, 'stale_target');
+    assert.equal(drops()[0].sourceRid, original.rid);
+  };
+}
 
 test('invalid Ready Follow routes drop once without handler admission', async (t) => {
   for (const scenario of [

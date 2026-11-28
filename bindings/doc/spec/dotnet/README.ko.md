@@ -439,6 +439,7 @@ object identity 기반 dictionary 조회를 포함해 다시 사용하면 안 �
   `Received` 객체를 채우고 `bool`을 반환한다.
 - raw `SUB` / `XSUB` subscribe는 호출자 제공 `TopicMessage`나
   `SubscriptionEvent` 객체를 채우고 `bool`을 반환한다.
+- SUB·XSUB의 `SubscriptionAt(index)`는 해당 인덱스에 항목이 없으면 `null`을 반환한다. 조회 규칙은 [공통 Subscription 조회](../README.ko.md#subscription-조회)를 따른다.
 - `TopicMessage.ReleaseForReuse()`는 현재 part와 metadata를 해제하고 내부 topic 수신
   버퍼를 유지해 다음 `Subscribe`에서 재사용하게 한다. `TopicMessage`가 열린 상태에서만
   사용할 수 있으며 terminal `Dispose()` 뒤에는 `ObjectDisposedException`을 던지고 객체를

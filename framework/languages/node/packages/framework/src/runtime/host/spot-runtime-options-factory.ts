@@ -161,6 +161,8 @@ export class ZLinkSpotRuntimeOptionsFactory {
         }
         return runtime.executeEntryActor(meshName, actorId, operation, onFailure);
       },
+      entryActorSerialExecutor: (meshName) =>
+        this.options.spotNodeRuntime()?.entryActivations.get(meshName)?.spotSerialExecutor,
       channelClient: new DefaultZLinkChannelClient(
         this.options.registration,
         this.options.channelTransport,

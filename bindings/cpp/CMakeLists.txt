@@ -549,6 +549,10 @@ if(ZLINK_CPP_BUILD_TESTS)
   )
 
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_cpp_contract_test(test_cpp_contract_subscription_at
+      "tests/contract/test_cpp_contract_subscription_at.cpp")
+    target_link_options(test_cpp_contract_subscription_at PRIVATE
+      "LINKER:--wrap=zlink_subscription_at")
     add_cpp_contract_test(test_cpp_contract_receive_close_admission
       "tests/contract/test_cpp_contract_receive_close_admission.cpp")
     target_link_options(test_cpp_contract_receive_close_admission PRIVATE

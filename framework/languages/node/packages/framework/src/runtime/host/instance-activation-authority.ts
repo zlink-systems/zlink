@@ -23,12 +23,13 @@ import {
   decodeServiceClosingSpotAuthority,
   encodeServiceInstanceAuthorityPayload
 } from '../foundation/service-authority-payload-codec';
-import type {
-  ServiceAsyncInstanceActivationAuthority,
-  ServiceInstanceActivationReservation,
-  ServiceInstanceAuthorityRead,
-  ServiceInstanceAuthorityReserve,
-  ServicePendingInstanceActivation
+import {
+  instanceRouteFromAuthority,
+  type ServiceAsyncInstanceActivationAuthority,
+  type ServiceInstanceActivationReservation,
+  type ServiceInstanceAuthorityRead,
+  type ServiceInstanceAuthorityReserve,
+  type ServicePendingInstanceActivation
 } from '../foundation/service-stateful-runtime';
 import type { ServiceSpotState } from '../foundation/service-stateful-registry';
 import type {
@@ -641,16 +642,7 @@ function routeFromSnapshot(
     }
     spotId = decoded.spotId;
   }
-  return {
-    targetNodeRid: String(snapshot.allocation.descriptor.rid),
-    targetNodeGeneration: snapshot.allocation.descriptorLifecycleGeneration,
-    targetSpotId: spotId,
-    objectGeneration: snapshot.objectGeneration,
-    ownerId: snapshot.ownerId,
-    authorityOwnerGeneration: snapshot.authorityOwnerGeneration,
-    leaseGeneration: snapshot.ownerLeaseGeneration,
-    storeVersion: snapshot.storeVersion.value
-  };
+  return instanceRouteFromAuthority(spotId, snapshot);
 }
 
 function authorityKey(spotId: string): ZLinkAuthorityKey {
