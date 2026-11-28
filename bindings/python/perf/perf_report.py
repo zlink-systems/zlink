@@ -216,10 +216,10 @@ def median_result_data_lines(lines, suite, runs):
             continue
         try:
             size_value = int(size)
-            metric_value = float(value)
+            metric_value = _parse_metric_value(value)
         except ValueError:
             continue
-        if not math.isfinite(metric_value):
+        if not isinstance(metric_value, str) and not math.isfinite(metric_value):
             continue
         rows[(pattern, transport, size_value)][metric].append(metric_value)
 
@@ -254,7 +254,7 @@ def _read_metric_case_files(metrics_path, cases_path):
             if size not in pattern_sizes[pattern]:
                 pattern_sizes[pattern].append(size)
             try:
-                rows[key][metric].append(float(value))
+                rows[key][metric].append(_parse_metric_value(value))
             except ValueError:
                 rows[key][metric].append(math.nan)
 
@@ -275,7 +275,14 @@ def _read_metric_case_files(metrics_path, cases_path):
     return rows, cases, patterns, pattern_transports, pattern_sizes
 
 
+def _parse_metric_value(value):
+    return value if value.startswith("invalid:") else float(value)
+
+
 def _median(values):
+    for value in values:
+        if isinstance(value, str):
+            return value
     usable = [value for value in values if not math.isnan(value)]
     if not usable:
         return math.nan
@@ -295,10 +302,14 @@ def _fmt_bandwidth(value, precision):
 
 
 def _fmt_latency_ms(value):
+    if isinstance(value, str):
+        return value
     return "N/A" if math.isnan(value) else f"{value:.3f} ms"
 
 
 def _fmt_metric(metric, value):
+    if isinstance(value, str):
+        return value
     precision = 6 if metric.startswith("latency") else 3
     return "N/A" if math.isnan(value) else f"{value:.{precision}f}"
 
@@ -764,7 +775,7 @@ def _read_result_rows_from_logs(tmp_dir):
                 if metric not in REQUIRED_METRICS:
                     continue
                 try:
-                    rows[(pattern, transport, int(size))][metric].append(float(value))
+                    rows[(pattern, transport, int(size))][metric].append(_parse_metric_value(value))
                 except ValueError:
                     continue
     return rows
@@ -796,7 +807,7 @@ def progress_case_row(args):
         print(missing_line)
         return 0
 
-    values = {metric: float(metrics[metric]) for metric in REQUIRED_METRICS}
+    values = {metric: _parse_metric_value(metrics[metric]) for metric in REQUIRED_METRICS}
     size = int(args.size)
     if args.suite == "single":
         print(_single_case_row(args.pattern, size, values))

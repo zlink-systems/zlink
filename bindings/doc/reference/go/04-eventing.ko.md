@@ -12,8 +12,7 @@ timer를 다룬다 — 각각 `OpenSocketMonitor(...)`, `NewPoller()`,
 [`poller.go`](../../../../bindings/go/internal/native/poller.go),
 [`timer.go`](../../../../bindings/go/internal/native/timer.go)가
 소유하며,
-[`contracts/eventing.go`](../../../../bindings/go/contracts/eventing.go)를
-통해 alias로 re-export된다.
+[`root_projection.go`](../../../../bindings/go/root_projection.go)가 alias로 re-export한다.
 
 ---
 
@@ -22,8 +21,8 @@ timer를 다룬다 — 각각 `OpenSocketMonitor(...)`, `NewPoller()`,
 socket의 connection lifecycle event를 관찰하고 현재 status를 읽는다.
 
 ```go
-monitor, err := contracts.OpenSocketMonitor(dealer, contracts.MonitorEventConnectionReady)
-event, err := monitor.Recv(contracts.RecvFlagsNone)
+monitor, err := zlink.OpenSocketMonitor(dealer, zlink.MonitorEventConnectionReady)
+event, err := monitor.Recv(zlink.RecvFlagsNone)
 status, err := monitor.Status()
 ```
 
@@ -31,10 +30,10 @@ status, err := monitor.Status()
 
 | Member | 의미 |
 | --- | --- |
-| `OpenSocketMonitor(socket SocketTarget, events ...MonitorEventMask) (*SocketMonitor, error)` | monitor를 연다; `events`가 없으면 `MonitorEventAll`을 구독하고, 넘긴 mask는 OR로 합쳐져 반영된다 |
-| `Recv(flags RecvFlags) (*MonitorEvent, error)` | blocking과 non-blocking 둘 다를 위한 단일 진입점; non-blocking 형태엔 `RecvFlagsDontWait`를 넘긴다 — **여기서 no-data 시 값-반환 형태는 문서화된 예외다**, 자신의 doc comment에 따르면: "Value-return form is allowed for monitor/timer control-plane APIs by doc/spec/bindings/go/README.md §Receive And Subscribe Shape" |
+| `OpenSocketMonitor(socket SocketTarget, options ...MonitorOpenOption) (*SocketMonitor, error)` | 이벤트 마스크를 OR로 결합한다. 생략하면 모든 이벤트를 선택한다. `MonitorHwmBytes(uint64)`로 바이트 HWM을 설정한다. |
+| `Recv(flags RecvFlags) (*MonitorEvent, error)` | 모니터 이벤트를 꺼낸다. |
 | `Status() (*MonitorStatus, error)` | 시점 스냅샷을 반환 |
-| `Recv(RecvFlagsDontWait)` | non-blocking pull, queue가 비면 event 없음 |
+| `Recv(RecvFlagsDontWait)` | 큐가 비어 있으면 `nil`과 `RecvNoData`를 담은 `*RecvError`를 반환한다. |
 | `Close() error` | monitor를 닫음 |
 
 **Completion result.** 모든 member는 동기다. `SocketTarget`(Core
@@ -49,20 +48,15 @@ category)은 모든 내장 socket type이 구현하는 공유 interface다 —
 
 ## `MonitorEventMask` / `MonitorEventType`
 
-같은 16개 lifecycle-event 비트를 두 개의 별개 명명 타입이 보고한다:
-`MonitorEventMask`(`uint32`)는 `OpenSocketMonitor`의 variadic 인자가
-받는 타입이고; `MonitorEventType`(`uint64`)는 `MonitorEvent.Event`가
-보고하는 타입이다. 모든 명명 상수는 이름과 숫자값이 일치하는 형태로
-두 계열 모두에 존재한다(`MonitorEventConnected` /
-`MonitorEventTypeConnected`, ...) — 구독한 mask를 수신된 event의 type과
-비교하려는 caller는 둘 사이를 명시적으로 변환해야 한다; 같은 비트를
-가졌다 해도 cast 없이는 서로 바꿔 사용할 수 없다.
+event mask를 `MonitorOpenOption`으로 전달해 구독할 event를 고른다.
+`MonitorEventMask`(`uint32`)와 `MonitorEventType`(`uint64`)에는 같은 이름과
+비트값을 가진 event 상수가 각각 19개 있다. 두 타입의 값을 직접 비교하려면 명시적으로 변환한다.
 
 **Options.**
 
 | Member | 의미 |
 | --- | --- |
-| `MonitorEventMask` 상수 | `MonitorEventConnected`, `MonitorEventConnectDelayed`, `MonitorEventConnectRetried`, `MonitorEventListening`, `MonitorEventBindFailed`, `MonitorEventAccepted`, `MonitorEventAcceptFailed`, `MonitorEventClosed`, `MonitorEventCloseFailed`, `MonitorEventDisconnected`, `MonitorEventMonitorStopped`, `MonitorEventHandshakeFailedNoDetail`, `MonitorEventConnectionReady`, `MonitorEventHandshakeFailedProtocol`, `MonitorEventHandshakeFailedAuth`, `MonitorEventPeerWeightChanged`, `MonitorEventAll` |
+| `MonitorEventMask` 상수 | `MonitorEventConnected`, `MonitorEventConnectDelayed`, `MonitorEventConnectRetried`, `MonitorEventListening`, `MonitorEventBindFailed`, `MonitorEventAccepted`, `MonitorEventAcceptFailed`, `MonitorEventClosed`, `MonitorEventCloseFailed`, `MonitorEventDisconnected`, `MonitorEventMonitorStopped`, `MonitorEventHandshakeFailedNoDetail`, `MonitorEventConnectionReady`, `MonitorEventHandshakeFailedProtocol`, `MonitorEventHandshakeFailedAuth`, `MonitorEventPeerWeightChanged`, `MonitorEventSendFlowPaused`, `MonitorEventSendFlowResumed`, `MonitorEventFlowStateStale`, `MonitorEventAll` |
 | `MonitorEventType` 상수 | 위 모든 `MonitorEventMask` 값을 `MonitorEventType`-접두 이름으로 미러링(`MonitorEventTypeConnected`, ...) |
 | `MonitorSourceKind`(`uint32`) | `MonitorSourceSocket` — 유일한 값 |
 
@@ -112,32 +106,42 @@ caller가 직접 `event.Event&MonitorEventTypeX`로 비트 검사해야 한다,
 
 ## `MonitorStatus`
 
-`SocketMonitor.Status()`가 반환하는, 모니터링 대상 상태와
-auto-high-water-mark 텔레메트리의 시점 스냅샷. 평범한 공개 필드
-struct다.
+`SocketMonitor.Status()`는 조회 시점의 상태를 반환한다. `ABIVersion`과 `StructSize`는 Core
+레이아웃을, `SourceKind`는 관찰하는 자원의 종류를 나타낸다.
 
-**Options.** 파라미터 없음 — 모든 field가 공개.
+| 접근자 또는 필드 | 의미 |
+| --- | --- |
+| `State().Has(flag)`, `Detail().Has(flag)` | 타입이 지정된 상태·세부 필드를 검사한다. `IsReady()`는 `MonitorStateReady`를 검사한다. |
+| `SndPendingMsgs`, `RcvPendingMsgs` | 대기 중인 메시지 수다. |
+| `SndPendingBytes`, `RcvPendingBytes` | 대기 중인 메시지의 회계 바이트 수다. |
+| `AutoHwmEnabled`, `AutoHwmProfile`, `AutoHwmRole`, `AutoHwmPolicyClass` | 자동 HWM의 설정 진단값이다. |
+| `AutoHwmPlannedSndHwmBytes`, `AutoHwmPlannedRcvHwmBytes`, `AutoHwmAppliedSndHwmBytes`, `AutoHwmAppliedRcvHwmBytes` | 계획 및 적용된 HWM을 바이트로 나타낸다. |
+| `AutoHwmEffectiveSndBuf`, `AutoHwmEffectiveRcvBuf` | 실제 송수신 buffer 크기다. |
+| `AutoHwmDeferredSndHwmBytes`, `AutoHwmDeferredRcvHwmBytes` | 유예된 HWM을 바이트로 나타낸다. 대응하는 `AutoHwmDeferredSndHwmValid` 또는 `AutoHwmDeferredRcvHwmValid`가 `true`일 때 유효하다. |
+| `AutoHwmLastRecalcMs`, `AutoHwmLastRecalcReason` | 최근 자동 HWM 재계산 시각과 원인이다. |
+| `IsFlowStateDetailPopulated()` | 수신 흐름 필드에 값이 있는지 알려 준다. |
+| `AutoHwmSendBlockedRatioPPM` | 최초 send 수락 시도 중 HWM으로 막힌 비율을 백만분율로 나타낸다. |
+| `SndBytesInFlight`, `RcvBytesInFlight`, `MinimumCoreMessageChargeBytes`, `OversizeMessageAdmissionCount`, `OversizeMessageAdmissionMaxBytes` | 전송 중인 바이트 수, 메시지당 최소 회계 바이트 수, 크기 한도를 초과해 수락한 메시지의 수와 최대 바이트 크기다. |
 
-| 그룹 | Field |
-|---|---|
-| ABI identity | `ABIVersion`, `StructSize`(`uint32`) |
-| Source/state | `SourceKind`(`MonitorSourceKind`: `MonitorSourceSocket`뿐), `StateFlags`/`DetailFlags`(`uint32` bitmask), `IsReady()`(계산 메서드) |
-| Pending count | `SndPendingMsgs`, `RcvPendingMsgs`(`uint64`) |
-| Auto-HWM 설정 | `AutoHwmEnabled`(`bool`), `AutoHwmProfile`/`AutoHwmRole`/`AutoHwmPolicyClass`(`uint32`), `AutoHwmUnitBudgetBytes`/`AutoHwmSocketMessageSlots`(`uint64`), `AutoHwmSizeCap`(`uint32`) |
-| Connection bucket | `AutoHwmConnectionBucketEnabled`(`bool`), `AutoHwmConnectionBucketCount`/`Index`/`Hwm4K`(`uint32`), `AutoHwmConnectionBucketHysteresisRetained`(`bool`) |
-| Auto-HWM plan(바이트) | `AutoHwmEffectiveMessageBytes`, `AutoHwmPlannedSndHwmBytes`/`RcvHwmBytes`, `AutoHwmAppliedSndHwmBytes`/`RcvHwmBytes`(`uint64`), `AutoHwmEffectiveSndBuf`/`RcvBuf`(`int32`) |
-| Auto-HWM recalc | `AutoHwmLastRecalcMs`(`uint64`), `AutoHwmLastRecalcReason`(`AutoHwmRecalcReason`, Core category), `AutoHwmSendBlockedRatioPPM`(`uint32`) |
-| Auto-HWM deferred shrink | `AutoHwmDeferredSndHwmBytes`/`RcvHwmBytes`(`uint64`, 대응하는 `AutoHwmDeferredSndHwmValid`/`RcvHwmValid` `bool`이 true일 때만 유효) |
-| In-flight/charging | `SndBytesInFlight`, `RcvBytesInFlight`, `MinimumCoreMessageChargeBytes`, `OversizeMessageAdmissionCount`, `OversizeMessageAdmissionMaxBytes`(`uint64`) |
+**Completion result.** `Status()`는 공개 field를 가진 snapshot과 `error`를 반환한다.
+`IsReady()`와 flag accessor는 snapshot을 동기적으로 읽는다.
 
-**Completion result.** N/A — 평범한 공개 field, 계산 메서드
-`IsReady()` 하나 추가. **이 binding의 이 타입엔 `IsClosed()` 메서드가
-없다**, `is_ready()`와 나란히 `is_closed()`가 있는 rust와 다르다.
+**선택 기준.** 준비 여부는 `IsReady()`로 확인한다. 실제 송수신 HWM이
+`CommonSocketOptions`의 설정과 다른 이유를 조사할 때는 계획, 적용, 유예 HWM
+field를 비교한다.
 
-**선택 기준.** `StateFlags`를 직접 디코딩하는 대신 `IsReady()`를
-호출한다. socket의 실효 send/receive HWM이 설정한
-`CommonSocketOptions` 값(Sockets category)과 다른 이유를 진단할 땐
-connection-bucket과 auto-HWM-plan field를 사용한다.
+---
+
+## 연결 시도 스냅샷
+
+나가는 연결을 지원하는 socket을 `PollConnect`로 등록한다. 이벤트가 준비되면 같은 socket의
+`ConnectionAttemptsSnapshot() ([]ConnectionAttempt, error)`을 호출한다. socket당 관찰자를 하나 둔다.
+조회가 성공하면 읽은 변경에 해당하는 준비 상태가 해제된다.
+
+각 행은 나가는 연결 등록 하나를 나타낸다. `Endpoint`는 주소, `State`는 현재 상태다.
+`IntentID`, `Revision`, `LastFailureID`는 동등성만 비교한다. `LastFailure`는 연결이 회복된 뒤에도
+마지막 실패를 보존한다. 실패 이력이 없으면 `LastFailureID == 0`이다. 조회 자체가 실패하면
+`*ConfigError`를 반환한다.
 
 ---
 
@@ -147,10 +151,10 @@ socket, file descriptor, timer를 하나의 재사용 가능한 wait로
 multiplex한다.
 
 ```go
-poller, err := contracts.NewPoller()
-poller.AddSocket(dealer, contracts.PollIn, 1)
+poller, err := zlink.NewPoller()
+poller.AddSocket(dealer, zlink.PollIn, 1)
 poller.AddTimer(timer, 2)
-events := make([]contracts.PollEvent, 8)
+events := make([]zlink.PollEvent, 8)
 ready, err := poller.Wait(events, time.Second)
 ```
 
@@ -162,7 +166,7 @@ ready, err := poller.Wait(events, time.Second)
 | `AddSocket(socket SocketTarget, events PollEventFlag, slot uintptr) error` | socket을 등록; `slot`은 대응하는 결과로 그대로 되돌아오는 caller token |
 | `AddFd(fd int, events PollEventFlag, slot uintptr) error` | raw file descriptor를 등록, 같은 형태 |
 | `AddTimer(timer *Timer, slot uintptr) error` | timer를 socket/fd와 함께 multiplex하도록 등록 |
-| `ModifySocket(socket, events) error` / `ModifyFd(fd, events) error` | 이미 등록된 socket/fd의 감시 event를 교체; `ModifySocket`은 특히 `PollCompletion` flag 변경을 거부한다 — 그 등록 모드는 `RemoveSocket` + `AddSocket`으로만 바꿔야 한다, completion 처리가 Core에서 별도 소유권을 갖기 때문 |
+| `ModifySocket(socket, events) error` / `ModifyFd(fd, events) error` | 등록한 이벤트를 바꾼다. `PollCompletion`을 추가하거나 빼면 완료 처리 소유권을 얻거나 반환한다. |
 | `RemoveSocket(socket) error` / `RemoveFd(fd int) error` / `RemoveTimer(timer *Timer) error` | source 등록을 해제 |
 | `Wait(events []PollEvent, timeout time.Duration) (int, error)` | `timeout`까지 block하며 `len(events)`까지 결과를 그 자리에 써 넣음; **`time.Duration`을 받는다**, rust의 raw millisecond `i64`와 다름; 실패한 wait는 Core의 결과를 담은 `*ConfigError`다(다른 `Wait`가 진행 중이면 `ConfigBusy`, 709) |
 | `Size() (int, error)` | 현재 등록된 source 개수; `Wait`가 진행 중이면 `ConfigBusy`(709) |
@@ -182,9 +186,9 @@ poll descriptor다; `PollEvent`는 `Poller.Wait`가 보고하는 ready
 source 하나다.
 
 ```go
-items := []contracts.PollItem{{Socket: dealer, Events: contracts.PollIn}}
-ready, err := contracts.Poll(items, 500*time.Millisecond)
-if items[0].REvents&contracts.PollIn != 0 { /* ... */ }
+items := []zlink.PollItem{{Socket: dealer, Events: zlink.PollIn}}
+ready, err := zlink.Poll(items, 500*time.Millisecond)
+if items[0].REvents&zlink.PollIn != 0 { /* ... */ }
 ```
 
 **Options — `PollItem`**(모든 field 공개).
@@ -230,7 +234,7 @@ interval마다 fire하며 poll되거나 기다려질 수 있는 timer, `Poller`�
 독립적으로 생성되지만 `Poller.AddTimer`로 등록할 수 있다.
 
 ```go
-timer, err := contracts.NewTimer()
+timer, err := zlink.NewTimer()
 timer.Start(1_000_000_000, 0) // 나노초 단위 interval, time.Duration 아님
 fireCount, ok, err := timer.Recv()
 ```
@@ -240,7 +244,7 @@ fireCount, ok, err := timer.Recv()
 | Member | 의미 |
 | --- | --- |
 | `NewTimer() (*Timer, error)` | timer를 생성 |
-| `Start(intervalNs, repeatCount uint64) error` | `intervalNs`마다 fire를 시작; **interval은 raw 나노초 `uint64`다, `time.Duration`이 아니다** — 이 binding의 다른 곳(Core/Sockets category)에 있는 duration-typed option 관례를 깬다; `repeatCount`가 `0`이면 무한 반복 |
+| `Start(intervalNs, repeatCount uint64) error` | `intervalNs` 나노초마다 fire한다. `repeatCount`가 `0`이면 무한 반복한다. |
 | `Stop() error` | fire를 멈춤; `Start`로 재시작 가능 |
 | `Recv() (uint64, bool, error)` | 누적 fire count; 대기 중인 게 없으면 error가 아니라 `bool`이 `false` — **`SocketMonitor.Recv`와 같은 문서화된 no-data 시 값-반환 예외**, doc/spec/bindings/go/README.md §Receive And Subscribe Shape를 인용하는 자신의 doc comment에 따르면 |
 | 반복 `Recv()` | pull surface로 pending cumulative fire count drain |
@@ -257,7 +261,7 @@ wait에서 multiplex하려면 `Poller.AddTimer`로 timer를 등록한다.
 
 | 타입 | 사용처 | 값 |
 |---|---|---|
-| `PollEventFlag`(명명된 `int16`) | `Poller.AddSocket`/`ModifySocket`/`AddFd`/`ModifyFd`, `PollItem.Events`/`.REvents`, `PollEvent.Revents` | `PollIn`(`1`), `PollOut`(`2`), `PollErr`(`4`), `PollPri`(`8`), `PollCompletion`(`32`) — **이 binding은 `PollErr`/`PollPri`를 포함해 다섯 개 전부를 선언한다**, 둘 다에 대응물이 없는 rust와 다르다 |
+| `PollEventFlag` (`int16`) | `Poller.AddSocket`/`ModifySocket`/`AddFd`/`ModifyFd`, `PollItem.Events`/`REvents`, `PollEvent.Revents` | `PollIn` (1), `PollOut` (2), `PollErr` (4), `PollPri` (8), `PollCompletion` (32), `PollRoute` (64), `PollConnect` (128). |
 | `MonitorSourceKind`(명명된 `uint32`) | `MonitorStatus.SourceKind` | `MonitorSourceSocket` |
 | `PollSourceKind`(명명된 `int32`) | `PollEvent.SourceKind` | `PollSourceSocket`, `PollSourceFD`, `PollSourceTimer` |
 

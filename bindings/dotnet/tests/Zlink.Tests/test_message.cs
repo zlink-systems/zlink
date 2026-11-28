@@ -20,7 +20,7 @@ public sealed class test_message
         using Message replacement = Message.Allocate(size);
 
         Assert.NotSame(original, replacement);
-        Assert.Throws<ObjectDisposedException>(() => original.AsSpan());
+        Assert.True(original.AsSpan().IsEmpty);
         Assert.Equal(size, replacement.Size);
     }
 
@@ -181,8 +181,8 @@ public sealed class test_message
         message.Dispose();
 
         Assert.Equal("view"u8.ToArray(), snapshot);
-        Assert.Throws<ObjectDisposedException>(() => message.AsSpan());
-        Assert.Throws<ObjectDisposedException>(() => message.AsReadOnlySpan());
+        Assert.True(message.AsSpan().IsEmpty);
+        Assert.True(message.AsReadOnlySpan().IsEmpty);
     }
 
 }

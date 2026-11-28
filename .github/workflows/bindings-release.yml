@@ -749,6 +749,9 @@ jobs:
           cd bindings/rust
           cargo test
 
+      - name: Build Rust perf crates
+        run: bash bindings/rust/tests/build_perf.sh
+
       - name: Package source archive
         run: |
           mkdir -p dist/rust

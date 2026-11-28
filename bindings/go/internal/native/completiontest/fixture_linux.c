@@ -14,6 +14,8 @@ static _Atomic int override_missing_poller_modify;
 static _Atomic int override_poll_failure;
 static _Atomic int override_close_busy;
 static _Atomic int early_send_wait;
+enum fixture_backpressure { no_backpressure, tokenless_backpressure, writable_backpressure };
+static _Atomic enum fixture_backpressure submit_backpressure;
 static zlink_completion_t records[16];
 static size_t read_index, write_index, trace_size;
 static char trace[64];
@@ -41,6 +43,7 @@ void fixture_start(void *socket)
     atomic_store(&override_poll_failure, 0);
     atomic_store(&override_close_busy, 0);
     atomic_store(&early_send_wait, 0);
+    atomic_store(&submit_backpressure, no_backpressure);
 }
 
 void fixture_stop(void) {
@@ -51,6 +54,7 @@ void fixture_stop(void) {
     atomic_store(&override_poll_failure, 0);
     atomic_store(&override_close_busy, 0);
     atomic_store(&early_send_wait, 0);
+    atomic_store(&submit_backpressure, no_backpressure);
 }
 void fixture_watch_context(void *context) { atomic_store(&watched_context, context); }
 void fixture_override_empty_poller_wait_once(void) { atomic_store(&override_empty_poller_wait, 1); }
@@ -60,6 +64,10 @@ void fixture_override_close_busy_once(void) { atomic_store(&override_close_busy,
 void fixture_early_send_wait_once(void) { atomic_store(&early_send_wait, 1); }
 int fixture_early_send_waiting(void) { return atomic_load(&early_send_wait) == 2; }
 void fixture_release_early_send(void) { atomic_store(&early_send_wait, 3); }
+void fixture_backpressure_once(int with_token)
+{
+    atomic_store(&submit_backpressure, with_token ? writable_backpressure : tokenless_backpressure);
+}
 const char *fixture_trace(void) { return trace; }
 
 int __real_zlink_close(void *);
@@ -183,12 +191,33 @@ zlink_recv_result_t __wrap_zlink_completion_recv(void *socket, zlink_completion_
     return ZLINK_RECV_OK;
 }
 
+static int reject_with_backpressure(zlink_msg_t *parts, size_t part_count, void *context,
+                                    zlink_completion_id_t *id)
+{
+    enum fixture_backpressure mode = atomic_exchange(&submit_backpressure, no_backpressure);
+    if (mode == no_backpressure)
+        return 0;
+    zlink_multipart_close(parts, part_count);
+    if (id != NULL)
+        *id = 0;
+    if (mode == writable_backpressure) {
+        assert(id != NULL);
+        *id = 41;
+        fixture_writable(*id, (uintptr_t) context, "submit-target");
+    }
+    record_call('B');
+    errno = EAGAIN;
+    return 1;
+}
+
 static zlink_submit_result_t admit(zlink_msg_t *parts, size_t part_count,
                                   zlink_send_flags_t flags, void *context,
                                   zlink_completion_id_t *id, int request)
 {
     assert(flags == ZLINK_SEND_FLAGS_DONTWAIT);
     assert(part_count > 0);
+    if (reject_with_backpressure(parts, part_count, context, id))
+        return ZLINK_SUBMIT_BACKPRESSURED;
     int expected = 1;
     if (!request && atomic_compare_exchange_strong(&early_send_wait, &expected, 2)) {
         *id = 41;
@@ -232,4 +261,12 @@ zlink_submit_result_t __wrap_zlink_request(void *socket, const zlink_routing_id_
     if (!owns_socket(socket))
         return __real_zlink_request(socket, rid, parts, part_count, flags, timeout, context, id);
     return admit(parts, part_count, flags, context, id, 1);
+}
+
+zlink_submit_result_t __real_zlink_reply(void *, const zlink_routing_id_t *, zlink_reply_token_t, zlink_msg_t *, size_t);
+zlink_submit_result_t __wrap_zlink_reply(void *socket, const zlink_routing_id_t *rid, zlink_reply_token_t token, zlink_msg_t *parts, size_t part_count)
+{
+    if (owns_socket(socket) && reject_with_backpressure(parts, part_count, NULL, NULL))
+        return ZLINK_SUBMIT_BACKPRESSURED;
+    return __real_zlink_reply(socket, rid, token, parts, part_count);
 }

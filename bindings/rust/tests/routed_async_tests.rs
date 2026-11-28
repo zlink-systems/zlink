@@ -19,9 +19,9 @@ use zlink::{
 };
 
 const RECORD_HWM: u64 = 65_536 + 64;
-const SOCKET_TIMEOUT_MS: i32 = 5_000;
-const SHORT_SOCKET_TIMEOUT_MS: i32 = 2_000;
-const WAKE_TEST_RECEIVE_TIMEOUT_MS: i32 = 3_000;
+const SOCKET_TIMEOUT: Duration = Duration::from_millis(5_000);
+const SHORT_SOCKET_TIMEOUT: Duration = Duration::from_millis(2_000);
+const WAKE_TEST_RECEIVE_TIMEOUT: Duration = Duration::from_millis(3_000);
 
 fn large_filler(byte: u8) -> Message {
     Message::try_from(vec![byte; 65_536].as_slice()).expect("filler message")
@@ -65,8 +65,8 @@ fn saturate(mut submit: impl FnMut() -> PendingSend) -> Vec<PendingSend> {
 #[test]
 fn inline_admission_resolves_the_future_on_its_first_poll() {
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     router.bind("inproc://rust-send-complete-inline").unwrap();
     test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
         dealer
@@ -90,7 +90,7 @@ fn inline_admission_resolves_the_future_on_its_first_poll() {
 
     router
         .common_options()
-        .set_receive_timeout(SHORT_SOCKET_TIMEOUT_MS)
+        .set_receive_timeout(Some(SHORT_SOCKET_TIMEOUT))
         .unwrap();
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
@@ -103,8 +103,8 @@ fn inline_admission_resolves_the_future_on_its_first_poll() {
 fn ownerless_send_rejects_before_core_submission() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let receiver = ctx.pair_socket().unwrap();
-    let sender = ctx.pair_socket().unwrap();
+    let receiver = ctx.create_pair_socket().unwrap();
+    let sender = ctx.create_pair_socket().unwrap();
     sender
         .common_options()
         .set_send_high_water_mark(RECORD_HWM)
@@ -135,8 +135,8 @@ fn ownerless_send_rejects_before_core_submission() {
 fn public_poller_drains_writable_and_retries_the_same_packet() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let receiver = ctx.pair_socket().unwrap();
-    let sender = ctx.pair_socket().unwrap();
+    let receiver = ctx.create_pair_socket().unwrap();
+    let sender = ctx.create_pair_socket().unwrap();
     sender
         .common_options()
         .set_send_high_water_mark(512)
@@ -148,11 +148,11 @@ fn public_poller_drains_writable_and_retries_the_same_packet() {
     sender.common_options().set_immediate(true).unwrap();
     sender
         .common_options()
-        .set_send_timeout(SOCKET_TIMEOUT_MS)
+        .set_send_timeout(Some(SOCKET_TIMEOUT))
         .unwrap();
     receiver
         .common_options()
-        .set_receive_timeout(SOCKET_TIMEOUT_MS)
+        .set_receive_timeout(Some(SOCKET_TIMEOUT))
         .unwrap();
     receiver
         .bind("inproc://rust-writable-public-poller")
@@ -170,7 +170,10 @@ fn public_poller_drains_writable_and_retries_the_same_packet() {
         .unwrap();
     let mut handshake = Received::empty();
     assert!(receiver.recv(&mut handshake, RecvFlags::NONE).unwrap());
-    assert_eq!(handshake.single_part().unwrap().as_bytes(), b"ready");
+    assert_eq!(
+        handshake.single_part_or_throw().unwrap().as_bytes(),
+        b"ready"
+    );
 
     let poller = Poller::new().unwrap();
     poller
@@ -236,7 +239,7 @@ fn public_poller_drains_writable_and_retries_the_same_packet() {
 fn request_completion_reservation_exhaustion_preserves_tokenless_backpressure() {
     const COMPLETION_SLOTS: usize = 65_536;
     let ctx = Context::new().unwrap();
-    let mut dealer = ctx.dealer_socket().unwrap();
+    let mut dealer = ctx.create_dealer_socket().unwrap();
     dealer
         .connect("inproc://rust-request-completion-reservation-exhaustion")
         .unwrap();
@@ -290,8 +293,8 @@ fn request_completion_reservation_exhaustion_preserves_tokenless_backpressure() 
 fn request_backpressure_retries_after_its_writable_then_receives_reply() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     dealer
         .common_options()
         .set_send_high_water_mark(RECORD_HWM)
@@ -302,7 +305,7 @@ fn request_backpressure_retries_after_its_writable_then_receives_reply() {
         .unwrap();
     router
         .common_options()
-        .set_receive_timeout(SOCKET_TIMEOUT_MS)
+        .set_receive_timeout(Some(SOCKET_TIMEOUT))
         .unwrap();
     router.bind("inproc://rust-request-writable-hwm").unwrap();
     dealer
@@ -374,8 +377,8 @@ fn request_backpressure_retries_after_its_writable_then_receives_reply() {
 fn backpressured_request_resumes_from_public_owner_without_repolling() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     dealer
         .common_options()
         .set_send_high_water_mark(RECORD_HWM)
@@ -386,7 +389,7 @@ fn backpressured_request_resumes_from_public_owner_without_repolling() {
         .unwrap();
     router
         .common_options()
-        .set_receive_timeout(SOCKET_TIMEOUT_MS)
+        .set_receive_timeout(Some(SOCKET_TIMEOUT))
         .unwrap();
     router
         .bind("inproc://rust-request-writable-public-owner")
@@ -460,12 +463,12 @@ fn backpressured_request_resumes_from_public_owner_without_repolling() {
 #[test]
 fn request_connect_before_bind_waits_for_writable_without_sleep() {
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     dealer.common_options().set_immediate(true).unwrap();
     router
         .common_options()
-        .set_receive_timeout(SOCKET_TIMEOUT_MS)
+        .set_receive_timeout(Some(SOCKET_TIMEOUT))
         .unwrap();
     dealer
         .connect("inproc://rust-request-connect-before-bind")
@@ -510,7 +513,7 @@ fn request_connect_before_bind_waits_for_writable_without_sleep() {
 #[test]
 fn closing_a_socket_cleans_up_a_request_wait_token() {
     let ctx = Context::new().unwrap();
-    let mut dealer = ctx.dealer_socket().unwrap();
+    let mut dealer = ctx.create_dealer_socket().unwrap();
     dealer.common_options().set_immediate(true).unwrap();
     dealer.connect("inproc://rust-request-token-close").unwrap();
     let completion_driver = test_support::CompletionPollerDriver::new(&dealer);
@@ -540,8 +543,8 @@ fn closing_a_socket_cleans_up_a_request_wait_token() {
 fn request_and_send_wait_tokens_share_the_completion_lane() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     dealer
         .common_options()
         .set_send_high_water_mark(2 * RECORD_HWM)
@@ -552,7 +555,7 @@ fn request_and_send_wait_tokens_share_the_completion_lane() {
         .unwrap();
     router
         .common_options()
-        .set_receive_timeout(SOCKET_TIMEOUT_MS)
+        .set_receive_timeout(Some(SOCKET_TIMEOUT))
         .unwrap();
     router.bind("inproc://rust-request-send-token-mix").unwrap();
     dealer
@@ -618,8 +621,8 @@ fn request_and_send_wait_tokens_share_the_completion_lane() {
 fn dropping_a_pending_send_future_detaches_the_waiter() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     dealer
         .common_options()
         .set_send_high_water_mark(RECORD_HWM)
@@ -654,8 +657,8 @@ fn dropping_a_pending_send_future_detaches_the_waiter() {
 fn dropped_send_tokens_do_not_starve_an_existing_request() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     dealer
         .common_options()
         .set_send_high_water_mark(RECORD_HWM)
@@ -715,8 +718,8 @@ fn dropped_send_tokens_do_not_starve_an_existing_request() {
 fn closing_a_socket_completes_its_pending_send_once() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let mut dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let mut dealer = ctx.create_dealer_socket().unwrap();
     dealer
         .common_options()
         .set_send_high_water_mark(RECORD_HWM)
@@ -765,9 +768,9 @@ fn closing_a_socket_completes_its_pending_send_once() {
 fn blocked_router_target_does_not_delay_another_target() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer_a = ctx.dealer_socket().unwrap();
-    let dealer_b = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer_a = ctx.create_dealer_socket().unwrap();
+    let dealer_b = ctx.create_dealer_socket().unwrap();
     let rid_a = RoutingId::from(b"rust-async-target-a");
     let rid_b = RoutingId::from(b"rust-async-target-b");
     dealer_a.set_routing_id(&rid_a).unwrap();
@@ -813,7 +816,7 @@ fn blocked_router_target_does_not_delay_another_target() {
     let mut received_b = Received::empty();
     dealer_b
         .common_options()
-        .set_receive_timeout(SHORT_SOCKET_TIMEOUT_MS)
+        .set_receive_timeout(Some(SHORT_SOCKET_TIMEOUT))
         .unwrap();
     assert!(dealer_b.recv(&mut received_b, RecvFlags::NONE).unwrap());
     assert_eq!(received_b.parts()[0].as_bytes(), b"ready-b");
@@ -838,8 +841,8 @@ fn blocked_router_target_does_not_delay_another_target() {
 #[test]
 fn request_timeout_is_owned_by_core() {
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     router
         .bind("inproc://rust-routed-async-request-deadline")
         .unwrap();
@@ -883,8 +886,8 @@ fn request_timeout_is_owned_by_core() {
 #[test]
 fn request_not_found_uses_core_errno_mapping() {
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     let endpoint = "inproc://rust-routed-async-request-not-found";
     router.bind(endpoint).unwrap();
     test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
@@ -916,8 +919,8 @@ fn request_not_found_uses_core_errno_mapping() {
 #[test]
 fn request_not_connected_uses_core_errno_mapping() {
     let ctx = Context::new().unwrap();
-    let mut router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let mut router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     let endpoint = "inproc://rust-routed-async-request-not-connected";
     router.bind(endpoint).unwrap();
     test_support::connect_dealer_router_and_confirm(&router, &dealer, || {
@@ -951,8 +954,8 @@ fn request_not_connected_uses_core_errno_mapping() {
 #[test]
 fn request_sync_return_waits_for_reply() {
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     router.bind("inproc://rust-request-sync-return").unwrap();
     dealer.connect("inproc://rust-request-sync-return").unwrap();
     dealer
@@ -989,8 +992,8 @@ fn request_sync_return_waits_for_reply() {
 #[test]
 fn dropped_request_future_cleans_up_its_late_completion() {
     let ctx = Context::new().unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     router.bind("inproc://rust-request-late-cleanup").unwrap();
     dealer
         .connect("inproc://rust-request-late-cleanup")
@@ -1082,8 +1085,8 @@ fn counted<F: std::future::Future + Unpin>(
 fn backpressured_send_resumes_without_executor_repolls() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     dealer
         .common_options()
         .set_send_high_water_mark(RECORD_HWM)
@@ -1094,7 +1097,7 @@ fn backpressured_send_resumes_without_executor_repolls() {
         .unwrap();
     router
         .common_options()
-        .set_receive_timeout(WAKE_TEST_RECEIVE_TIMEOUT_MS)
+        .set_receive_timeout(Some(WAKE_TEST_RECEIVE_TIMEOUT))
         .unwrap();
     router.bind("inproc://rust-send-no-repoll").unwrap();
     dealer.connect("inproc://rust-send-no-repoll").unwrap();
@@ -1153,8 +1156,8 @@ fn backpressured_send_resumes_without_executor_repolls() {
 fn request_alongside_live_send_tokens_is_not_repolled() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     dealer
         .common_options()
         .set_send_high_water_mark(RECORD_HWM)
@@ -1219,8 +1222,8 @@ fn request_alongside_live_send_tokens_is_not_repolled() {
 fn removing_the_target_fails_a_parked_router_send() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let dealer = ctx.dealer_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let dealer = ctx.create_dealer_socket().unwrap();
     let monitor = SocketMonitor::open(&dealer).unwrap();
     let monitor_poller = Poller::new().unwrap();
     monitor_poller.add_monitor(&monitor, POLLIN, 42).unwrap();
@@ -1312,8 +1315,8 @@ fn removing_the_target_fails_a_parked_router_send() {
 fn removing_the_target_fails_a_parked_router_request_with_typed_error() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
-    let router = ctx.router_socket().unwrap();
-    let peer = ctx.router_socket().unwrap();
+    let router = ctx.create_router_socket().unwrap();
+    let peer = ctx.create_router_socket().unwrap();
     let rid = RoutingId::from(b"rust-request-terminal-target");
     peer.set_routing_id(&rid).unwrap();
     router

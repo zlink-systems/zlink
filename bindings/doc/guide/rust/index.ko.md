@@ -44,7 +44,7 @@ use zlink::{Context, Message, Received, RecvFlags};
 
 // 서버
 let ctx = Context::new().unwrap();
-let server = ctx.pair_socket().unwrap();
+let server = ctx.create_pair_socket().unwrap();
 server.bind("tcp://127.0.0.1:5555").unwrap();
 
 let mut received = Received::empty();
@@ -58,7 +58,7 @@ server.send().message(ack).submit_sync(SendFlags::NONE).unwrap();
 ```rust
 // 클라이언트
 let ctx = Context::new().unwrap();
-let client = ctx.pair_socket().unwrap();
+let client = ctx.create_pair_socket().unwrap();
 client.connect("tcp://127.0.0.1:5555").unwrap();
 
 let ping = Message::try_from(b"PING").unwrap();
@@ -203,7 +203,7 @@ match socket.send().message(msg).submit_sync(SendFlags::DONT_WAIT) {
 |-------|----------|
 | `zlink_ctx_new()` | `Context::new()` |
 | `zlink_ctx_term()` | `drop(ctx)` |
-| `zlink_socket(ctx, type)` | `ctx.pair_socket()` 등 |
+| `zlink_socket(ctx, type)` | `ctx.create_pair_socket()` 등 |
 | `zlink_bind(s, ep)` | `socket.bind(ep)` |
 | `zlink_connect(s, ep)` | `socket.connect(ep)` |
 | `zlink_send(..., parts, count, ...)` / `zlink_send_rid(..., parts, count, ...)` | `socket.send().message(m).submit_sync(flags)` |
@@ -245,7 +245,7 @@ let ctx = Arc::new(Context::new().unwrap());
 
 let ctx2 = ctx.clone();
 std::thread::spawn(move || {
-    let socket = ctx2.dealer_socket().unwrap();
+    let socket = ctx2.create_dealer_socket().unwrap();
     // 이 스레드에서만 socket 사용
 });
 ```

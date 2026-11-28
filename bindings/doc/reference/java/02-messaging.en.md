@@ -53,10 +53,12 @@ Message fromString = Message.from("hello");
 | `contentEquals(byte[])` | payload equality check |
 | `closeAll(Message[])` / `closeAll(Iterable<? extends Message>)` | static; closes every part in one call, silently ignoring individual close failures |
 
-**Completion result.** Every member is synchronous. `Message implements AutoCloseable`; sending a
-message transfers its native frame to the socket, invalidating the instance for further reads —
-`close()` releases a message that will not be sent. Out-of-range offsets/lengths throw
-`IndexOutOfBoundsException`.
+**Completion result.** Every member is synchronous. `Message` implements `AutoCloseable`.
+Once a submit consumes a message or the caller calls `close()`, `size()` and `refCount()`
+return 0, payload reads return empty
+results, and `copy()` and `clone()` return new empty messages. Submitting the closed
+message throws `ZlinkSubmitException` (`INVALID_HANDLE`). Out-of-range offsets and lengths
+throw `IndexOutOfBoundsException`.
 
 **When to use.** A sized constructor or a copying `from(...)` factory to build an outbound payload.
 The in-place binary accessors to parse/write a wire format directly against message storage

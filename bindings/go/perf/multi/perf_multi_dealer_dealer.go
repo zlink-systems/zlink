@@ -37,118 +37,59 @@ func runMultiDealerDealerServer(cfg multiConfig) {
 	// (bindings/c/perf/multi/src/perf_multi_dealer_dealer_server.cpp:492).
 	perfcommon.Must(serverCtx.RecalculateAutoHwm())
 
-	stats := perfcommon.NewMultiStats()
-	window := activeDeadline(cfg.duration)
 	poller := perfcommon.NewSocketPoller(server, perfcommon.ZLinkPollIn)
 	defer poller.Close()
 	events := make([]zlink.PollEvent, 1)
-
-	stopRequested := false
-	autoHWMPrinted := false
-	for !stopRequested {
-		wait := time.Until(window.StopAt)
-		if wait <= 0 {
-			break
-		}
-		event, pollErr := perfcommon.WaitPollerOne(poller, events, wait)
-		if pollErr != nil {
-			if perfcommon.IsTransient(pollErr) {
+	receive := func(window perfcommon.BenchmarkWindow, paced bool) (perfcommon.Result, uint64) {
+		stats := perfcommon.NewMultiStats()
+		end := window.StopAt.Add(multiSendDrainTimeout())
+		remaining := cfg.clients
+		var pacedReceived uint64
+		for remaining > 0 && time.Now().Before(end) {
+			event, err := perfcommon.WaitPollerOne(poller, events, multiWait(time.Now(), end))
+			if err != nil && !perfcommon.IsTransient(err) {
+				perfcommon.Must(err)
+			}
+			if event == nil || event.Revents&perfcommon.ZLinkPollIn == 0 {
 				continue
 			}
-			perfcommon.Must(fmt.Errorf("multi dealer/dealer server poll: %w", pollErr))
-		}
-		// An interrupted public wait may return no event before StopAt.
-		// The active deadline, checked above, owns the measurement boundary.
-		if event == nil {
-			continue
-		}
-		if event.Revents&perfcommon.ZLinkPollIn == 0 {
-			continue
-		}
-		var received zlink.Received
-		for {
-			ok, recvErr := server.Recv(&received, zlink.RecvFlagsDontWait)
-			if recvErr != nil {
-				if perfcommon.IsTransient(recvErr) {
+			var received zlink.Received
+			for remaining > 0 && time.Now().Before(end) {
+				ok, err := server.Recv(&received, zlink.RecvFlagsDontWait)
+				if err != nil && !perfcommon.IsTransient(err) {
+					perfcommon.Must(err)
+				}
+				if !ok || err != nil {
 					break
 				}
-				perfcommon.Must(fmt.Errorf("multi dealer/dealer server recv: %w", recvErr))
-			}
-			if !ok {
-				break
-			}
-			parts := received.Parts()
-			if len(parts) == 1 && perfcommon.IsStopTokenMessage(parts[0]) {
-				stopRequested = true
-				_ = received.Close()
-				break
-			}
-			part, partErr := perfcommon.MeasurementPayload(parts)
-			if partErr == nil {
-				perfcommon.RecordMessageLatency(
-					stats, window.ActiveAtNs, window.StopAtNs, cfg.msgSize, part)
-				if !autoHWMPrinted {
-					// Open the status snapshot only after an application pipe delivered
-					// a valid message; an earlier snapshot exposes the raw socket default.
-					perfcommon.PrintMultiSocketAutoHWMDetail(
-						server, nil, cfg.pattern, cfg.transport, "server", "endpoint", zlink.SocketTypeDealer, cfg.msgSize,
-					)
-					autoHWMPrinted = true
+				now := perfcommon.MonotonicNowNs()
+				parts := received.Parts()
+				if len(parts) == 1 && perfcommon.IsStopTokenMessage(parts[0]) {
+					remaining--
+				} else if part, err := perfcommon.MeasurementPayload(parts); err == nil {
+					if recordMultiReceive(stats, part.Data(), cfg.msgSize, now, window, paced, 1) {
+						pacedReceived++
+					}
 				}
+				_ = received.Close()
 			}
-			_ = received.Close()
 		}
+		if remaining != 0 {
+			perfcommon.Must(fmt.Errorf("multi dealer/dealer receive drain timed out"))
+		}
+		return stats.Snapshot(cfg.duration, cfg.msgSize), pacedReceived
 	}
-	drainMultiDealerDealerActiveTail(server, poller, events, cfg)
-	printMultiResult(cfg, stats.Snapshot(cfg.duration, cfg.msgSize))
-}
-
-func drainMultiDealerDealerActiveTail(
-	server *zlink.DealerSocket,
-	poller *zlink.Poller,
-	events []zlink.PollEvent,
-	cfg multiConfig,
-) {
-	maxWait := cfg.duration
-	if cfg.msgSize >= 65536 {
-		maxWait = 2 * cfg.duration
-		if maxWait < 10*time.Second {
-			maxWait = 10 * time.Second
-		}
-	} else if maxWait < 2*time.Second {
-		maxWait = 2 * time.Second
+	active, _ := receive(activeDeadline(cfg.duration), false)
+	if active.Count == 0 {
+		printMultiResult(cfg, active)
+		return
 	}
-	deadline := time.Now().Add(maxWait)
-	idleWait := 50 * time.Millisecond
-	idleDeadline := time.Now().Add(idleWait)
-	var received zlink.Received
-	for time.Now().Before(deadline) {
-		ok, recvErr := server.Recv(&received, zlink.RecvFlagsDontWait)
-		if recvErr != nil {
-			if !perfcommon.IsTransient(recvErr) {
-				perfcommon.Must(fmt.Errorf("multi dealer/dealer server tail drain recv: %w", recvErr))
-			}
-			if !time.Now().Before(idleDeadline) {
-				return
-			}
-			wait := time.Until(idleDeadline)
-			if wait <= 0 || wait > idleWait {
-				wait = idleWait
-			}
-			if _, waitErr := perfcommon.WaitPollerOne(poller, events, wait); waitErr != nil && !perfcommon.IsTransient(waitErr) {
-				perfcommon.Must(fmt.Errorf("multi dealer/dealer server tail drain poll: %w", waitErr))
-			}
-			continue
-		}
-		if !ok {
-			if !time.Now().Before(idleDeadline) {
-				return
-			}
-			continue
-		}
-		idleDeadline = time.Now().Add(idleWait)
-		_ = received.Close()
-	}
+	flushControlLine("PHASE_DRAINED,%d,%d", cfg.msgSize, active.Count)
+	paced, pacedReceived := receive(activeDeadline(settle+multiLatencyDuration(cfg.duration)), true)
+	flushControlLine("PHASE_COMPLETE,%d,%d", cfg.msgSize, pacedReceived)
+	perfcommon.PrintMultiSocketAutoHWMDetail(server, nil, cfg.pattern, cfg.transport, "server", "endpoint", zlink.SocketTypeDealer, cfg.msgSize)
+	paced.Throughput, paced.Bandwidth = active.Throughput, active.Bandwidth
+	printMultiResult(cfg, paced)
 }
 
 func runMultiDealerDealerClient(cfg multiConfig, endpoint string) {
@@ -205,15 +146,23 @@ func runMultiDealerDealerClient(cfg multiConfig, endpoint string) {
 	if !waitForStartToken(cfg.msgSize) {
 		return
 	}
-	window := activeDeadline(cfg.duration)
-	runMultiDealerDealerSendWindow(clients, cfg, window)
+	active := runMultiDealerDealerSendWindow(clients, cfg, activeDeadline(cfg.duration), nil)
+	for _, client := range clients {
+		sendMultiDealerStopToken(client.socket)
+	}
+	received := readPhaseCount("PHASE_PACED", cfg.msgSize)
+	window := activeDeadline(settle + multiLatencyDuration(cfg.duration))
+	schedule := newMultiSchedule(window.ActiveAt, received, cfg.duration)
+	runMultiDealerDealerSendWindow(clients, cfg, window, schedule)
+	for _, client := range clients {
+		sendMultiDealerStopToken(client.socket)
+	}
+	paced := readPhaseCount("PHASE_COMPLETE", cfg.msgSize)
+	schedule.print(cfg, active, received, paced, false, -1)
 	if len(clients) > 0 {
 		perfcommon.PrintMultiSocketAutoHWMDetail(
 			clients[0].socket, clients[0].mon, cfg.pattern, cfg.transport, "client", "endpoint", zlink.SocketTypeDealer, cfg.msgSize,
 		)
-	}
-	if len(clients) > 0 {
-		sendMultiDealerStopToken(clients[0].socket)
 	}
 	flushControlLine("CLIENT_DONE,%d", cfg.msgSize)
 }
@@ -222,50 +171,41 @@ func useMultiDealerDealerSharedClientContext(transport string, msgSize int) bool
 	return true
 }
 
-func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfig, window perfcommon.BenchmarkWindow) {
-	if len(clients) == 0 {
-		return
-	}
+func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfig, window perfcommon.BenchmarkWindow, schedule *multiSchedule) uint64 {
 	completionPoller, err := zlink.NewPoller()
 	perfcommon.Must(err)
 	defer completionPoller.Close()
 	completionEvents := make([]zlink.PollEvent, len(clients))
 	for index := range clients {
-		perfcommon.Must(completionPoller.AddSocket(
-			clients[index].socket, zlink.PollCompletion, uintptr(index)))
+		perfcommon.Must(completionPoller.AddSocket(clients[index].socket, zlink.PollCompletion, uintptr(index)))
 	}
-
 	submit := func(index int) (zlink.SendSubmission, error) {
-		client := clients[index]
-		var sendErr error
-		var submission zlink.SendSubmission
+		phase := perfcommon.PhaseActive
+		if schedule != nil {
+			phase = schedule.phase(time.Now())
+		}
+		message := perfcommon.NewMessageWithSize(cfg.msgSize)
+		perfcommon.StampPayloadPhase(message.Data(), phase)
+		op := clients[index].socket.Send()
 		if perfcommon.MeasurementPartCount() == 2 {
-			message := perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt)
-			submission, sendErr = perfcommon.SubmitMeasurementSendSubmission(context.Background(), client.socket.Send(), message)
-		} else {
-			_, sendErr = perfcommon.SubmitRoutedWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) error {
-				if !useMultiDealerDealerMoveMessage(cfg.transport, cfg.msgSize) {
-					submission, sendErr = client.socket.Send().Message(message).Submit(context.Background())
-					return sendErr
-				}
-				submission, sendErr = client.socket.Send().MoveMessage(message).Submit(context.Background())
-				return sendErr
-			})
+			return perfcommon.SubmitMeasurementSendSubmission(context.Background(), op, message)
 		}
-		if sendErr != nil {
-			return nil, fmt.Errorf("multi dealer/dealer client send: %w", sendErr)
+		defer message.Close()
+		if useMultiDealerDealerMoveMessage(cfg.transport, cfg.msgSize) {
+			return op.MoveMessage(message).Submit(context.Background())
 		}
-		return submission, nil
+		return op.Message(message).Submit(context.Background())
 	}
-	progress := func(wait time.Duration) error {
-		_, waitErr := completionPoller.Wait(completionEvents, wait)
-		if waitErr != nil && !perfcommon.IsTransient(waitErr) {
-			return fmt.Errorf("multi dealer/dealer client completion poll: %w", waitErr)
+	progress := func(wait time.Duration, _ func() error) error {
+		_, err := completionPoller.Wait(completionEvents, wait)
+		if perfcommon.IsTransient(err) {
+			return nil
 		}
-		return nil
+		return err
 	}
-	perfcommon.Must(runMultiSendTurns(
-		len(clients), window, "multi dealer/dealer", submit, progress, nil, nil))
+	sent, err := runMultiSendTurns(len(clients), window, schedule, cfg.pattern, submit, progress, nil, nil)
+	perfcommon.Must(err)
+	return sent
 }
 
 func useMultiDealerDealerMoveMessage(transport string, msgSize int) bool {

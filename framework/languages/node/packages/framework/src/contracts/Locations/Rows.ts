@@ -144,6 +144,8 @@ export interface ZLinkActorLocation {
   readonly spotKind: ZLinkSpotKind;
   readonly spotId: SpotId;
   readonly spotGeneration: bigint;
+  /** Owner tenure of the epoch when the row publisher supplies it. */
+  readonly authorityOwnerGeneration?: bigint;
   readonly membershipEpoch: bigint;
   readonly ownerId: string;
   /** Generation of the exact owner lease that published this row. */

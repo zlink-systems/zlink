@@ -916,6 +916,9 @@ export class ZLinkActorPacketRelay {
     try {
       const runtime = this.requireSpotNodeRuntime();
       if (frameHeader.kind === ZLinkStreamMessageKind.Send) {
+        this.options.admission
+          ?.claim(actor.ref.meshName, 'Local session Actor SEND', ReceiveKind.ActorSend)
+          .close();
         // Returned without await: submitLocalActorSend owns header/body from here and
         // closes them once in its own finally, so the catch below must not see its errors.
         return this.submitLocalActorSend(runtime, actor, header, body);

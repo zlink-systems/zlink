@@ -72,9 +72,9 @@ func submitMultipartFromClones(parts []*Message, consumeOriginal bool, submit mu
 	}
 	native := make([]C.zlink_msg_t, len(parts))
 	for i, part := range parts {
-		if part == nil {
+		if err := validateSubmitMessage(part); err != nil {
 			closeNativeMultipart(native, i)
-			return configInvalidArgumentError()
+			return err
 		}
 		rc58, errno58 := C.zlink_msg_init(&native[i])
 		if err := configErrorFromCall(rc58, errno58); err != nil {
@@ -97,11 +97,8 @@ func submitMultipartFromClones(parts []*Message, consumeOriginal bool, submit mu
 }
 
 func submitSinglePartFromCopy(part *Message, submit multipartSubmitFunc) error {
-	if part == nil {
-		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
-	}
-	if part.closed {
-		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
+	if err := validateSubmitMessage(part); err != nil {
+		return err
 	}
 	var native C.zlink_msg_t
 	rc60, errno60 := C.zlink_msg_init(&native)
@@ -130,11 +127,8 @@ func submitSinglePartFromCopy(part *Message, submit multipartSubmitFunc) error {
 }
 
 func submitSinglePartMoved(part *Message, submit multipartSubmitFunc) error {
-	if part == nil {
-		return newConfigError(ConfigInvalidArgument, int(C.EINVAL))
-	}
-	if part.closed {
-		return newConfigError(ConfigInvalidHandle, int(C.EFAULT))
+	if err := validateSubmitMessage(part); err != nil {
+		return err
 	}
 	var native C.zlink_msg_t
 	rc64, errno64 := C.zlink_msg_init(&native)
@@ -184,11 +178,8 @@ func submitMultipartFromBuilderParts(parts []sendBuilderPart, submit multipartSu
 			}
 			continue
 		}
-		if part.message == nil {
-			return restoreMultipartPreparation(native[:i], parts[:i], newConfigError(ConfigInvalidArgument, int(C.EINVAL)))
-		}
-		if part.message.closed {
-			return restoreMultipartPreparation(native[:i], parts[:i], newConfigError(ConfigInvalidHandle, int(C.EFAULT)))
+		if err := validateSubmitMessage(part.message); err != nil {
+			return restoreMultipartPreparation(native[:i], parts[:i], err)
 		}
 		rc67, errno67 := C.zlink_msg_init(&native[i])
 		if err := configErrorFromCall(rc67, errno67); err != nil {

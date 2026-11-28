@@ -16,8 +16,8 @@ fn main() {
     };
 
     let ctx = common::perf_context();
-    let receiver = ctx.dealer_socket().expect("receiver");
-    let sender = ctx.dealer_socket().expect("sender");
+    let receiver = ctx.create_dealer_socket().expect("receiver");
+    let sender = ctx.create_dealer_socket().expect("sender");
     // Match C perf: numeric socket HWM remains behind the manual-override gate.
     common::apply_single_hwm(&receiver);
     common::apply_single_hwm(&sender);

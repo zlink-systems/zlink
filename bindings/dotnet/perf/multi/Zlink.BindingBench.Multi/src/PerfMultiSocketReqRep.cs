@@ -9,7 +9,6 @@ internal static class PerfMultiSocketReqRep
 {
     private static readonly RoutingId ServerRoutingId = RoutingId.From("SERVER"u8);
     private const uint RunId = 1;
-    private const uint ActivePhase = 1;
     private static int s_debugServerRecvLogs;
     private static int s_debugServerReplyLogs;
     private static int s_debugClientSubmitLogs;
@@ -104,6 +103,7 @@ internal static class PerfMultiSocketReqRep
     {
         int size = Math.Max(1, options.Size);
         int durationSeconds = ResolveMultiDurationSeconds(options);
+        int latencySeconds = ResolveMultiLatencyDurationSeconds(options);
         int readyTimeoutMs = ResolveMultiConnectReadyTimeoutMs(options);
         ulong monitorHwmBytes = ResolveMultiMonitorHwmBytes();
         int latencySampleCap = ResolveMultiLatencySampleCap(options);
@@ -182,18 +182,29 @@ internal static class PerfMultiSocketReqRep
                 slots.Add(slot);
             }
 
-            var result = await RunClientLoopAsync(slots, routerRouter,
-                size, durationSeconds, latencySampleCap).ConfigureAwait(false);
-            if (result.completed <= 0 || result.latencyCount <= 0)
+            var active = await RunClientWindowAsync(slots, routerRouter,
+                size, durationSeconds, latencySeconds, latencySampleCap,
+                PerfPhase.Active, null).ConfigureAwait(false);
+            if (active.completed <= 0 || active.accepted <= 0)
             {
                 DebugLogLimited(ref s_debugClientReplyLogs,
-                    $"socket_reqrep_client: active failed completed={result.completed} latency_count={result.latencyCount}");
+                    $"socket_reqrep_client: active failed completed={active.completed} accepted={active.accepted}");
                 return 2;
             }
+            var schedule = new MultiPacedSchedule(
+                MultiTargetRate(active.completed, durationSeconds));
+            var paced = await RunClientWindowAsync(slots, routerRouter,
+                size, durationSeconds, latencySeconds, latencySampleCap,
+                PerfPhase.Latency, schedule).ConfigureAwait(false);
+            PrintMultiBenchDiag(options.Pattern, size, active.accepted,
+                durationSeconds, schedule, active.completed,
+                paced.pacedReceived / (double)latencySeconds);
+            if (paced.latencyCount <= 0)
+                return 2;
 
-            var latency = ComputeMultiLatencyStats(result.latencySamples,
-                result.latencyCount, result.latencySum);
-            double throughput = result.completed / (double)Math.Max(1, durationSeconds);
+            var latency = ComputeMultiLatencyStats(paced.latencySamples,
+                paced.latencyCount, paced.latencySum);
+            double throughput = active.completed / (double)Math.Max(1, durationSeconds);
             PrintResult(options.Pattern, options.Transport, size, throughput,
                 latency.mean, latency.p95, latency.p99);
             // PERF_MULTI_TEST_POLICY.md:379,386-388 / PERF_POLICY.md:483-486 —
@@ -214,22 +225,27 @@ internal static class PerfMultiSocketReqRep
         }
     }
 
-    private static Task<(long completed, List<double> latencySamples,
-        long latencyCount, double latencySum)>
-        RunClientLoopAsync(List<ClientSlot> slots, bool routerRouter,
-        int msgSize, int durationSeconds, int latencyCap)
+    private static Task<(long completed, long accepted, long pacedReceived,
+        List<double> latencySamples, long latencyCount, double latencySum)>
+        RunClientWindowAsync(List<ClientSlot> slots, bool routerRouter,
+        int msgSize, int durationSeconds, int latencySeconds, int latencyCap,
+        PerfPhase phase, MultiPacedSchedule? schedule)
     {
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);
         var samples = new List<double>(Math.Max(0, latencyCap));
         object gate = new();
         Exception? completionError = null;
         int hasCompletionError = 0;
-        long pendingReplies = 0;
+        long pendingRequests = 0;
         long completed = 0;
+        long accepted = 0;
+        long pacedReceived = 0;
         long sampleSeen = 0;
         double sampleSum = 0.0;
         uint rng = 0xA341316Cu;
-        long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
+        long deadlineTicks = schedule?.EndTicks(latencySeconds)
+            ?? Stopwatch.GetTimestamp() + durationSeconds * Stopwatch.Frequency;
+        ulong deadlineNs = EpochNsFromTimestamp(deadlineTicks);
         TimeSpan requestTimeout = ResolveReqRepTimeout();
         using var completionPoller = Zlink.CreatePoller();
         var completionEvents = new PollEvent[Math.Max(1, slots.Count)];
@@ -239,6 +255,18 @@ internal static class PerfMultiSocketReqRep
                 PollEventFlags.PollCompletion, (nuint)i);
         }
         bool HasCompletionError() => Volatile.Read(ref hasCompletionError) != 0;
+
+        void RecordAdmission(ulong dueNs)
+        {
+            long nowTicks = Stopwatch.GetTimestamp();
+            if (schedule != null)
+            {
+                lock (schedule)
+                    schedule.Accepted(EpochNsFromTimestamp(nowTicks), dueNs);
+            }
+            if (nowTicks < deadlineTicks)
+                Interlocked.Increment(ref accepted);
+        }
 
         void RecordCompletionError(Exception ex)
         {
@@ -254,7 +282,7 @@ internal static class PerfMultiSocketReqRep
             using Message message = Message.Allocate(payloadSize);
             long sentTicks = Stopwatch.GetTimestamp();
             ulong seq = slot.NextSeq;
-            StampMetricHeader(message.AsSpan(), RunId, PerfPhase.Active,
+            StampMetricHeader(message.AsSpan(), RunId, phase,
                 msgSize, seq, EpochNsFromTimestamp(sentTicks));
             using Message? tail = PerfSocketIo.MeasurementPartCount == 2
                 ? Message.Allocate(0) : null;
@@ -282,12 +310,31 @@ internal static class PerfMultiSocketReqRep
             return submission;
         }
 
-        async Task ObserveRequestAsync(Task<IReadOnlyList<Message>> requestTask)
+        async Task ObserveRequestAsync(ClientSlot slot,
+            RequestSubmission submission, ulong dueNs)
         {
+            // Retire the request after both stages have been observed.
+            if (submission.Result == SubmitResult.Backpressured)
+            {
+                try
+                {
+                    await submission.Admitted.ConfigureAwait(false);
+                    RecordAdmission(dueNs);
+                }
+                catch (Exception ex)
+                {
+                    RecordCompletionError(ex);
+                }
+                finally
+                {
+                    slot.CompleteAdmission();
+                }
+            }
+
             IReadOnlyList<Message>? parts = null;
             try
             {
-                parts = await requestTask.ConfigureAwait(false);
+                parts = await submission.Reply.ConfigureAwait(false);
                 if (s_debugEnabled)
                 {
                     DebugLogLimited(ref s_debugClientReplyLogs,
@@ -300,20 +347,29 @@ internal static class PerfMultiSocketReqRep
                         out PerfMetricHeader header)
                     && header.RunId == RunId
                     && header.MsgSize == (uint)msgSize
-                    && header.Phase == ActivePhase)
+                    && header.Phase == (uint)phase)
                 {
                     long completionTicks = Stopwatch.GetTimestamp();
                     ulong nowNs = EpochNsFromTimestamp(completionTicks);
-                    if (completionTicks < deadlineTicks
-                        && nowNs >= header.SentTsNs)
+                    if (schedule != null && MultiLatencySample(nowNs,
+                            schedule.EpochNs, latencySeconds))
+                        Interlocked.Increment(ref pacedReceived);
+                    if (nowNs >= header.SentTsNs
+                        && (schedule == null
+                            ? completionTicks < deadlineTicks
+                            : MultiLatencySample(header.SentTsNs,
+                                schedule.EpochNs, latencySeconds)))
                     {
-                        lock (gate)
+                        if (schedule != null)
                         {
-                            double sampleNs =
-                                (nowNs - header.SentTsNs) * 0.5;
-                            ReservoirSampleMulti(samples, sampleNs,
-                                ref sampleSeen, ref sampleSum, latencyCap,
-                                ref rng);
+                            lock (gate)
+                            {
+                                double sampleNs =
+                                    (nowNs - header.SentTsNs) * 0.5;
+                                ReservoirSampleMulti(samples, sampleNs,
+                                    ref sampleSeen, ref sampleSum, latencyCap,
+                                    ref rng);
+                            }
                         }
                         Interlocked.Increment(ref completed);
                     }
@@ -334,48 +390,41 @@ internal static class PerfMultiSocketReqRep
             {
                 if (parts != null)
                     Zlink.MultipartClose(parts);
-                Interlocked.Decrement(ref pendingReplies);
-            }
-        }
-
-        async Task AwaitAdmissionAsync(ClientSlot slot, Task admission)
-        {
-            try
-            {
-                await admission.ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                RecordCompletionError(ex);
-            }
-            finally
-            {
-                slot.CompleteAdmission();
+                Interlocked.Decrement(ref pendingRequests);
             }
         }
 
         // Submit once per socket per turn, then explicitly progress both
         // admission and reply completions. This preserves continuous load
         // without letting one socket starve the completion owner.
+        var rotation = new MultiSenderRotation(slots.Count);
         while (Stopwatch.GetTimestamp() < deadlineTicks && !HasCompletionError())
         {
             bool submittedAny = false;
-            for (int i = 0; i < slots.Count; i++)
+            int attempts = 0;
+            for (; attempts < slots.Count; attempts++)
             {
-                ClientSlot slot = slots[i];
+                if (schedule != null)
+                {
+                    ulong nowNs = EpochNs();
+                    if (nowNs >= deadlineNs || !schedule.Due(nowNs))
+                        break;
+                }
+                ClientSlot slot = slots[rotation.Index];
+                rotation.Advance();
                 if (slot.AdmissionPending)
                     continue;
                 try
                 {
                     RequestSubmission submission = Submit(slot);
-                    Interlocked.Increment(ref pendingReplies);
-                    _ = ObserveRequestAsync(submission.Reply);
-                    submittedAny = true;
-                    if (submission.Result == SubmitResult.Backpressured)
-                    {
+                    ulong dueNs = schedule?.Submitted() ?? 0;
+                    if (submission.Result == SubmitResult.Ok)
+                        RecordAdmission(dueNs);
+                    else if (submission.Result == SubmitResult.Backpressured)
                         slot.BeginAdmission();
-                        _ = AwaitAdmissionAsync(slot, submission.Admitted);
-                    }
+                    Interlocked.Increment(ref pendingRequests);
+                    _ = ObserveRequestAsync(slot, submission, dueNs);
+                    submittedAny = true;
                 }
                 catch (Exception ex)
                 {
@@ -383,17 +432,22 @@ internal static class PerfMultiSocketReqRep
                 }
             }
 
-            int waitMs = submittedAny
-                ? 0
-                : RemainingPollTimeoutMs(deadlineTicks);
+            ulong pollNowNs = EpochNs();
+            int waitMs = submittedAny ? 0
+                : schedule?.PollWaitMilliseconds(pollNowNs, deadlineNs, attempts == slots.Count)
+                    ?? MultiPacedSchedule.MillisecondsUntil(pollNowNs, deadlineNs);
+            long waitStart = waitMs > 0 && schedule != null
+                ? Stopwatch.GetTimestamp() : 0;
             _ = completionPoller.Wait(completionEvents,
                 TimeSpan.FromMilliseconds(waitMs));
+            if (waitStart != 0)
+                schedule!.RecordPollWait(waitMs, waitStart);
         }
 
         long drainDeadline = Stopwatch.GetTimestamp()
             + (long)(ResolveReqRepDrainTimeout().TotalSeconds
                 * Stopwatch.Frequency);
-        while (Volatile.Read(ref pendingReplies) > 0)
+        while (Volatile.Read(ref pendingRequests) > 0)
         {
             int waitMs = RemainingPollTimeoutMs(drainDeadline);
             if (waitMs <= 0)
@@ -408,8 +462,9 @@ internal static class PerfMultiSocketReqRep
             if (completionError != null)
                 throw completionError;
         }
-        return Task.FromResult((Volatile.Read(ref completed), samples,
-            sampleSeen, sampleSum));
+        return Task.FromResult((Volatile.Read(ref completed),
+            Volatile.Read(ref accepted), Volatile.Read(ref pacedReceived),
+            samples, sampleSeen, sampleSum));
     }
 
     private static int RemainingPollTimeoutMs(long deadlineTicks)

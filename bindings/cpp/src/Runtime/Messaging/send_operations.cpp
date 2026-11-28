@@ -59,22 +59,14 @@ send_submission_t submit_send_awaitable (
     void *const submit_context = state_.get ();
     zlink_completion_id_t wait_token = 0;
     bool admitted = false;
-    int submit_errno = 0;
     try {
         admitted = detail::submit_raw_send_state (*state_, submit_context,
                                                   &wait_token, false);
-        submit_errno = zlink_errno ();
     }
     catch (...) {
         detail::restore_async_send_sources (*state_);
         detail::release_state (std::move (state_));
         throw;
-    }
-
-    if (admitted != (wait_token == 0) || (!admitted && submit_errno != EAGAIN)) {
-        detail::restore_async_send_sources (*state_);
-        detail::release_state (std::move (state_));
-        throw submit_error_t (submit_result_t::internal_error, EPROTO);
     }
 
     if (admitted) {
@@ -167,8 +159,7 @@ void send_submit_operation_t::submit () &&
     if (!detail::has_send_parts (operation))
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     operation.flags = send_flags_t::none;
-    if (!detail::submit_raw_send_state (operation))
-        throw submit_error_t (submit_result_t::backpressured, EAGAIN);
+    (void) detail::submit_raw_send_state (operation);
 }
 
 send_submission_t send_submit_operation_t::async () &&

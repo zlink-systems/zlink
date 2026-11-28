@@ -24,7 +24,10 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectation;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityWriteResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
@@ -58,6 +61,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Shared relocation settlement harness: a source and a target state machine over one in-memory
@@ -104,6 +109,11 @@ final class ZLinkRelocationSettlementFixture {
         final ZLinkSpotRetireControl.StageRequest request;
         final ZLinkCanonicalRelocationStateMachine source;
         final ZLinkCanonicalRelocationStateMachine target;
+
+        Function<
+                        Supplier<CompletionStage<ZLinkAuthorityWriteResult>>,
+                        CompletionStage<ZLinkAuthorityWriteResult>>
+                preserveWrite = Supplier::get;
 
         final AtomicBoolean ambiguousCommit = new AtomicBoolean();
         final CompletableFuture<Void> reconciliationEntered = new CompletableFuture<>();
@@ -206,6 +216,21 @@ final class ZLinkRelocationSettlementFixture {
                                                 && authorityKey.equals(args[0]))
                                             return CompletableFuture.completedFuture(
                                                     authorityRead.get());
+                                        if (method.getName().equals("compareExchange")
+                                                && authorityKey.equals(args[0])
+                                                && args[2] instanceof ZLinkAuthorityPut put
+                                                && put.relocation() != null
+                                                && put.relocation().aborted()) {
+                                            return preserveWrite.apply(
+                                                    () ->
+                                                            locations.compareExchange(
+                                                                    authorityKey,
+                                                                    (ZLinkAuthorityExpectation)
+                                                                            args[1],
+                                                                    put,
+                                                                    (ZLinkStoreCancellation)
+                                                                            args[3]));
+                                        }
                                         if (method.getName().equals("prepareAggregate")) {
                                             prepareEntered.complete(null);
                                             return prepareCompletion.thenCompose(

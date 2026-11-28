@@ -8,6 +8,10 @@ const deferred = require('./helpers/deferred.cjs');
 const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const framework = require('../../packages/framework/dist/internal');
+const {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException
+} = require('../../packages/framework/dist');
 const nestjs = require('../../packages/nestjs/dist');
 const connector = require('../../packages/stream-connector/dist');
 const { createBrowserSafeStreamApp } = require('./helpers/browser-safe-stream-app');
@@ -21,6 +25,9 @@ test('local session Actor SEND completes at FIFO admission', { timeout: 30000 },
   const runtimeErrors = [];
   const started = deferred();
   const release = deferred();
+  let beforeRelay;
+  let beforeLocalAdmission;
+  let sessionStream;
 
   class Player {
     constructor(context) {
@@ -63,6 +70,7 @@ test('local session Actor SEND completes at FIFO admission', { timeout: 30000 },
           if (dispatch.actor) {
             const terminal = relayResults.shift();
             try {
+              if (beforeRelay) await beforeRelay();
               await dispatch.actor.relay(dispatch, message);
               terminal.resolve({ status: 'Submitted' });
             } catch (error) {
@@ -71,6 +79,7 @@ test('local session Actor SEND completes at FIFO admission', { timeout: 30000 },
             return;
           }
           await context.actors.bindOrGet(actorRef);
+          sessionStream = context.stream;
           await context.client.reply({ bound: true }).submit();
         }
       };
@@ -145,7 +154,7 @@ test('local session Actor SEND completes at FIFO admission', { timeout: 30000 },
 
   const frameClosures = [];
   const dispatch = runtime.spotNodeRuntime.dispatchEntryActorPacket.bind(runtime.spotNodeRuntime);
-  runtime.spotNodeRuntime.dispatchEntryActorPacket = (...args) => {
+  runtime.spotNodeRuntime.dispatchEntryActorPacket = async (...args) => {
     if (args[0] === 'local' && args[1] === actorId) {
       const closes = args[2].map((frame) => {
         const close = frame.close.bind(frame);
@@ -157,6 +166,7 @@ test('local session Actor SEND completes at FIFO admission', { timeout: 30000 },
         return observed;
       });
       frameClosures.push(closes);
+      if (beforeLocalAdmission) await beforeLocalAdmission();
     }
     return dispatch(...args);
   };
@@ -208,17 +218,88 @@ test('local session Actor SEND completes at FIFO admission', { timeout: 30000 },
     assert.deepEqual(runtimeErrors, []);
   });
 
-  await t.test('closed FIFO rejects relay with the current binding still active', async () => {
-    scheduler.closeAdmission();
-    const refusal = await relay('refused');
-    await nextTurn();
-    assert.equal(admissions, 2);
-    assert.deepEqual(received, ['throw', 'second']);
-    assert.deepEqual(
-      frameClosures[2].map(({ count }) => count),
-      [1, 1]
-    );
-    assert.equal(refusal.status, 'Rejected', 'caller result from the closed FIFO');
-    assert.match(refusal.error.message, /serial execution queue is closed/);
+  async function assertRefusal(pending, kind) {
+    const result = await pending;
+    assert.equal(result.status, 'Rejected');
+    assert.equal(result.error.kind, kind);
+    assert.ok(result.error instanceof ZLinkFrameworkException);
+  }
+
+  await t.test(
+    'SEND in flight when the Actor FIFO closes is rejected before admission',
+    async (t) => {
+      const submitting = deferred();
+      const resume = deferred();
+      t.after(() => {
+        beforeLocalAdmission = undefined;
+        resume.resolve();
+      });
+      const attempts = t.mock.method(scheduler, 'admit');
+      beforeLocalAdmission = () => {
+        submitting.resolve();
+        return resume.promise;
+      };
+      const pending = relay('refused');
+      await submitting.promise;
+      assert.equal(scheduler.admissionClosed, false);
+      scheduler.closeAdmission();
+      resume.resolve();
+      const result = await pending;
+      await nextTurn();
+      assert.equal(attempts.mock.callCount(), 1);
+      assert.equal(admissions, 2);
+      assert.deepEqual(received, ['throw', 'second']);
+      assert.deepEqual(
+        frameClosures[2].map(({ count }) => count),
+        [1, 1]
+      );
+      await assertRefusal(result, ZLinkFrameworkErrorKind.Rejected);
+    }
+  );
+
+  await t.test(
+    'a binding with live authority but no local Actor route is unavailable',
+    async (t) => {
+      assert.ok(await actors.find(actorId));
+      t.mock.method(actors, 'getState', () => undefined);
+      await sessionStream.unbindActor(actorId, 2000);
+      assert.equal(sessionStream.actorBinding(actorId), undefined);
+      await assertRefusal(relay('refused'), ZLinkFrameworkErrorKind.Unavailable);
+      assert.equal(frameClosures.length, 3);
+    }
+  );
+
+  await t.test('closed Entry executor refuses Actor SEND admission', async () => {
+    await entry.spotSerialExecutor.closeChildren();
+    await assertRefusal(relay('refused'), ZLinkFrameworkErrorKind.Rejected);
+  });
+
+  await t.test('runtime shutdown refuses new relay admission', async (t) => {
+    const submitting = deferred();
+    const resume = deferred();
+    const shutdownStarted = deferred();
+    t.after(() => {
+      beforeRelay = undefined;
+      resume.resolve();
+    });
+    const close = runtime.admission.close.bind(runtime.admission);
+    t.mock.method(runtime.admission, 'close', () => {
+      close();
+      shutdownStarted.resolve();
+    });
+    beforeRelay = () => {
+      submitting.resolve();
+      return resume.promise;
+    };
+    const pending = relay('refused');
+    await submitting.promise;
+    const shutdown = runtime.shutdown();
+    try {
+      await shutdownStarted.promise;
+      resume.resolve();
+      await assertRefusal(pending, ZLinkFrameworkErrorKind.ShuttingDown);
+    } finally {
+      await shutdown;
+    }
   });
 });
