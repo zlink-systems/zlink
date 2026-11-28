@@ -71,8 +71,16 @@ int main ()
 
     std::cout << "Ordinary Request allocations: submit=" << submit_allocations
               << " reply=" << reply_allocations << '\n';
+#if defined(_MSC_VER)
+    // MSVC STL allocates a std::map head node whenever a map is default- or move-constructed,
+    // so each packet_t and stream_header_t built or moved on this path adds one 96-byte
+    // allocation through metadata_t. Measured on Windows Release against origin/main
+    // (5e9ba7d2af, run 46052948260): 52 = 38 map head nodes + 14 other allocations.
+    constexpr std::size_t main_request_allocations = 52;
+#else
     // Measured using the same test against origin/main (6752099006).
     constexpr std::size_t main_request_allocations = 16;
+#endif
     return succeeded.load () && submit_allocations + reply_allocations <= main_request_allocations
              ? 0
              : 1;
