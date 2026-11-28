@@ -136,6 +136,9 @@ struct admission_waiting_context_t {
 };
 subscription_t on_admission_waiting(
     std::function<void(const admission_waiting_context_t&)> handler);
+subscription_t on_admission_queued(std::function<void()> handler);
+subscription_t on_admission_position(
+    std::function<void(std::int32_t position, std::chrono::milliseconds estimated_wait)> handler);
 subscription_t on_request_sending(
     std::function<void(request_sending_context_t&)> callback);
 subscription_t on_reply_received(
@@ -512,3 +515,7 @@ test helper interface is verified by
 `test_cpp_framework_target_contract`'s `TH-CP-01` gate.
 
 Admission waiting and its default deadline are defined by [common spec §5.8](../../32-stream-connector.en.md).
+
+`on_admission_queued` takes no arguments. `on_admission_position` receives the queue position as
+`std::int32_t` and the estimated wait as `std::chrono::milliseconds`. For callback timing and
+order, see [Authentication Admission §3.5.7](../../../server/04-session/03-authentication-admission.en.md#357-connector-callback-order).
