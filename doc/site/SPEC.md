@@ -137,7 +137,7 @@ socket 생성, bind/connect, send/recv, publish/subscribe 등 전체 API 흐름�
 === "Rust"
 
     ```rust
-    let pub_sock = ctx.pub_socket()?;
+    let pub_sock = ctx.create_pub_socket()?;
     pub_sock.bind("tcp://*:5556")?;
     ```
 ```

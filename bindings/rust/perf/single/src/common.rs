@@ -1143,10 +1143,12 @@ pub fn resolve_single_idle_drain_ms() -> u64 {
     env_or_u64("PERF_SINGLE_RCVTIMEO_MS", DEFAULT_TIMEOUT_MS)
 }
 
-pub fn resolve_single_send_timeout() -> i32 {
-    env_or_u64("PERF_SINGLE_SNDTIMEO_MS", DEFAULT_TIMEOUT_MS)
+pub fn resolve_single_send_timeout() -> Option<std::time::Duration> {
+    let ms = env_or_u64("PERF_SINGLE_SNDTIMEO_MS", DEFAULT_TIMEOUT_MS);
+    let _: i32 = ms
         .try_into()
-        .expect("PERF_SINGLE_SNDTIMEO_MS exceeds Core milliseconds")
+        .expect("PERF_SINGLE_SNDTIMEO_MS exceeds Core milliseconds");
+    Some(std::time::Duration::from_millis(ms))
 }
 
 pub fn is_single_send_retry_error(err: &SubmitError) -> bool {

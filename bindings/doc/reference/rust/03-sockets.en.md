@@ -88,7 +88,7 @@ socket starts exchanging messages when the defaults don't fit the deployment.
 An exclusive one-to-one peering socket with no routing.
 
 ```rust
-let pair = ctx.pair_socket()?;
+let pair = ctx.create_pair_socket()?;
 pair.send().message(Message::try_from("ping")?).submit_sync()?;
 let mut received = Received::empty();
 if pair.recv(&mut received, RecvFlags::NONE)? { /* ... */ }
@@ -115,7 +115,7 @@ not load-balance.
 Load-balances sends across its connected peers and can issue routed requests.
 
 ```rust
-let dealer = ctx.dealer_socket()?;
+let dealer = ctx.create_dealer_socket()?;
 dealer.set_routing_id(&"worker-3".into())?;
 dealer.request()
     .message(Message::try_from("payload")?)
@@ -143,7 +143,7 @@ request context (`Received::reply()`) or an explicit ROUTER reply surface instea
 Routes messages to peers addressed by routing id, and can reply to a specific peer's request.
 
 ```rust
-let router = ctx.router_socket()?;
+let router = ctx.create_router_socket()?;
 router.send(&peer_rid).message(Message::try_from("hello")?).submit_sync()?;
 ```
 
@@ -177,10 +177,10 @@ message-carried subscriptions respectively. All four share their lifecycle/TLS s
 internal `impl_pubsub_common!` macro rather than a public trait.
 
 ```rust
-let pub_socket = ctx.pub_socket()?;
+let pub_socket = ctx.create_pub_socket()?;
 pub_socket.publish("prices").message(Message::try_from(tick)?).submit()?;
 
-let sub = ctx.sub_socket()?;
+let sub = ctx.create_sub_socket()?;
 sub.set_subscription("prices.")?;
 let mut msg = TopicMessage::empty();
 if sub.subscribe(&mut msg, RecvFlags::NONE)? { /* ... */ }
@@ -217,7 +217,7 @@ convention above.
 `receive_subscription_event`, or manual admission via `PubSocketOptions::set_manual`/
 `approve_subscribe`/`reject_subscribe`. Use `XSubSocket` specifically when subscriptions must be
 carried as ordinary messages instead — the choice is entirely about which constructor you call
-(`ctx.sub_socket()` vs. `ctx.xsub_socket()`), since the two types' method sets are identical.
+(`ctx.create_sub_socket()` vs. `ctx.create_xsub_socket()`), since the two types' method sets are identical.
 
 ---
 
@@ -227,7 +227,7 @@ Exchanges framed packets directly with raw TCP peers, outside the zlink wire pro
 every other socket type.
 
 ```rust
-let stream = ctx.stream_socket()?;
+let stream = ctx.create_stream_socket()?;
 stream.stream_options().set_recv_mode(StreamRecvMode::Packet)?;
 let mut packet = StreamPacket::empty();
 if stream.recv_packet(&mut packet, RecvFlags::NONE)? { /* use packet */ }
