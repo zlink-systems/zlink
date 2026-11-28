@@ -318,7 +318,9 @@ internal sealed class ActorDestroyStore(
             .Conditions.OfType<ZLinkStoreCondition.Version>()
             .Select(condition => condition.Key)
             .Concat(
-                request.Conditions.OfType<ZLinkStoreCondition.Missing>().Select(condition => condition.Key)
+                request
+                    .Conditions.OfType<ZLinkStoreCondition.Missing>()
+                    .Select(condition => condition.Key)
             );
 
     private static bool ConditionsOn(ZLinkStoreWriteRequest request, ZLinkStoreKey key) =>
