@@ -25,6 +25,8 @@ TEST (ActorMaintenanceJoin, LateRequestRequiresSuccessfulJoinCompletion)
         SCOPED_TRACE (fail_completion ? "failed completion" : "successful completion");
         constexpr int late_payload = 17;
         auto dropped_one_way = std::make_shared<int> (0);
+        auto completion_errors =
+          std::make_shared<std::vector<fw::message_dispatch_error_event_t>> ();
         auto evidence = std::make_shared<observations_t> ();
         evidence->fail_completion = fail_completion;
         // Enable the room fixture's handler observations without sending a lifecycle batch.
@@ -44,8 +46,13 @@ TEST (ActorMaintenanceJoin, LateRequestRequiresSuccessfulJoinCompletion)
           .bind ("tcp://127.0.0.1:0")
           .register_session<relay_session_t> ();
         fw::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-          options.configure_dispatch (),
-          [evidence, dropped_one_way] (const fw::message_dispatch_error_event_t &event) {
+          options.configure_dispatch (), [evidence, dropped_one_way, completion_errors] (
+                                           const fw::message_dispatch_error_event_t &event) {
+              if (event.packet_name == "OnJoinCompleted") {
+                  std::lock_guard lock (evidence->mutex);
+                  completion_errors->push_back (event);
+                  return;
+              }
               if (event.actor_id != actor_id || event.packet_name != probe_t::packet_name
                   || event.message_kind != fw::dispatch_message_kind_t::actor_send
                   || event.action != fw::dispatch_error_action_t::drop)
@@ -154,6 +161,16 @@ TEST (ActorMaintenanceJoin, LateRequestRequiresSuccessfulJoinCompletion)
         {
             std::lock_guard lock (evidence->mutex);
             EXPECT_EQ (*dropped_one_way, fail_completion ? 2 : 0);
+            ASSERT_EQ (completion_errors->size (), fail_completion ? 1u : 0u);
+            if (fail_completion) {
+                const auto &error = completion_errors->front ();
+                EXPECT_EQ (error.surface, fw::dispatch_error_surface_t::actor_relocation);
+                EXPECT_EQ (error.message_kind, fw::dispatch_message_kind_t::control);
+                EXPECT_EQ (error.reason, fw::dispatch_error_reason_t::handler_exception);
+                EXPECT_EQ (error.action, fw::dispatch_error_action_t::drop);
+                EXPECT_EQ (error.actor_id, actor_id);
+                EXPECT_TRUE (error.exception);
+            }
             RecordProperty (fail_completion ? "failed_completion_handler_calls"
                                             : "successful_completion_handler_calls",
                             static_cast<int> (evidence->handled_payloads.size ()));
@@ -210,6 +227,15 @@ TEST (ActorMaintenanceJoin, RemoteAcceptedCompletionFailureRejectsLateRequest)
                    .result ());
 
     configure (target, target_evidence, second_rid, store, relocations);
+    auto completion_errors = std::make_shared<std::vector<fw::message_dispatch_error_event_t>> ();
+    fw::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      target.app.add_zlink_framework ().configure_dispatch (),
+      [target_evidence, completion_errors] (const fw::message_dispatch_error_event_t &event) {
+          if (event.packet_name == "OnJoinCompleted") {
+              std::lock_guard lock (target_evidence->mutex);
+              completion_errors->push_back (event);
+          }
+      });
     target.start ();
     ASSERT_TRUE (ready (target));
     ASSERT_TRUE (
@@ -264,6 +290,14 @@ TEST (ActorMaintenanceJoin, RemoteAcceptedCompletionFailureRejectsLateRequest)
     EXPECT_LT (elapsed, std::chrono::seconds (1));
     {
         std::lock_guard lock (target_evidence->mutex);
+        ASSERT_EQ (completion_errors->size (), 1u);
+        const auto &error = completion_errors->front ();
+        EXPECT_EQ (error.surface, fw::dispatch_error_surface_t::actor_relocation);
+        EXPECT_EQ (error.message_kind, fw::dispatch_message_kind_t::control);
+        EXPECT_EQ (error.reason, fw::dispatch_error_reason_t::handler_exception);
+        EXPECT_EQ (error.action, fw::dispatch_error_action_t::drop);
+        EXPECT_EQ (error.actor_id, actor_id);
+        EXPECT_TRUE (error.exception);
         EXPECT_EQ (target_evidence->backlog_appends, 0);
         EXPECT_TRUE (target_evidence->handled_payloads.empty ());
     }

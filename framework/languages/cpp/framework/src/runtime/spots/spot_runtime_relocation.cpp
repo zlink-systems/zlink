@@ -1943,16 +1943,15 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                 try {
                     runtime.deliver_actor_join_completion_async (
                       actor, std::move (outcome), completion.target_spot_id,
-                      [node, completion_record, joined = std::move (joined), fail_commit,
-                       report_join_failure] (result_t<void> delivered) mutable noexcept {
+                      [node, completion_record, joined = std::move (joined),
+                       fail_commit] (result_t<void> delivered) mutable noexcept {
                           if (!joined) {
                               fail_commit (!delivered ? std::move (delivered) : std::move (joined));
                               return;
                           }
                           try {
                               const auto commit = [] (auto node, auto completion_record,
-                                                      result_t<void> delivered,
-                                                      auto report_join_failure) -> task_t<void> {
+                                                      result_t<void> delivered) -> task_t<void> {
                                   const auto &completion = *completion_record;
                                   const auto key = actor_key (completion.actor);
                                   auto &coordinator = *node->actor_transfer_coordinator;
@@ -1993,7 +1992,13 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                                   if (!delivered) {
                                       fail_handoff_backlog (node, std::move (*replay),
                                                             &completion.actor);
-                                      report_join_failure (std::move (delivered));
+                                      report_spot_dispatch_error (
+                                        node, dispatch_error_surface_t::actor_relocation,
+                                        dispatch_message_kind_t::control,
+                                        dispatch_error_reason_t::handler_exception,
+                                        dispatch_error_action_t::drop, "OnJoinCompleted", {}, {},
+                                        std::string (completion.actor.actor_id ().value ()),
+                                        delivered.exception (), {});
                                       co_return;
                                   }
                                   if (!replay->empty ()) {
@@ -2016,8 +2021,8 @@ bool spot_node_runtime_t::commit_relocation_materialization (
                                   }
                                   co_return;
                               };
-                              auto committed = commit (node, completion_record,
-                                                       std::move (delivered), report_join_failure);
+                              auto committed =
+                                commit (node, completion_record, std::move (delivered));
                               detail::observe_task_completion (
                                 committed, [fail_commit] (const result_t<void> &result) {
                                     if (!result)

@@ -2823,9 +2823,17 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
                 return node->native_node.lock ();
             });
             native = co_await settlement;
-            if (!result && accepted)
-                (void) co_await node->actor_transfer_coordinator->seal_failed_join_completion (
-                  actor_key (actor));
+            if (!result && accepted) {
+                const auto sealed =
+                  co_await node->actor_transfer_coordinator->seal_failed_join_completion (
+                    actor_key (actor));
+                if (sealed)
+                    report_spot_dispatch_error (
+                      node, dispatch_error_surface_t::actor_relocation,
+                      dispatch_message_kind_t::control, dispatch_error_reason_t::handler_exception,
+                      dispatch_error_action_t::drop, "OnJoinCompleted", {}, {},
+                      std::string (actor.actor_id ().value ()), result.exception (), {});
+            }
             if (native && result)
                 owner = co_await native->resolve_actor_async (actor);
         }
@@ -4789,13 +4797,12 @@ void spot_node_runtime_t::finalize_remote_actor_to_spot_async (
                                                                   &committed);
                                             confirm_execution_ready ();
                                             report_spot_dispatch_error (
-                                              node, dispatch_error_surface_t::spot_actor,
-                                              dispatch_message_kind_t::actor_request,
+                                              node, dispatch_error_surface_t::actor_relocation,
+                                              dispatch_message_kind_t::control,
                                               dispatch_error_reason_t::handler_exception,
-                                              dispatch_error_action_t::fail_caller, "JoinSpot", {},
-                                              std::string (target_spot_id),
-                                              std::string (committed.actor_id ().value ()),
-                                              delivered.exception (), transfer_id);
+                                              dispatch_error_action_t::drop, "OnJoinCompleted", {},
+                                              {}, std::string (committed.actor_id ().value ()),
+                                              delivered.exception (), {});
                                             commit_state->mark_committed ();
                                             settle_turn (
                                               remote_actor_commit_turn_state_t::outcome_t{.success =

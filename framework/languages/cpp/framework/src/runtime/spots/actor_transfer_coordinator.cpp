@@ -219,6 +219,7 @@ actor_transfer_coordinator_t::seal_failed_join_completion (std::string actor_key
             if (move.phase == actor_move_phase_t::local) {
                 move.join_completion_sealed_at = std::chrono::steady_clock::now ();
                 move.phase = actor_move_phase_t::local_completion_failed;
+                return std::make_shared<std::vector<handoff_packet_t>> ();
             }
             return {};
         }
