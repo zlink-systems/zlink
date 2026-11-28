@@ -323,6 +323,7 @@
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.ReaderLiveness.cs"/>
         <Compile Include="Runtime/AdmissionQueueTicketTests.cs"/>
         <Compile Include="Runtime/AdmissionQueueWireTests.cs"/>
+        <Compile Include="Runtime/AdmissionQueueFixtureTests.cs"/>
         <Compile Include="Runtime/AdmissionQueueSpotTests.cs"/>
         <Compile Include="Runtime/AdmissionQueueMeshTests.cs"/>
         <Compile Include="Runtime/AdmissionQueueConnectorMeshTests.cs"/>

@@ -9,7 +9,7 @@ internal sealed class ZlinkStreamAdmissionQueue(ZlinkStreamConnectorCallbacks ca
     internal const string EnqueueName = ZlinkStreamHeaderCodec.AdmissionEnqueueName;
     internal const string PositionName = ZlinkStreamHeaderCodec.AdmissionPositionName;
     internal const string TicketName = ZlinkStreamHeaderCodec.AdmissionTicketName;
-    private static readonly TimeSpan Silence = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan ReregistrationSilence = TimeSpan.FromSeconds(15);
 
     private readonly object _gate = new();
     private readonly LinkedList<Waiter> _waiters = new();
@@ -147,7 +147,7 @@ internal sealed class ZlinkStreamAdmissionQueue(ZlinkStreamConnectorCallbacks ca
 
             previous = _registration;
             _registration = request;
-            _registerAt = now + Silence;
+            _registerAt = now + ReregistrationSilence;
             return true;
         }
     }
@@ -231,7 +231,7 @@ internal sealed class ZlinkStreamAdmissionQueue(ZlinkStreamConnectorCallbacks ca
                 throw new ZlinkStreamException(error);
             }
 
-            _registerAt = receivedAt + Silence;
+            _registerAt = receivedAt + ReregistrationSilence;
             Apply(update.Value);
         }
 
@@ -293,9 +293,10 @@ internal sealed class ZlinkStreamAdmissionQueue(ZlinkStreamConnectorCallbacks ca
                 packet != PositionName
                 && body.TryGetProperty("ticket", out var ticket)
                 && ticket.ValueKind == JsonValueKind.String
-                && ticket.GetString() is { Length: 66 } value
+                && ticket.GetString() is { } value
+                && value.Length == ZlinkAdmissionTicketWire.EncodedSize
                 && value.All(IsBase64Url)
-                && value[^1] is 'A' or 'Q' or 'g' or 'w'
+                && ZlinkAdmissionTicketWire.CanonicalFinalCharacters.Contains(value[^1])
                 && TryReadInt(body, "expiresInMs", out var expiresInMs)
                 && expiresInMs > 0
             )

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Contracts.Handlers;
 
 namespace Zlink.Framework.Runtime.Streams;
@@ -43,7 +44,7 @@ internal sealed record AdmissionDelivery(
         if (
             Kind == "ticket"
             && ExpiresInMs is >= 0
-            && Ticket?.Length == ZLinkAdmissionTicket.EncodedSize
+            && Ticket?.Length == ZlinkAdmissionTicketWire.EncodedSize
             && ZLinkAdmissionTicket.TryDecode(Ticket, out _)
         )
             return;
@@ -169,15 +170,21 @@ internal sealed record AdmissionPermitRelease(
 
 internal sealed class AdmissionRidConverter : JsonConverter<string>
 {
+    private const int MaxRidBytes = byte.MaxValue;
+    private static readonly int MaxRidEncodedSize = ZlinkAdmissionTicketWire.UnpaddedBase64UrlSize(
+        MaxRidBytes
+    );
+
     public override bool HandleNull => true;
 
     public override string Read(ref Utf8JsonReader reader, Type type, JsonSerializerOptions options)
     {
         if (
             reader.TokenType == JsonTokenType.String
-            && reader.GetString() is { Length: <= 340 } value
+            && reader.GetString() is { } value
+            && value.Length <= MaxRidEncodedSize
             && ZLinkAdmissionTicket.TryDecode(value, out var bytes)
-            && bytes.Length is >= 1 and <= byte.MaxValue
+            && bytes.Length is >= 1 and <= MaxRidBytes
         )
             return value;
         throw new JsonException("Expected an unpadded base64url routing ID.");

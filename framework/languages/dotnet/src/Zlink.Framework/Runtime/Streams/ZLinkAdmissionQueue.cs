@@ -7,6 +7,12 @@ internal sealed class ZLinkAdmissionQueue(
     ulong epoch
 )
 {
+    private const int RateWindowMs = 30_000;
+    private const int FallbackWaitPerPositionMs = 1_000;
+    private static readonly TimeSpan RateWindow = TimeSpan.FromMilliseconds(RateWindowMs);
+    private static readonly TimeSpan ReportValidity = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan PositionInterval = TimeSpan.FromSeconds(5);
+
     private readonly LinkedList<Waiter> _waiting = new();
     private readonly Dictionary<AdmissionConnection, LinkedListNode<Waiter>> _waiters = [];
     private readonly Dictionary<AdmissionConnection, long> _usedTickets = [];
@@ -93,7 +99,7 @@ internal sealed class ZLinkAdmissionQueue(
             if (
                 waiter.LastPosition != position
                 || waiter.LastEstimate != estimate
-                || time.GetElapsedTime(waiter.LastDelivery) >= TimeSpan.FromSeconds(5)
+                || time.GetElapsedTime(waiter.LastDelivery) >= PositionInterval
             )
                 deliveries.Add(Deliver(waiter, position));
         }
@@ -232,8 +238,8 @@ internal sealed class ZLinkAdmissionQueue(
             Math.Min(
                 int.MaxValue,
                 issuances == 0
-                    ? (long)position * 1000
-                    : ((long)position * 30000 + issuances - 1) / issuances
+                    ? (long)position * FallbackWaitPerPositionMs
+                    : ((long)position * RateWindowMs + issuances - 1) / issuances
             );
 
     private AdmissionDelivery Deliver(Waiter waiter, int position)
@@ -281,14 +287,11 @@ internal sealed class ZLinkAdmissionQueue(
 
     private void Prune(long now)
     {
-        while (
-            _issuances.TryPeek(out var issuedAt)
-            && time.GetElapsedTime(issuedAt) >= TimeSpan.FromSeconds(30)
-        )
+        while (_issuances.TryPeek(out var issuedAt) && time.GetElapsedTime(issuedAt) >= RateWindow)
             _issuances.Dequeue();
 
         foreach (var (identity, report) in _reports)
-            if (time.GetElapsedTime(report.Timestamp) > TimeSpan.FromSeconds(3))
+            if (time.GetElapsedTime(report.Timestamp) > ReportValidity)
                 _reports.Remove(identity);
 
         foreach (var (connection, expiresAt) in _usedTickets)

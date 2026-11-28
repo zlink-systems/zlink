@@ -245,7 +245,10 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         await CaptureAsync(() => new ValueTask(cleanup)).ConfigureAwait(false);
         Capture(() => _removeSession(Stream.SessionId));
         if (_enqueuedForAdmission)
-            Capture(() => _admissionQueue!.Ended(_streamName!, Stream.RoutingId!.Value));
+            await CaptureAsync(() =>
+                    _admissionQueue!.EndedAsync(_streamName!, Stream.RoutingId!.Value)
+                )
+                .ConfigureAwait(false);
         await CaptureAsync(_handlerInstances.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_scope.DisposeAsync).ConfigureAwait(false);
         if (failures.Count > 0)
@@ -829,7 +832,9 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
                         return;
                     }
                     permit = decision.Id;
-                    admissionQueue.Used(_streamName!, Stream.RoutingId!.Value);
+                    await admissionQueue
+                        .UsedAsync(_streamName!, Stream.RoutingId!.Value)
+                        .ConfigureAwait(false);
                 }
                 if (_flow.Enabled(ZLinkMessageFlowOutcome.Dispatched))
                     _flow.Trace(
@@ -865,8 +870,8 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             finally
             {
                 _context.ExitDispatch();
-                if (permit != 0)
-                    _admissionQueue!.Release(permit);
+                if (_admissionQueue is { } admissionQueue)
+                    await admissionQueue.ReleaseAsync(permit).ConfigureAwait(false);
             }
         }
     }

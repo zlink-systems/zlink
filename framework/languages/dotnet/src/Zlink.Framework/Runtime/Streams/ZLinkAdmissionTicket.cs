@@ -1,16 +1,22 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 
 namespace Zlink.Framework.Runtime.Streams;
 
 internal sealed class ZLinkAdmissionTicket
 {
-    private const int Size = 49;
-    private const int HeaderSize = 17;
     private const int ClockSkewMs = 2000;
+    private const int MinKeyBytes = 32;
+    private const int MaxKeyBytes = 64;
     internal const int LifetimeMs = 30000;
-    internal const int EncodedSize = 66;
+    private static readonly int MinKeyEncodedSize = ZlinkAdmissionTicketWire.UnpaddedBase64UrlSize(
+        MinKeyBytes
+    );
+    private static readonly int MaxKeyEncodedSize = ZlinkAdmissionTicketWire.UnpaddedBase64UrlSize(
+        MaxKeyBytes
+    );
     private static readonly UTF8Encoding Utf8 = new(false, true);
 
     private readonly byte[] _current;
@@ -24,11 +30,16 @@ internal sealed class ZLinkAdmissionTicket
 
     internal string Sign(AdmissionConnection connection, ulong epoch, long expiresAt)
     {
-        Span<byte> ticket = stackalloc byte[Size];
-        ticket[0] = 1;
+        Span<byte> ticket = stackalloc byte[ZlinkAdmissionTicketWire.Size];
+        ticket[0] = ZlinkAdmissionTicketWire.Version;
         BinaryPrimitives.WriteInt64BigEndian(ticket[1..], expiresAt);
         BinaryPrimitives.WriteUInt64BigEndian(ticket[9..], epoch);
-        WriteMac(_current, connection, ticket[1..HeaderSize], ticket[HeaderSize..]);
+        WriteMac(
+            _current,
+            connection,
+            ticket[1..ZlinkAdmissionTicketWire.HeaderSize],
+            ticket[ZlinkAdmissionTicketWire.HeaderSize..]
+        );
         return Encode(ticket);
     }
 
@@ -36,18 +47,18 @@ internal sealed class ZLinkAdmissionTicket
     {
         if (
             epoch == 0
-            || value?.Length != EncodedSize
+            || value?.Length != ZlinkAdmissionTicketWire.EncodedSize
             || !TryDecode(value, out var ticket)
-            || ticket.Length != Size
-            || ticket[0] != 1
+            || ticket.Length != ZlinkAdmissionTicketWire.Size
+            || ticket[0] != ZlinkAdmissionTicketWire.Version
             || BinaryPrimitives.ReadUInt64BigEndian(ticket.AsSpan(9)) != epoch
             || now - ClockSkewMs > BinaryPrimitives.ReadInt64BigEndian(ticket.AsSpan(1))
         )
             return false;
 
-        Span<byte> mac = stackalloc byte[32];
-        var signedFields = ticket.AsSpan(1, HeaderSize - 1);
-        var expected = ticket.AsSpan(HeaderSize);
+        Span<byte> mac = stackalloc byte[ZlinkAdmissionTicketWire.MacSize];
+        var signedFields = ticket.AsSpan(1, ZlinkAdmissionTicketWire.HeaderSize - 1);
+        var expected = ticket.AsSpan(ZlinkAdmissionTicketWire.HeaderSize);
         WriteMac(_current, connection, signedFields, mac);
         if (CryptographicOperations.FixedTimeEquals(mac, expected))
             return true;
@@ -92,13 +103,15 @@ internal sealed class ZLinkAdmissionTicket
     private static byte[] ReadKey(string? value, string name)
     {
         if (
-            value?.Length is >= 43 and <= 86
+            value is not null
+            && value.Length >= MinKeyEncodedSize
+            && value.Length <= MaxKeyEncodedSize
             && TryDecode(value, out var bytes)
-            && bytes.Length is >= 32 and <= 64
+            && bytes.Length is >= MinKeyBytes and <= MaxKeyBytes
         )
             return bytes;
         throw new ZLinkConfigurationException(
-            $"{name} must be unpadded base64url encoding of 32 through 64 bytes."
+            $"{name} must be unpadded base64url encoding of {MinKeyBytes} through {MaxKeyBytes} bytes."
         );
     }
 

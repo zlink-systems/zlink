@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
-using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
 namespace Zlink.Framework.Runtime.Streams;
 
@@ -131,25 +130,21 @@ internal sealed class ZLinkAdmissionQueueNode(
         }
     }
 
-    internal void Used(string streamName, RoutingId sessionRid) =>
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                _used.Add(Session(streamName, sessionRid));
-            })
-        );
+    internal ValueTask UsedAsync(string streamName, RoutingId sessionRid) =>
+        _lane.RunAsync(() =>
+        {
+            _used.Add(Session(streamName, sessionRid));
+        });
 
-    internal void Ended(string streamName, RoutingId sessionRid) =>
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                _ended.Add(Session(streamName, sessionRid));
-            })
-        );
+    internal ValueTask EndedAsync(string streamName, RoutingId sessionRid) =>
+        _lane.RunAsync(() =>
+        {
+            _ended.Add(Session(streamName, sessionRid));
+        });
 
-    internal void Release(ulong id)
+    internal async ValueTask ReleaseAsync(ulong id)
     {
-        if (id == 0 || !AwaitStateLane(_lane.RunAsync(() => _held.Remove(id))))
+        if (id == 0 || !await _lane.RunAsync(() => _held.Remove(id)).ConfigureAwait(false))
             return;
         state.TaskRunner.RunDetached(
             "admission-queue-release-permit",

@@ -1,14 +1,68 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Stream.Connector.Contracts;
+using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Streams;
 using static Zlink.Framework.UnitTests.AdmissionQueueMeshTests;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class AdmissionQueueNodeTests
 {
+    [Fact]
+    public async Task UsedReturnsWhileNodeStateLaneIsBusy()
+    {
+        using var host = CreateHost(
+            new ZLinkInMemoryProviderLocationStore(),
+            new InMemoryRelocationStore(),
+            new HandlerProbe(),
+            isServer: false,
+            spotClient: new ScriptedSpotClient(42, null)
+        );
+        await host.StartAsync();
+        try
+        {
+            var state = await host
+                .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+                .GetStartedStateForRoutingAsync(CancellationToken.None);
+            var queue = AdmissionQueue(state.StreamNodes.Values.Single());
+            var lane = StateLane(queue);
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var hold = lane.RunAsync(() => new ValueTask(release.Task));
+            var submission = Task.Run(() =>
+                queue.UsedAsync("login", RoutingId.From("used-session"))
+            );
+            try
+            {
+                var completion = await submission.WaitAsync(TimeSpan.FromSeconds(3));
+                Assert.False(completion.IsCompleted);
+            }
+            finally
+            {
+                release.SetResult();
+                await hold;
+                var completion = await submission;
+                await completion;
+            }
+        }
+        finally
+        {
+            await host.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_admissionQueue")]
+    private static extern ref ZLinkAdmissionQueueNode AdmissionQueue(ZLinkStreamNodeRuntime stream);
+
+    [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_lane")]
+    private static extern ref ZLinkStateLane StateLane(ZLinkAdmissionQueueNode queue);
+
     [Theory]
     [MemberData(nameof(Scenarios))]
     public async Task NodeScenario(string name, string json)

@@ -9,6 +9,8 @@ internal sealed class ZLinkStreamRuntimeManager(
     ZLinkFrameworkRegistration registration
 ) : IAsyncDisposable
 {
+    private static readonly TimeSpan ReportPeriod = TimeSpan.FromSeconds(1);
+
     private readonly HashSet<IZLinkBackendStreamSocket> _unattachedSockets = [];
     private Task? _disposeTask;
     private IDisposable? _authenticationAdmissionMetrics;
@@ -163,7 +165,7 @@ internal sealed class ZLinkStreamRuntimeManager(
         if (queue is not null)
             _admissionReportTimer = new ZLinkTimer(
                 "admission-queue-report",
-                TimeSpan.FromSeconds(1),
+                ReportPeriod,
                 new ZLinkTimerOptions(),
                 state.StopTokenSource.Token,
                 queue.ReportAsync,
