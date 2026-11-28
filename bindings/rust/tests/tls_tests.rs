@@ -93,5 +93,8 @@ fn pair_round_trips_over_tls_with_explicit_trust() {
         .unwrap();
     let mut received = Received::empty();
     assert!(server.recv(&mut received, RecvFlags::NONE).unwrap());
-    assert_eq!(received.single_part().unwrap().as_bytes(), b"secure");
+    assert_eq!(
+        received.single_part_or_throw().unwrap().as_bytes(),
+        b"secure"
+    );
 }

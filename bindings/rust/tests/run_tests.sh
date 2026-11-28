@@ -72,6 +72,7 @@ fi
 rm -f "$LIB_LOG"
 
 run_test_file surface_tests
+run_test_file single_part_or_throw_tests
 run_test_file contract_tests
 run_test_file router_selected_route_tests
 run_test_file ffi_layout_tests

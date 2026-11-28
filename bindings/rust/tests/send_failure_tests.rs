@@ -43,7 +43,10 @@ fn sync_blocking_terminal_admits_a_send() {
             .recv(&mut received, zlink::RecvFlags::NONE)
             .unwrap()
     );
-    assert_eq!(received.single_part().unwrap().as_bytes(), b"sync-admitted");
+    assert_eq!(
+        received.single_part_or_throw().unwrap().as_bytes(),
+        b"sync-admitted"
+    );
 }
 
 #[test]

@@ -146,21 +146,15 @@ impl Received {
     pub fn first_part(&self) -> Result<&Message, RecvError> {
         self.parts.first().ok_or_else(recv_state_error)
     }
-    pub fn single_part(mut self) -> Result<Message, RecvError> {
-        if self.parts.len() != 1 {
+    /// Consumes the envelope and returns its only part, transferring ownership.
+    /// Returns a receive error unless it holds exactly one part.
+    pub fn single_part_or_throw(mut self) -> Result<Message, RecvError> {
+        if !self.is_single_part() {
             return Err(recv_state_error());
         }
-        Ok(std::mem::take(&mut self.parts)
-            .into_iter()
-            .next()
-            .expect("single part"))
+        Ok(self.parts.pop().expect("exactly one part"))
     }
 
-    /// Deprecated name of [`single_part`](Self::single_part).
-    #[deprecated(note = "use single_part")]
-    pub fn single_part_or_error(self) -> Result<Message, RecvError> {
-        self.single_part()
-    }
     pub fn into_parts(mut self) -> Vec<Message> {
         std::mem::take(&mut self.parts)
     }

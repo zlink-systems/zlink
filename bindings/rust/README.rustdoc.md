@@ -26,6 +26,13 @@ The current approved crate payload contains the Core 0.17.0 ABI with the 0.17.0
 Linux x86_64 runtime. Other target triples fail during build until a matching native
 runtime has passed the Core package provenance and clean-consumer checks.
 
+## Single-part receive
+
+`Received::single_part_or_throw(self)` and `TopicMessage::single_part_or_throw(self)`
+consume the envelope and transfer its only part as `Result<Message, RecvError>`.
+An empty envelope or a multipart payload returns `RecvResult::InvalidState`.
+Read any metadata you need before consuming the envelope.
+
 ## DONTWAIT SEND/REQUEST and WRITABLE
 
 - A DONTWAIT SEND makes one admission attempt. Immediate admission succeeds

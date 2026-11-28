@@ -758,7 +758,10 @@ fn ordinary_router_message_has_no_reply_token() {
     let mut received = Received::empty();
     router_socket.recv(&mut received, RecvFlags::NONE).unwrap();
     let reply_token = received.reply_token();
-    assert_eq!(received.single_part().unwrap().as_bytes(), b"plain-data");
+    assert_eq!(
+        received.single_part_or_throw().unwrap().as_bytes(),
+        b"plain-data"
+    );
     assert_eq!(reply_token, None);
 }
 

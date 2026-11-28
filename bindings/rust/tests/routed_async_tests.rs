@@ -170,7 +170,10 @@ fn public_poller_drains_writable_and_retries_the_same_packet() {
         .unwrap();
     let mut handshake = Received::empty();
     assert!(receiver.recv(&mut handshake, RecvFlags::NONE).unwrap());
-    assert_eq!(handshake.single_part().unwrap().as_bytes(), b"ready");
+    assert_eq!(
+        handshake.single_part_or_throw().unwrap().as_bytes(),
+        b"ready"
+    );
 
     let poller = Poller::new().unwrap();
     poller
