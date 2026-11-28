@@ -1,15 +1,10 @@
 name: Bindings PR Check
 
 on:
+  # No paths filter: every PR gets the four named checks, so they can be required.
+  # The changes job selects which checks run; the others succeed in one line.
   pull_request:
     types: [opened, reopened, synchronize, labeled]
-    paths:
-      - 'bindings/rust/**'
-      - 'core/include/**'
-      - 'bindings/go/**'
-      - 'bindings/python/**'
-      - 'bindings/doc/**'
-      - '.github/workflows/bindings-pr-check.yml'
   merge_group:
     types: [checks_requested]
   push:
@@ -64,7 +59,11 @@ jobs:
           rust=false go=false python=false docs=false
           while IFS= read -r -d '' path; do
             case "$path" in
-              bindings/rust/*|core/include/*) rust=true ;;
+              # Go (cgo) and Python (native extension) use the Core headers too.
+              # These checks run against the released Core from fetch-release.sh;
+              # a Core change itself is covered by the Core CI.
+              core/include/*) rust=true go=true python=true ;;
+              bindings/rust/*) rust=true ;;
               bindings/go/*) go=true ;;
               bindings/python/*) python=true ;;
               bindings/doc/*) docs=true ;;
