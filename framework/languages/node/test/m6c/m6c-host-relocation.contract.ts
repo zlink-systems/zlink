@@ -1,4 +1,9 @@
 import {
+  ZLinkInMemoryProviderLocationStore,
+  storeKey
+} from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
+import { RelocationReplyStore } from '../../packages/framework/src/runtime/locations/relocation-reply-store';
+import {
   commitAuthorityRelocation,
   encodeAuthorityAggregate
 } from '../../packages/framework/src/runtime/locations/authority-relocation-record';
@@ -36,10 +41,13 @@ import type { PendingOperation } from '../../packages/framework/src/runtime/foun
 import { frameworkErrorMappingFixture } from './framework-error-mapping-fixture';
 import { Message, RequestResult, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkSpotKind } from '../../packages/framework/src/contracts';
-import type { ZLinkAuthoritySnapshot } from '../../packages/framework/src/runtime/locations/internal-location-contracts';
+import type {
+  ZLinkAggregateFence,
+  ZLinkAuthoritySnapshot,
+  ZLinkLocationOwnerToken
+} from '../../packages/framework/src/runtime/locations/internal-location-contracts';
 import { ZLinkInMemoryLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-location-store';
 import { ZLinkAggregateInventoryStore } from '../../packages/framework/src/runtime/locations/aggregate-inventory-store';
-import { ZLinkInMemoryProviderLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
 import {
   createServiceRelocationId,
   decodeQueuedHandoffPacket,
@@ -1659,9 +1667,10 @@ test('target-ready application authority contains no relocation publication', ()
   assert.equal(Buffer.from(projected).subarray(0, 4).toString(), 'ZLAU');
 });
 
-test('ActorJoin target keeps the route cache intact and preserves post-open relay order', async () => {
+test('ActorJoin without captured requests normalizes before completion and preserves Session route order', async () => {
   const events: string[] = [];
   const actor = { context: { actorId: 'actor-join', meshName: 'mesh-a' } };
+  const key = encodeAuthorityKey('actor', actor.context.actorId);
   const nativeRef = { actorId: 'actor-join', generation: 5n, nodeRid: 'target' };
   const authority = {
     kind: 'snapshot',
@@ -1690,10 +1699,13 @@ test('ActorJoin target keeps the route cache intact and preserves post-open rela
         _relocationId: string,
         _actor: unknown,
         _actorRef: unknown,
-        submitSourceLeave: (sourceNodeRid: string) => Promise<void>
+        submitSourceLeave: (sourceNodeRid: string) => Promise<void>,
+        _signal?: AbortSignal,
+        beforeJoinCompletion?: () => Promise<void>
       ) {
         events.push('onJoined');
         await submitSourceLeave('source');
+        await beforeJoinCompletion?.();
         events.push('accepted');
         return true;
       }
@@ -1733,8 +1745,8 @@ test('ActorJoin target keeps the route cache intact and preserves post-open rela
     memberships: []
   };
   const hidden = {
-    authorityKey: encodeAuthorityKey('actor', actor.context.actorId).value,
-    actor
+    actor,
+    replayPackets: []
   };
   const stage = {
     offer: { prepareFingerprint: 'actor-join' },
@@ -1750,8 +1762,9 @@ test('ActorJoin target keeps the route cache intact and preserves post-open rela
       }
     },
     staging: {
+      primaryAuthorityKey: key,
       envelope,
-      hidden: new Map([[hidden.authorityKey, hidden]])
+      hidden: new Map([[key.value, hidden]])
     },
     phase: 'ready',
     lane: Promise.resolve(),
@@ -1776,10 +1789,10 @@ test('ActorJoin target keeps the route cache intact and preserves post-open rela
     'onJoined',
     'sourceLeave:submit',
     'sourceLeave:warning',
+    'publication:clear',
     'accepted',
     'command44',
-    'dispatch:open',
-    'publication:clear'
+    'dispatch:open'
   ]);
 });
 
@@ -2429,7 +2442,13 @@ for (const observed of [
           targetDescriptorLifecycleGeneration: second.generation
         });
       if (observed !== 'normalized-target')
-        assert.deepEqual(await harness.location.commitAggregate({}), { kind: 'committed' });
+        assert.deepEqual(
+          await harness.location.commitAggregate({
+            aggregateId: { value: '00000000-0000-0000-0000-000000000092' } as never,
+            aggregateGeneration: 1n
+          }),
+          { kind: 'committed' }
+        );
       if (observed === 'steady') {
         const current = await harness.location.readAuthority();
         assert.equal(current.kind, 'snapshot');
@@ -3826,41 +3845,8 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     ownerLeaseGeneration: 14n,
     storeVersion: 'target-entry-v1'
   });
-  const completionBlobs = new Map<string, Buffer>();
-  const relocationStore = {
-    async put(reference: { value: string }, bytes: Uint8Array, retentionMs: number) {
-      completionBlobs.set(reference.value, Buffer.from(bytes));
-      return {
-        kind: 'stored' as const,
-        storeNow: new Date(),
-        expiresAt: new Date(Date.now() + retentionMs)
-      };
-    },
-    async read(reference: { value: string }) {
-      const bytes = completionBlobs.get(reference.value);
-      return bytes === undefined
-        ? { kind: 'missing' as const, storeNow: new Date() }
-        : {
-            kind: 'found' as const,
-            bytes,
-            storeNow: new Date(),
-            expiresAt: new Date(Date.now() + 86400000)
-          };
-    },
-    async delete(reference: { value: string }) {
-      completionBlobs.delete(reference.value);
-    },
-    async renew(_reference: { value: string }, retentionMs: number) {
-      return {
-        kind: 'renewed' as const,
-        storeNow: new Date(),
-        expiresAt: new Date(Date.now() + retentionMs)
-      };
-    }
-  };
   const common = {
     registration,
-    relocationStore,
     locationStore: () => location,
     liveDescriptors: async () => [targetDescriptor],
     completions: () => undefined,
@@ -4339,7 +4325,15 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
   let preserves = 0;
   let phaseWrites = 0;
   const progress: (Record<string, unknown> | undefined)[] = [];
+  const replyProvider = new ZLinkInMemoryProviderLocationStore();
+  const writerCondition = (writer: ZLinkLocationOwnerToken) => ({
+    kind: 'value' as const,
+    key: storeKey(`fixture-writer:${writer.ownerId}`),
+    expected: Buffer.from(writer.leaseGeneration.toString())
+  });
+  const relocationReplies = new RelocationReplyStore(replyProvider, writerCondition);
   return {
+    relocationReplies,
     get progress() {
       return [...progress];
     },
@@ -4382,12 +4376,23 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
         }
       };
     },
-    async commitAggregate(fence: any) {
+    async commitAggregate(fence: ZLinkAggregateFence) {
       commits += 1;
       events.push('cas');
       const participant = prepared.participants[0];
       if (participant.expectedStoreVersion.value !== current.storeVersion.value) {
         return { kind: 'stale' };
+      }
+      const replies = (fence.capturedRequests ?? []).map((request) =>
+        RelocationReplyStore.accepted(request, prepared.targetOwner)
+      );
+      if (replies.length > 0) {
+        const writer = writerCondition(prepared.targetOwner);
+        const saved = await replyProvider.write({
+          conditions: replies.map(({ key }) => ({ kind: 'missing', key })),
+          mutations: [{ kind: 'put', key: writer.key, bytes: writer.expected }, ...replies]
+        });
+        assert.equal(saved.kind, 'applied');
       }
       current = {
         ...current,
@@ -4396,11 +4401,7 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
         relocation:
           participant.relocation === undefined
             ? undefined
-            : commitAuthorityRelocation(
-                participant.relocation,
-                fence.aggregateId.value,
-                fence.acceptedRequests?.get(participant.authorityKey.value)
-              ),
+            : commitAuthorityRelocation(participant.relocation, fence.aggregateId.value),
         authorityOwnerGeneration: current.authorityOwnerGeneration + 1n,
         ownerId: prepared.targetOwner.ownerId,
         ownerLeaseGeneration: prepared.targetOwner.leaseGeneration,

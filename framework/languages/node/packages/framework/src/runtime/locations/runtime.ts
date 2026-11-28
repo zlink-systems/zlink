@@ -82,6 +82,12 @@ import { ZLinkLiveRowFilter, ZLinkOwnerLeaseTracker } from './lease-tracker';
 import { isAbortError } from '../abort';
 import type { ZLinkExecutionRecovery, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
 
+type ZLinkOwnerLeaseRenewedHandler = (
+  renewal: ZLinkOwnerLeaseRenewed,
+  wasOwnerLeaseUsable: boolean,
+  previousStoreNow?: Date
+) => void;
+
 export interface ZLinkLocationRuntimeStores {
   readonly locationStore: ZLinkDomainLocationStore;
   readonly authorityStore: ZLinkAuthorityStore;
@@ -166,9 +172,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     renewal: ZLinkOwnerLeaseRenewed,
     wasOwnerLeaseUsable: boolean
   ) => void;
-  private readonly ownerLeaseRenewedHandlers = new Set<
-    (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
-  >();
+  private readonly ownerLeaseRenewedHandlers = new Set<ZLinkOwnerLeaseRenewedHandler>();
   private readonly ownerLeaseRenewalFailedHandlers = new Set<() => void>();
   private heartbeatTimer: unknown;
   private heartbeatRenewal?: Promise<unknown>;
@@ -617,23 +621,21 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     this.ownerLeaseRecoveryPublication = handler;
   }
 
-  addOwnerLeaseRenewedHandler(
-    handler: (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
-  ): void {
+  addOwnerLeaseRenewedHandler(handler: ZLinkOwnerLeaseRenewedHandler): void {
     this.ownerLeaseRenewedHandlers.add(handler);
   }
 
   private notifyOwnerLeaseRenewed(
     renewal: ZLinkOwnerLeaseRenewed,
-    wasOwnerLeaseUsable: boolean
+    wasOwnerLeaseUsable: boolean,
+    previousStoreNow?: Date
   ): void {
     this.ownerLeaseRecoveryPublication?.(renewal, wasOwnerLeaseUsable);
-    for (const handler of this.ownerLeaseRenewedHandlers) handler(renewal, wasOwnerLeaseUsable);
+    for (const handler of this.ownerLeaseRenewedHandlers)
+      handler(renewal, wasOwnerLeaseUsable, previousStoreNow);
   }
 
-  removeOwnerLeaseRenewedHandler(
-    handler: (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
-  ): void {
+  removeOwnerLeaseRenewedHandler(handler: ZLinkOwnerLeaseRenewedHandler): void {
     this.ownerLeaseRenewedHandlers.delete(handler);
   }
 
@@ -837,6 +839,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       }
       const wasOwnerLeaseUsable = this.ownerAdmissionOpen;
       this.ownerLeaseHealthy = true;
+      const previousStoreNow = this.ownerLeaseRenewedAt;
       this.ownerLeaseRenewedAt = result.storeNow;
       this.setOwnerLeaseDeadline(
         renewStartedAtMs,
@@ -846,7 +849,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       );
       this.recordSuccessfulLease(renewStartedAtMs, renewingOwner, true);
       this.lastError = undefined;
-      this.notifyOwnerLeaseRenewed(result, wasOwnerLeaseUsable);
+      this.notifyOwnerLeaseRenewed(result, wasOwnerLeaseUsable, previousStoreNow);
       return true;
     } catch (error) {
       if (signal?.aborted === true) throw error;

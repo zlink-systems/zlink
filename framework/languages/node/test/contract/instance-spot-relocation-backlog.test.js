@@ -1,10 +1,15 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { completionFixture } = require('./helpers/relocation-completion');
+const { replyFixture } = require('./helpers/relocation-reply');
+const { relocationAuthorityStore } = require('./fixtures/relocation-authority-store');
 const {
   ReceiveKind
 } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
-const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
+const {
+  ZLinkActorHandoffCoordinator,
+  ZLinkActorTransferRuntime,
+  ZLinkHostServiceRelocationRuntime
+} = require('../../packages/framework/dist/internal');
 const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
@@ -212,19 +217,39 @@ async function targetFixture(queuedMessages, seen, sendReply) {
     spotFactories: [],
     spotPacketHandlers: [{ spotType: Room, handlerType: RoomPacket, packetName: 'RoomPacket' }]
   });
-  const completion = completionFixture(1n, key, {
+  const writer = { ownerId: target.ownerId, leaseGeneration: target.ownerLeaseGeneration };
+  const replies = replyFixture(writer);
+  await replies.setWriter(writer);
+  const authorityFence = {
+    ownerId: writer.ownerId,
+    ownerLeaseGeneration: writer.leaseGeneration,
+    nodeRid: Buffer.from(target.nodeRid).toString('hex'),
+    nodeGeneration: target.nodeGeneration
+  };
+  const locationStore = relocationAuthorityStore(async () => ({
+    kind: 'snapshot',
+    storeVersion: { value: '1' },
+    payload: Buffer.from('application'),
     objectGeneration: 17n,
     authorityOwnerGeneration: 53n,
-    ownerId: target.ownerId,
-    ownerLeaseGeneration: target.ownerLeaseGeneration,
-    relocation: { relocationId },
+    ownerId: writer.ownerId,
+    ownerLeaseGeneration: writer.leaseGeneration,
+    relocation: {
+      relocationId,
+      phase: 'committed',
+      source: authorityFence,
+      target: { ...authorityFence, attemptGeneration: 1n },
+      coordinator: { ...authorityFence, expectedStoreVersion: 'source-version' },
+      sourceInventorySha256: 'ab'.repeat(32),
+      applicationVersion: 1n
+    },
     allocation: {
       objectKind: 'instance_spot',
       stableType: 'Room',
       descriptor: { rid: target.nodeRid },
       descriptorLifecycleGeneration: target.nodeGeneration
     }
-  });
+  }))();
   const runtime = new ZLinkHostServiceRelocationRuntime({
     registration: {
       spotNodes: new Map([
@@ -245,10 +270,8 @@ async function targetFixture(queuedMessages, seen, sendReply) {
     },
     currentOwner: () => ({ ownerId: target.ownerId, leaseGeneration: target.ownerLeaseGeneration }),
     locationStore: () => ({
-      ...completion.authorities,
-      async readAuthority() {
-        return completion.current();
-      },
+      ...locationStore,
+      relocationReplies: replies.store,
       async readOwnerLease(ownerId) {
         assert.equal(ownerId, source.ownerId);
         return {
@@ -259,12 +282,13 @@ async function targetFixture(queuedMessages, seen, sendReply) {
         };
       },
       async commitAggregate(fence) {
-        assert.equal(fence.acceptedRequests.get(key.value), 1n);
+        assert.equal(fence.capturedRequests.length, 1);
+        assert.equal(fence.capturedRequests[0].objectKey, key.value);
         assert.deepEqual(seen, []);
+        await replies.seed(fence.capturedRequests[0]);
         return { kind: 'committed' };
       }
     }),
-    relocationStore: completion.store,
     liveDescriptors: async () => [
       peerDescriptor(source.nodeRid, source.nodeGeneration, source.ownerId, source.leaseGeneration)
     ],
@@ -275,9 +299,8 @@ async function targetFixture(queuedMessages, seen, sendReply) {
   });
   runtime.readAggregateForCommitRetry = async () => ({
     kind: 'committed',
-    authorities: new Map([[key.value, completion.current()]])
+    authorities: new Map([[key.value, await locationStore.readAuthority(key)]])
   });
-  runtime.clearTargetRelocationPublication = async () => completion.current();
   const materialized = await runtime.materializeTargetEnvelope('mesh', {
     aggregateId: relocationId,
     aggregateGeneration: 1n,
@@ -299,7 +322,7 @@ async function targetFixture(queuedMessages, seen, sendReply) {
   });
   return {
     runtime,
-    completion,
+    replies,
     spotManager,
     ...materialized,
     offer: {
@@ -326,10 +349,11 @@ function peerDescriptor(rid, lifecycleGeneration, ownerId, leaseGeneration) {
   return { rid, lifecycleGeneration, ownerId, leaseGeneration, state: 1 };
 }
 
-function receiveControl(runtime, sourceNodeRid, frames) {
+function receiveControl(runtime, sender, frames) {
   return runtime.tryHandleControl('mesh', {
     kind: ReceiveKind.NodeSend,
-    sourceNodeRid,
+    sourceNodeRid: sender.nodeRid,
+    sourceNodeGeneration: sender.nodeGeneration,
     parts: (Array.isArray(frames) ? frames : [frames]).map(ZLinkBufferMessage.from)
   });
 }
@@ -369,6 +393,9 @@ for (const relay of [false, true]) {
       }));
       const acknowledgements = [];
       const caller = new ZLinkHostServiceRelocationRuntime({
+        actorTransfer: new ZLinkActorTransferRuntime({
+          actorHandoff: new ZLinkActorHandoffCoordinator({})
+        }),
         currentOwner: () => source,
         liveDescriptors: async () => [
           peerDescriptor(
@@ -388,7 +415,7 @@ for (const relay of [false, true]) {
             assert.deepEqual(ack.operation, originalRequest.operation);
             assert.equal(ack.replyRouteId, originalRequest.replyRouteId);
             acknowledgements.push(ack.status);
-            await receiveControl(stage.runtime, source.nodeRid, frame);
+            await receiveControl(stage.runtime, source, frame);
             return SubmitResult.Ok;
           }
         })
@@ -397,7 +424,7 @@ for (const relay of [false, true]) {
       const stage = await targetFixture(saved, seen, async (rid, frames) => {
         assert.equal(rid, source.nodeRid);
         replyFrames = frames;
-        await receiveControl(caller, target.nodeRid, frames);
+        await receiveControl(caller, target, frames);
         return SubmitResult.Ok;
       });
       const stagingId = '1:2:29';
@@ -425,7 +452,7 @@ for (const relay of [false, true]) {
             kind: 'data',
             frozenRecord: wire.decodeServiceWireFrozenRecord(bytes)
           });
-          assert.equal(await receiveControl(stage.runtime, coordinator.nodeRid, command), true);
+          assert.equal(await receiveControl(stage.runtime, coordinator, command), true);
         }
         const cutover = {
           ...control,
@@ -451,15 +478,18 @@ for (const relay of [false, true]) {
         assert.equal(
           await receiveControl(
             stage.runtime,
-            coordinator.nodeRid,
+            coordinator,
             wire.encodeMaintenanceRelocationControl(cutover)
           ),
           true
         );
         await stage.finalize;
-        assert.equal(stage.completion.current().relocation.completion.completedResults, 1n);
-        assert.equal(stage.completion.current().relocation.completion.pendingDeliveries, 0n);
-        await receiveControl(caller, target.nodeRid, replyFrames);
+        await stage.staging.hidden.get(key.value).replayCompletion;
+        assert.deepEqual(
+          (await stage.replies.rows(relocationId)).map(({ state }) => state),
+          ['terminalReceived']
+        );
+        await receiveControl(caller, target, replyFrames);
         const result = await reply;
         assert.deepEqual(
           decodeChannelReply(

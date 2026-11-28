@@ -1006,11 +1006,8 @@ export class ZLinkInMemoryAuthorityStore {
         row,
         changesOwner: participant.ownerTransition === 'newOwner',
         relocation:
-          commitAuthorityRelocation(
-            row.snapshot.relocation,
-            fence.aggregateId.value,
-            fence.acceptedRequests?.get(participant.authorityKey.value)
-          ) ?? row.snapshot.relocation
+          commitAuthorityRelocation(row.snapshot.relocation, fence.aggregateId.value) ??
+          row.snapshot.relocation
       });
     }
     if (

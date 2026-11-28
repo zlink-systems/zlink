@@ -1,3 +1,4 @@
+import type { RelocationReplyIdentity } from './relocation-reply-record';
 export * from '../../contracts/Locations';
 import type { ZLinkObjectReserveRequest } from '../../contracts/Locations/Authority';
 
@@ -66,9 +67,9 @@ export type ZLinkAggregatePrepareRequest = Omit<
   readonly sealedInventoryDigest?: string;
 };
 
-/** Target boundary counts are installed in the owner commit, never a later phase write. */
+/** The target commit installs the captured and boundary request rows. */
 export type ZLinkAggregateFence = AuthorityContract.ZLinkAggregateFence & {
-  readonly acceptedRequests?: ReadonlyMap<string, bigint>;
+  readonly capturedRequests?: readonly RelocationReplyIdentity[];
 };
 
 export type ZLinkAuthorityScanResult =

@@ -1,3 +1,4 @@
+import type { RelocationReplyStore } from './relocation-reply-store';
 import type { StoredAggregateInventoryEntry } from './aggregate-inventory-store';
 import type {
   ZLinkLocationOwnerToken,
@@ -58,6 +59,7 @@ export type ZLinkMeshNodeWriteIntent = ZLinkLocationWriteIntent | ZLinkInternalM
  * implement this interface; the framework maps it to the opaque Store SPI.
  */
 export interface ZLinkDomainLocationStore {
+  readonly relocationReplies?: RelocationReplyStore;
   confirmedCapacity?(
     key: ZLinkMeshNodeDescriptorKey,
     limits: ZLinkMeshNodeDescriptor['populationCapacity']

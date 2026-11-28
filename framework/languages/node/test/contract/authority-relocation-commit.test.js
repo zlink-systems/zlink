@@ -2,7 +2,6 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   ZLinkInMemoryAuthorityStore,
-  ZLinkInMemoryLocationStore,
   ZLinkInMemoryProviderLocationStore,
   ZLinkLocationStoreRepository,
   ZLinkLocationWriteIntent,
@@ -14,7 +13,7 @@ const {
   createReadyUserSpot
 } = require('./helpers/location-aggregate-fixture');
 
-async function prepareRelocation(store, sourceOwner, targetOwner, acceptedRequests = 2n) {
+async function prepareRelocation(store, sourceOwner, targetOwner, requestCount = 2) {
   const source = {
     meshName: 'play',
     nodeRid: 'source-node',
@@ -64,31 +63,34 @@ async function prepareRelocation(store, sourceOwner, targetOwner, acceptedReques
   const before = await store.readAuthority(first.authorityKey);
   assert.equal(before.ownerId, sourceOwner.ownerId);
   assert.equal(before.relocation.phase, 'prepared');
-  assert.equal(before.relocation.completion, undefined);
   return {
     participants: request.participants,
     targetOwner,
     fence: {
       ...prepared.fence,
-      acceptedRequests: new Map([[first.authorityKey.value, acceptedRequests]])
+      capturedRequests: Array.from({ length: requestCount }, (_, index) => ({
+        relocationId: id.value,
+        objectKey: request.participants[index % request.participants.length].authorityKey.value,
+        source: {
+          ownerId: 'requester',
+          leaseGeneration: '8',
+          nodeRid: '41',
+          nodeGeneration: '11'
+        },
+        operationId: (index + 1).toString(16).padStart(32, '0'),
+        replyRouteId: String(index + 1)
+      }))
     }
   };
 }
 
-function assertCommitted(authority, participant, acceptedRequests, targetOwner) {
+function assertCommitted(authority, participant, targetOwner) {
   assert.equal(authority.ownerId, targetOwner.ownerId);
   assert.equal(authority.ownerLeaseGeneration, targetOwner.leaseGeneration);
   assert.equal(authority.relocation.phase, 'committed');
   assert.deepEqual(authority.relocation, {
     ...participant.relocation,
-    phase: 'committed',
-    completion: {
-      acceptedRequests,
-      completedResults: 0n,
-      pendingDeliveries: 0n,
-      reference: null,
-      sha256: null
-    }
+    phase: 'committed'
   });
   assert.deepEqual(Buffer.from(authority.payload), participant.authorityPayload);
 }
@@ -98,7 +100,6 @@ async function assertCommittedParticipants(store, prepared) {
     assertCommitted(
       await store.readAuthority(participant.authorityKey),
       participant,
-      prepared.fence.acceptedRequests.get(participant.authorityKey.value) ?? 0n,
       prepared.targetOwner
     );
   }
@@ -166,48 +167,144 @@ test('provider relocation publishes the committed record before materialization'
   assert.equal((await store.commitAggregate(prepared.fence)).kind, 'committed');
   assert.equal(atPublish.length, prepared.participants.length);
   for (const [index, participant] of prepared.participants.entries()) {
-    assertCommitted(
-      atPublish[index],
-      participant,
-      prepared.fence.acceptedRequests.get(participant.authorityKey.value) ?? 0n,
-      prepared.targetOwner
-    );
+    assertCommitted(atPublish[index], participant, prepared.targetOwner);
   }
   const beforePublish = await overlapping;
   assert.equal(beforePublish.ownerId, source.token.ownerId);
   assert.equal(beforePublish.relocation.phase, 'prepared');
-  assert.equal(beforePublish.relocation.completion, undefined);
   assert.equal(
-    (await store.commitAggregate({ ...prepared.fence, acceptedRequests: new Map() })).kind,
+    (await store.commitAggregate({ ...prepared.fence, capturedRequests: [] })).kind,
     'alreadyCommitted'
   );
   await assertCommittedParticipants(store, prepared);
 });
 
-for (const backing of ['repository', 'in-memory']) {
-  test(`completion accepted count is installed atomically at target commit/${backing}`, async () => {
-    const store =
-      backing === 'repository'
-        ? new ZLinkLocationStoreRepository(new ZLinkInMemoryProviderLocationStore())
-        : new ZLinkInMemoryLocationStore();
-    const sourceOwner = await store.claimOwnerLease(`completion-source-${backing}`, 60000);
-    const targetOwner = await store.claimOwnerLease(`completion-target-${backing}`, 60000);
-    assert.equal(sourceOwner.kind, 'claimed');
-    assert.equal(targetOwner.kind, 'claimed');
-    const prepared = await prepareRelocation(store, sourceOwner.token, targetOwner.token, 9n);
-    const [participant] = prepared.participants;
-    const key = participant.authorityKey;
+for (const count of [0, 1, 9]) {
+  test(`target commit writes ${count} accepted reply rows in the owner batch`, async () => {
+    const provider = new ZLinkInMemoryProviderLocationStore();
+    const store = new ZLinkLocationStoreRepository(provider);
+    const source = await store.claimOwnerLease('source-owner', 60_000);
+    const target = await store.claimOwnerLease('target-owner', 60_000);
+    const prepared = await prepareRelocation(store, source.token, target.token, count);
+    const relocationId = prepared.fence.aggregateId.value;
+    const prefix = `$zlink/relocation-reply/${relocationId}/`;
+    const original = provider.write.bind(provider);
+    let committedBatches = 0;
+    provider.write = async (batch, signal) => {
+      if (
+        batch.mutations.some(
+          ({ key, bytes }) =>
+            key.value.startsWith('zlink:v11:aggregate:') &&
+            JSON.parse(Buffer.from(bytes)).state === 'committed'
+        )
+      ) {
+        committedBatches++;
+        const rows = batch.mutations.filter(({ key }) => key.value.startsWith(prefix));
+        assert.equal(rows.length, count);
+        rows.forEach(({ key, bytes, retentionMs }, index) => {
+          assert.ok(
+            batch.conditions.some((c) => c.kind === 'missing' && c.key.value === key.value)
+          );
+          assert.equal(retentionMs, 86_400_000);
+          assert.deepEqual(JSON.parse(Buffer.from(bytes)), {
+            ...prepared.fence.capturedRequests[index],
+            formatVersion: 1,
+            state: 'accepted',
+            writer: {
+              ownerId: target.token.ownerId,
+              leaseGeneration: target.token.leaseGeneration.toString()
+            }
+          });
+        });
+      }
+      return original(batch, signal);
+    };
+    assert.equal((await provider.scan({ prefix, limit: 100 })).value.items.length, 0);
     assert.equal((await store.commitAggregate(prepared.fence)).kind, 'committed');
-    assertCommitted(await store.readAuthority(key), participant, 9n, targetOwner.token);
+    assert.equal(committedBatches, 1);
+    assert.equal((await provider.scan({ prefix, limit: 100 })).value.items.length, count);
+    await assertCommittedParticipants(store, prepared);
     assert.equal(
-      (
-        await store.commitAggregate({
-          ...prepared.fence,
-          acceptedRequests: new Map([[key.value, 123n]])
-        })
-      ).kind,
+      (await store.commitAggregate({ ...prepared.fence, capturedRequests: [] })).kind,
       'alreadyCommitted'
     );
-    assert.equal((await store.readAuthority(key)).relocation.completion.acceptedRequests, 9n);
+    assert.equal((await provider.scan({ prefix, limit: 100 })).value.items.length, count);
   });
 }
+
+for (const bound of ['keys', 'bytes']) {
+  test(`reply rows that exceed the commit batch ${bound} leave owner and rows unchanged`, async () => {
+    const provider = new ZLinkInMemoryProviderLocationStore();
+    const store = new ZLinkLocationStoreRepository(provider);
+    const source = await store.claimOwnerLease('source-owner', 60_000);
+    const target = await store.claimOwnerLease('target-owner', 60_000);
+    const prepared = await prepareRelocation(
+      store,
+      source.token,
+      target.token,
+      bound === 'keys' ? 2048 : 1700
+    );
+    if (bound === 'bytes') {
+      for (const request of prepared.fence.capturedRequests) {
+        request.source.ownerId = 'A'.repeat(250);
+        request.source.nodeRid = '43'.repeat(250);
+      }
+    }
+    const prefix = `$zlink/relocation-reply/${prepared.fence.aggregateId.value}/`;
+    await assert.rejects(store.commitAggregate(prepared.fence), (error) => {
+      assert.match(error.message, /Location Store batch limits/);
+      assert.match(error.cause.message, bound === 'keys' ? /2,048/ : /4 MiB/);
+      return true;
+    });
+    assert.equal((await provider.scan({ prefix, limit: 100 })).value.items.length, 0);
+    for (const participant of prepared.participants) {
+      const authority = await store.readAuthority(participant.authorityKey);
+      assert.equal(authority.ownerId, source.token.ownerId);
+      assert.equal(authority.relocation.phase, 'prepared');
+    }
+    assert.equal((await store.abortAggregate(prepared.fence)).kind, 'aborted');
+  });
+}
+
+test('Redis exposes committed reply rows to a second repository and versions the terminal CAS', async (t) => {
+  const { randomUUID } = require('node:crypto');
+  const { connectTestRedis, testRedisUrl } = require('./helpers/test-redis');
+  const { ZLinkRedisLocationStore } = require('../../packages/framework-locations-redis/dist');
+  const client = await connectTestRedis(t);
+  if (client === undefined) return;
+  const keyPrefix = `relocation-reply-contract-${randomUUID()}`;
+  const firstProvider = new ZLinkRedisLocationStore({ url: testRedisUrl, keyPrefix });
+  const secondProvider = new ZLinkRedisLocationStore({ url: testRedisUrl, keyPrefix });
+  try {
+    const first = new ZLinkLocationStoreRepository(firstProvider);
+    const second = new ZLinkLocationStoreRepository(secondProvider);
+    const source = await first.claimOwnerLease('source-owner', 60_000);
+    const writer = (await first.claimOwnerLease('target-owner', 60_000)).token;
+    const prepared = await prepareRelocation(first, source.token, writer, 1);
+    const [identity] = prepared.fence.capturedRequests;
+    const row = async () => {
+      const values = [];
+      for await (const value of second.relocationReplies.scan(identity.relocationId)) {
+        values.push(value);
+      }
+      assert.ok(values.length <= 1);
+      return values[0];
+    };
+    assert.equal(await row(), undefined);
+    assert.equal((await first.commitAggregate(prepared.fence)).kind, 'committed');
+    assert.equal((await row()).state, 'accepted');
+    const result = await second.relocationReplies.complete(identity, writer, 'YW5zd2Vy', () =>
+      assert.fail()
+    );
+    assert.equal((await row()).reply, result.reply);
+    await first.relocationReplies.acknowledge(identity, writer, 'alreadyTerminal');
+    assert.deepEqual(await row(), { ...result, state: 'alreadyTerminal' });
+  } finally {
+    await firstProvider.dispose();
+    await secondProvider.dispose();
+    for await (const keys of client.scanIterator({ MATCH: `${keyPrefix}:*` })) {
+      if (keys.length > 0) await client.del(keys);
+    }
+    await client.quit();
+  }
+});

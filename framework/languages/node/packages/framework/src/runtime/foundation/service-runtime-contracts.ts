@@ -267,6 +267,7 @@ export interface ReceiveRecord {
   readonly kind: number;
   readonly domain: number;
   readonly sourceNodeRid: RoutingId | null;
+  readonly sourceNodeGeneration?: bigint;
   readonly sourceSpotId: RoutingId | null;
   readonly sourceBindingGeneration: bigint;
   readonly sourceActor: ServiceActorRef | null;

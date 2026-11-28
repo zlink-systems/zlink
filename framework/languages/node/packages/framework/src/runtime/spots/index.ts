@@ -3021,10 +3021,7 @@ export class DefaultZLinkSpotManager {
       `actor Join source leave ${actorId}`,
       () => sourceLeave
     );
-    if (beforeJoinCompletion !== undefined) {
-      await sourceLeave;
-      await beforeJoinCompletion();
-    }
+    await beforeJoinCompletion?.();
     if (outcome.deferredJoinCompletion !== undefined) {
       await this.options.actorTransferRuntime?.deliverDeferredJoinCompletion(
         outcome.deferredJoinCompletion,

@@ -1,3 +1,4 @@
+import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { createAbortError, NORMAL_COMPLETION } from '../abort';
 export interface OperationClock {
   now(): number;
@@ -37,7 +38,7 @@ export interface OperationHandle<T> extends NodeRequestProgress {
   readonly deadlineMs: number | undefined;
   readonly signal: AbortSignal;
   readonly promise?: Promise<T>;
-  complete(value: T, retentionMs?: number): boolean;
+  complete(value: T): boolean;
   fail(reason: unknown): boolean;
   takeFailure(reason: unknown): boolean;
   resolveCaller(value: T): boolean;
@@ -48,7 +49,7 @@ export interface OperationHandle<T> extends NodeRequestProgress {
   clearFailureDispatcher(dispatcher: (reason: unknown) => void): void;
   setObserver(observer: OperationObserver<T, unknown>, context?: unknown): void;
   deferCompletion(): void;
-  reply(value: T, retentionMs?: number): boolean;
+  reply(value: T): boolean;
   replyFailure(reason: unknown): boolean;
   setSignal(signal: AbortSignal | undefined): void;
   mapCaller(onValue: (value: unknown) => unknown, onFailure: (error: unknown) => unknown): boolean;
@@ -83,7 +84,6 @@ class RegistryOperation<T, Context> implements OperationHandle<T>, OperationObse
   reject?: (reason: unknown) => void;
   observer?: OperationObserver<T, Context>;
   failureDispatcher?: (reason: unknown) => void;
-  private terminalRetentionMs = 0;
   private stop?: AbortController;
   private callerValue?: (value: unknown) => unknown;
   private callerFailure?: (error: unknown) => unknown;
@@ -93,17 +93,16 @@ class RegistryOperation<T, Context> implements OperationHandle<T>, OperationObse
     readonly deadlineMs: number | undefined,
     public context: Context | undefined
   ) {}
-  complete(value: T, retentionMs = this.terminalRetentionMs): boolean {
+  complete(value: T): boolean {
     if (this.promise !== undefined) this.observer = undefined;
-    return this.registry.complete(this.id, value, retentionMs);
+    return this.registry.complete(this.id, value);
   }
-  reply(value: T, retentionMs = 0): boolean {
+  reply(value: T): boolean {
     if (!this.isPending()) return false;
     if (this.promise === undefined || this.observer === undefined)
-      return this.registry.complete(this.id, value, retentionMs);
+      return this.registry.complete(this.id, value);
     const observer = this.observer;
     this.observer = this;
-    if (observer !== this) this.terminalRetentionMs = retentionMs;
     observer.operationCompleted(this.id, value, this.context);
     return true;
   }
@@ -224,13 +223,6 @@ class RegistryOperation<T, Context> implements OperationHandle<T>, OperationObse
   }
 }
 type Entry<T, Context> = RegistryOperation<T, Context>;
-interface RetainedContext<Context> {
-  readonly id: bigint;
-  deadlinePosition?: number;
-  context: Context;
-  deadlineMs: number;
-}
-type IndexedOperation<T, Context> = Entry<T, Context> | RetainedContext<Context>;
 
 const DEADLINE_ROTATION_MS = 256;
 
@@ -240,15 +232,14 @@ const systemClock: OperationClock = {
 
 /** Owns request completion so reply, timeout, cancellation, and shutdown race safely. */
 export class OperationRegistry<T, Context = unknown> {
-  private readonly entries = new Map<bigint, IndexedOperation<T, Context>>();
+  private readonly entries = new Map<bigint, Entry<T, Context>>();
   private nextId = 1n;
   private nextRotationMs: number;
   private reservedVisitMs = Infinity;
   // A min-heap of references into entries. The table alone grants the terminal.
   // Keep the root slot allocated across an empty registry.
-  private readonly deadlines: Array<IndexedOperation<T, Context> | undefined> = [undefined];
+  private readonly deadlines: Array<Entry<T, Context> | undefined> = [undefined];
   private closed = false;
-  private pendingCount = 0;
 
   constructor(
     private readonly clock: OperationClock = systemClock,
@@ -268,7 +259,7 @@ export class OperationRegistry<T, Context = unknown> {
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
       throw new RangeError('timeoutMs must be a non-negative finite number.');
     }
-    const id = this.nextId++;
+    const id = this.allocateId();
     const deadlineMs =
       timeoutOwner === 'registry'
         ? (absoluteDeadlineMs ?? this.clock.now() + timeoutMs)
@@ -284,8 +275,7 @@ export class OperationRegistry<T, Context = unknown> {
 
   handle(id: bigint): OperationHandle<T> {
     const entry = this.entries.get(id);
-    if (!(entry instanceof RegistryOperation))
-      throw new Error(`Operation ${id} has no active registry entry.`);
+    if (entry === undefined) throw new Error(`Operation ${id} has no active registry entry.`);
     return entry;
   }
 
@@ -299,12 +289,18 @@ export class OperationRegistry<T, Context = unknown> {
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
       throw new RangeError('timeoutMs must be a non-negative finite number.');
     }
-    const id = this.nextId++;
+    const id = this.allocateId();
     const deadlineMs = this.clock.now() + timeoutMs;
     const entry = new RegistryOperation(this, id, deadlineMs, context);
     entry.observer = observer;
     this.registerPending(entry);
     return id;
+  }
+
+  /** Reserves an ID in the same sequence as registered requests. */
+  allocateId(): bigint {
+    if (this.nextId > UINT64_MAX) throw new RangeError('Operation registry ID space is exhausted.');
+    return this.nextId++;
   }
 
   deadline(id: bigint): number | undefined {
@@ -346,12 +342,12 @@ export class OperationRegistry<T, Context = unknown> {
 
   private registerPending(entry: Entry<T, Context>): void {
     this.entries.set(entry.id, entry);
-    const firstPending = ++this.pendingCount === 1;
+    const firstPending = this.entries.size === 1;
     const earlier = this.scheduleDeadline(entry);
     if (earlier || firstPending) this.onPendingChanged?.();
   }
 
-  complete(id: bigint, value: T, terminalContextRetentionMs = 0): boolean {
+  complete(id: bigint, value: T): boolean {
     const entry = this.take(id);
     if (entry === undefined) return false;
     entry.failureDispatcher = undefined;
@@ -359,13 +355,12 @@ export class OperationRegistry<T, Context = unknown> {
     entry.observer = undefined;
     if (observer !== undefined) observer.operationCompleted(id, value, entry.context);
     else entry.resolveCaller(value);
-    this.retainTerminal(id, entry, terminalContextRetentionMs);
     entry.context = undefined;
     return true;
   }
 
-  reply(id: bigint, value: T, terminalContextRetentionMs = 0): boolean {
-    return this.pendingEntry(id)?.reply(value, terminalContextRetentionMs) ?? false;
+  reply(id: bigint, value: T): boolean {
+    return this.pendingEntry(id)?.reply(value) ?? false;
   }
 
   fail(id: bigint, reason: unknown): boolean {
@@ -423,7 +418,7 @@ export class OperationRegistry<T, Context = unknown> {
   }
 
   get size(): number {
-    return this.pendingCount;
+    return this.entries.size;
   }
 
   expire(nowMs: number, turnDeadlineMs: number): number {
@@ -433,15 +428,7 @@ export class OperationRegistry<T, Context = unknown> {
     let expired = 0;
     for (let next = this.deadlines[0]; next !== undefined; next = this.deadlines[0]) {
       if (!(next.deadlineMs! <= nowMs && this.clock.now() < turnDeadlineMs)) break;
-      if (
-        next instanceof RegistryOperation &&
-        this.fail(next.id, new OperationTimeoutError(next.id))
-      ) {
-        expired++;
-      } else {
-        this.entries.delete(next.id);
-        this.removeDeadline(next);
-      }
+      if (this.fail(next.id, new OperationTimeoutError(next.id))) expired++;
     }
     return expired;
   }
@@ -456,13 +443,12 @@ export class OperationRegistry<T, Context = unknown> {
     } else {
       this.removeDeadline(entry);
     }
-    this.pendingCount--;
     entry.endAdmission();
-    if (this.pendingCount === 0) this.onPendingChanged?.();
+    if (this.entries.size === 0) this.onPendingChanged?.();
     return entry;
   }
 
-  private scheduleDeadline(entry: IndexedOperation<T, Context>): boolean {
+  private scheduleDeadline(entry: Entry<T, Context>): boolean {
     const deadline = entry.deadlineMs;
     if (deadline === undefined || Number.isNaN(deadline)) return false;
     const heap = this.deadlines;
@@ -474,7 +460,7 @@ export class OperationRegistry<T, Context = unknown> {
     return entry.deadlinePosition === 0;
   }
 
-  private removeDeadline(entry: IndexedOperation<T, Context>): void {
+  private removeDeadline(entry: Entry<T, Context>): void {
     let position = entry.deadlinePosition ?? 0;
     const heap = this.deadlines;
     if (heap[position] !== entry) return;
@@ -502,7 +488,7 @@ export class OperationRegistry<T, Context = unknown> {
     last.deadlinePosition = position;
   }
 
-  private siftDeadlineUp(entry: IndexedOperation<T, Context>, position: number): void {
+  private siftDeadlineUp(entry: Entry<T, Context>, position: number): void {
     const heap = this.deadlines;
     while (position > 0) {
       const parent = Math.floor((position - 1) / 2);
@@ -518,21 +504,8 @@ export class OperationRegistry<T, Context = unknown> {
 
   private pendingEntry(id: bigint): Entry<T, Context> | undefined {
     const entry = this.entries.get(id);
-    return entry instanceof RegistryOperation &&
-      (entry.resolve !== undefined || entry.observer !== undefined)
+    return entry !== undefined && (entry.resolve !== undefined || entry.observer !== undefined)
       ? entry
       : undefined;
-  }
-
-  private retainTerminal(id: bigint, entry: Entry<T, Context>, retentionMs: number): void {
-    if (this.closed || entry.context === undefined || retentionMs === 0) return;
-    const retained = {
-      id,
-      context: entry.context,
-      deadlineMs: this.clock.now() + retentionMs
-    };
-    this.entries.set(id, retained);
-    this.scheduleDeadline(retained);
-    this.onPendingChanged?.();
   }
 }

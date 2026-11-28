@@ -1,3 +1,4 @@
+import { RelocationReplyStore } from './relocation-reply-store';
 import {
   type AuthorityAggregateMarker as AggregateParticipantFenceRecord,
   encodeAuthorityAggregate,
@@ -225,6 +226,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   private readonly provider: ZLinkLocationStore;
   private readonly confirmedCapacities = new Map<string, CapacityRecord | undefined>();
   protected override readonly aggregateInventory: ZLinkAggregateInventoryStore;
+  readonly relocationReplies: RelocationReplyStore;
 
   constructor(
     provider: ZLinkLocationStore,
@@ -277,6 +279,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
     };
     this.aggregateInventory = new ZLinkAggregateInventoryStore(this.provider);
+    this.relocationReplies = new RelocationReplyStore(this.provider, (owner) =>
+      leaseValueCondition(ownerKey(owner.ownerId), owner)
+    );
   }
 
   private async observeStore<T>(operation: string, request: () => Promise<T>): Promise<T> {
@@ -1251,8 +1256,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       for (const row of authorityRows) {
         const relocation = commitAuthorityRelocation(
           row.record.snapshot.relocation,
-          fence.aggregateId.value,
-          fence.acceptedRequests?.get(row.entry.authorityKey)
+          fence.aggregateId.value
         );
         if (relocation === undefined) continue;
         relocationMutations.push({
@@ -1264,36 +1268,50 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           })
         });
       }
-      const published = await this.provider.write(
-        {
-          conditions: [
-            { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
-            versionCondition(targetDescriptorKey, descriptorRead),
-            leaseValueCondition(targetLeaseKey, aggregate.targetOwner),
-            ...membershipConditions,
-            ...authorityRows.map((row) => ({
-              kind: 'version' as const,
-              key: row.key,
-              expected: row.current.value.version
-            })),
-            ...[...capacityReads.entries()].map(([value, read]) => ({
-              kind: 'version' as const,
-              key: capacityKeys.get(value)!,
-              expected: read.value.version
-            }))
-          ],
-          mutations: [
-            {
-              kind: 'put',
-              key: rowKey,
-              bytes: encodeJson({ ...aggregate, state: 'committed' } satisfies AggregateRecord)
-            },
-            ...relocationMutations,
-            ...capacityMutations
-          ]
-        },
-        signal
+      const replies = (fence.capturedRequests ?? []).map((request) =>
+        RelocationReplyStore.accepted(request, aggregate.targetOwner)
       );
+      const published = await this.provider
+        .write(
+          {
+            conditions: [
+              { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
+              versionCondition(targetDescriptorKey, descriptorRead),
+              leaseValueCondition(targetLeaseKey, aggregate.targetOwner),
+              ...membershipConditions,
+              ...replies.map(({ key }) => ({ kind: 'missing' as const, key })),
+              ...authorityRows.map((row) => ({
+                kind: 'version' as const,
+                key: row.key,
+                expected: row.current.value.version
+              })),
+              ...[...capacityReads.entries()].map(([value, read]) => ({
+                kind: 'version' as const,
+                key: capacityKeys.get(value)!,
+                expected: read.value.version
+              }))
+            ],
+            mutations: [
+              {
+                kind: 'put',
+                key: rowKey,
+                bytes: encodeJson({ ...aggregate, state: 'committed' } satisfies AggregateRecord)
+              },
+              ...relocationMutations,
+              ...capacityMutations,
+              ...replies
+            ]
+          },
+          signal
+        )
+        .catch((error: unknown) => {
+          if (!(error instanceof RangeError)) throw error;
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.InternalFailure,
+            'Relocation target commit exceeds Location Store batch limits.',
+            error
+          );
+        });
       if (published.kind === 'conflict') {
         aggregateRead = await this.provider.read(rowKey, signal);
         if (aggregateRead.kind === 'missing') return { kind: 'stale' };
@@ -4800,7 +4818,7 @@ function versionCondition(key: ZLinkStoreKey, read: ZLinkStoreReadResult): ZLink
 function leaseValueCondition(
   key: ZLinkStoreKey,
   owner: ZLinkLocationOwnerToken
-): ZLinkStoreCondition {
+): Extract<ZLinkStoreCondition, { kind: 'value' }> {
   return { kind: 'value', key, expected: encodeOwnerRecord(owner.ownerId, owner.leaseGeneration) };
 }
 

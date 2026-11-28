@@ -2,6 +2,13 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const internal = require('../../packages/framework/dist/internal');
 const {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException
+} = require('../../packages/framework/dist/contracts/Errors/ZLinkFrameworkException');
+const {
+  cases: aggregateGolden
+} = require('../../../../runtime/protocol/golden/authority-aggregate-relocation-v1.json');
+const {
   storeKey
 } = require('../../packages/framework/dist/runtime/locations/in-memory-provider-location-store');
 const {
@@ -70,6 +77,15 @@ test('repository reads a cross-language relocation-only authority without treati
   assert.equal(current.relocation.source.nodeGeneration, 9007199254740993n);
   assert.equal(current.relocation.coordinator.expectedStoreVersion, 'opaque:baseline/v1');
   assert.equal(Buffer.from(current.payload).toString(), 'opaque application state');
+});
+
+test('repository reports DataLost for an authority with a legacy relocation completion field', async () => {
+  const vector = aggregateGolden.find((item) => item.name === 'relocation-with-completion-field');
+  const { store, authorityKey } = await fixture(vector.aggregate.relocation);
+  await assert.rejects(() => store.readAuthority(authorityKey), {
+    name: ZLinkFrameworkException.name,
+    kind: ZLinkFrameworkErrorKind.DataLost
+  });
 });
 
 test('phase CAS uses aggregate.relocation once, preserves opaque payload and removes the empty aggregate', async () => {
@@ -174,11 +190,10 @@ test('fixed previous Node ZLAR and canonical ZLAU slot records are compatibility
   }
 });
 
-const aggregateGolden = require('../../../../runtime/protocol/golden/authority-aggregate-relocation-v1.json');
 const {
   decodeAuthorityAggregate
 } = require('../../packages/framework/dist/runtime/locations/authority-relocation-record');
-for (const vector of aggregateGolden.cases.filter(
+for (const vector of aggregateGolden.filter(
   (item) => item.expect === 'accept' && item.aggregate.aggregateId === undefined
 )) {
   test(`provider writes and rewrites common golden ${vector.name}`, async () => {

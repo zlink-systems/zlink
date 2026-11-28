@@ -31,7 +31,6 @@ import {
   RELOCATED_REQUEST_OWNED_BY_REQUESTER,
   type ZLinkActorHandoffPacket,
   type ZLinkActorHandoffResult,
-  type ZLinkActorHandoffTerminalAcceptance,
   type ZLinkActorHandoffTerminalAck
 } from '../actors/actor-handoff';
 import {
@@ -768,10 +767,10 @@ export class ZLinkActorTransferRuntime {
   relayCanonicalMaintenanceTerminal(
     operationId: string,
     replyRouteId: string,
-    result: ZLinkActorHandoffResult,
+    result: () => ZLinkActorHandoffResult,
     sourceNodeRid: RoutingId,
     targetAuthorityOwnerGeneration?: bigint
-  ): ZLinkActorHandoffTerminalAcceptance {
+  ): ZLinkActorHandoffTerminalAck {
     return this.options.actorHandoff.acceptRelocatedTerminalRelay(
       operationId,
       replyRouteId,

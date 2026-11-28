@@ -1613,9 +1613,10 @@ test('durable request handoff returns its initial permit before capacity-one rep
   assert.equal(coordinator.isActive('actor-1'), false);
 });
 
-test('a chained relocation closes the handoff without Follow and rejects pending requests', async () => {
+test('a chained relocation closes the handoff without Follow and rejects the post-boundary request', async () => {
   const { coordinator, followed } = harness();
   coordinator.begin('actor-1', 1n);
+  coordinator.snapshot('actor-1');
   const held = frame('held-request');
   const pending = coordinator.capture('remote', 'actor-1', held, true, undefined, actorRef());
   const rejected = assert.rejects(
@@ -1623,7 +1624,6 @@ test('a chained relocation closes the handoff without Follow and rejects pending
     (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
   );
   held.forEach((part) => part.close());
-  coordinator.snapshot('actor-1');
   coordinator.complete('actor-1', target(), targetActorRef(), [], null);
   await rejected;
   assert.equal(coordinator.isActive('actor-1'), false);
@@ -3098,18 +3098,19 @@ test('Message Follow keeps opaque node identities that share the same display te
     'terminalReceived'
   );
   assert.equal(await terminalReply, 'opaque-target');
-  const duplicate = coordinator.acceptRelocatedTerminalRelay(
-    terminalPacket.messageFollowContext.operationId,
-    terminalPacket.source.replyRouteId,
-    undefined,
-    terminal,
-    sourceA,
-    2n,
-    'actor-1'
+  assert.equal(coordinator[inspectRuntime]().replyRouteCount, 0);
+  assert.equal(
+    coordinator.acceptRelocatedTerminalRelay(
+      terminalPacket.messageFollowContext.operationId,
+      terminalPacket.source.replyRouteId,
+      undefined,
+      () => assert.fail('a duplicate terminal must not be read'),
+      sourceA,
+      2n,
+      'actor-1'
+    ),
+    'alreadyTerminal'
   );
-  assert.equal(duplicate.status, 'alreadyTerminal');
-  assert.equal(routingIds.routingIdsEqual(duplicate.source.nodeRid, sourceB), true);
-  assert.equal(routingIds.routingIdsEqual(duplicate.source.nodeRid, sourceA), false);
 });
 
 test('Message Follow accepts legacy visited owner keys without weakening opaque RID fences', () => {

@@ -495,6 +495,8 @@ export class ZLinkFrameworkRuntimeHost
       runtimeEventPublisher: this.runtimeEventPublisher,
       metrics: this.metrics,
       fallbackNodeRid: `node-${randomUUID()}`,
+      detachedTaskRunner: this.detachedTaskRunner(),
+      shutdownSignal: () => this.executionState?.abortController.signal,
       observeActorAuthorityVersion: (actorId, storeVersion) =>
         this.actorClientLocationResolver?.observeActorAuthorityVersion(actorId, storeVersion),
       observeSpotAuthorityVersion: (spotId, storeVersion) =>
@@ -891,7 +893,7 @@ export class ZLinkFrameworkRuntimeHost
       sourceQuiescenceChanged: () => this.publishCurrentRuntimeStatus(),
       providerResolver: options.providerResolver,
       locationStore: () => this.locationOwner.currentStores?.locationStore,
-      relocationStore: this.relocationStore,
+      shutdownSignal: () => this.executionState?.abortController.signal,
       currentOwner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
       liveDescriptors: (meshName, signal) =>
         this.locationOwner.currentRuntime?.listLiveMeshNodes(meshName, signal) ??
@@ -1156,15 +1158,6 @@ export class ZLinkFrameworkRuntimeHost
       // maintenance operation must observe that publication before it writes
       // Retiring/Draining, otherwise two descriptor revisions can race and
       // make a valid drain look like a Store failure.
-      if (await this.serviceRelocation.hasPendingDeliveries()) {
-        return this.resetBlockedRelocation(
-          blockedRelocation(
-            mode,
-            effectiveTargetApplicationVersion,
-            ZLinkFrameworkRelocationReason.OperationInProgress
-          )
-        );
-      }
       await this.spotNodeRuntime?.waitForRuntimeWeightPublication();
       const blocker = await this.preflightAutomaticPeerReadiness(
         deadlineAtMs,
