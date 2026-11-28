@@ -527,7 +527,7 @@ dispatcher에 넣고, 아래에서 정한 새 execution turn 조건에 따라 �
 시작해 돌아갈 lane이 없어도, Framework가 전달하는 완료 callback과 비동기 재개는 위 새 execution turn 조건과
 Messaging hot path 「4.4」의 실행 자원 배치를 따른다.
 
-내부 결과의 값 변환과 자원 정리는 application callback 배달이 아니다. Framework가 배달하는 callback과 suspended continuation은 결과의 즉시 확정 여부와 관계없이 이 절의 새 execution turn을 따른다. 언어 완료 표현의 이미 완료된 값을 직접 소비하거나 의존 작업을 직접 등록하는 동작은 해당 언어 API 계약을 따른다. 동기 blocking 대기가 반환하는 thread도 해당 언어 API 계약을 따른다.
+내부 결과의 값 변환과 자원 정리는 application callback 배달이 아니다. Framework가 배달하는 callback과 suspended continuation은 결과의 즉시 확정 여부와 관계없이 이 절의 새 execution turn을 따른다. 언어 완료 표현의 이미 완료된 값을 직접 소비하거나 의존 작업을 직접 등록하는 동작은 해당 언어 API 계약을 따른다. 동기 blocking 대기가 반환하는 thread도 해당 언어 API 계약을 따른다. 다만 공개 API가 돌려주는 언어 완료 표현(Request·Send의 결과와 Actor·Spot의 Create·GetOrCreate·Destroy 같은 lifecycle 결과를 모두 포함한다)을 Framework가 완료하는 일은 이 절의 새 execution turn에서 한다. Store·transport 응답을 처리하는 호출 stack이나 그 client의 I/O thread에서 직접 완료하지 않는다. 그래서 응용이 그 표현에 직접 등록한 의존 작업도 infrastructure 실행 자원을 붙잡지 않는다.
 
 **완료 callback을 dispatcher에 넣는 일은 실패하지 않는다.** Dispatcher에 상한이 없기
 때문이다. 자리가 없다는 이유로 request를 거부하거나, 이미 수락한 호출의 완료를 버리는

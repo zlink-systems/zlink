@@ -22,7 +22,7 @@ for retry because Core does not retain the payload.
 
 The socket-local owner blocks a daemon worker on Core `POLLCOMPLETION`, drains
 the completion queue through `NO_DATA`, and resubmits the same packet only for a
-`CompletionKind.WRITABLE` record with the same token, context, and routing ID.
+`WRITABLE` record with the same token, context, and routing ID.
 WRITABLE grants permission to retry; it is not successful SEND notification.
 The awaitable completes only when a retry is admitted. A wake FD transfers
 ownership to a public poller and stops lifecycle waits; the worker uses no
@@ -32,7 +32,7 @@ fixed sleep, timer, or zero-time polling.
 terminal uses the same DONTWAIT wait-token machine as SEND: it snapshots the
 request only after `BACKPRESSURED`/`EAGAIN`, retries only for its matching
 WRITABLE token, and starts reply-timeout handling only after admission. It then
-completes from its `CompletionKind.REQUEST` record and preserves `timeout()`.
+completes from its `REQUEST` record and preserves `timeout()`.
 Cancelling an awaitable detaches only the caller wait: the socket-local owner
 continues the required retry or completion cleanup and closes late completion
 payloads.
