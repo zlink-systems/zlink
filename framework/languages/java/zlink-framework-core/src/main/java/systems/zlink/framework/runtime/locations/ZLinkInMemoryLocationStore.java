@@ -318,7 +318,7 @@ public final class ZLinkInMemoryLocationStore
                                 && ownerLeaseWait.shouldWait(waitKey, previousOwner, true))
                             throw new ZLinkFrameworkException(
                                     ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                    "Previous MeshNode owner lease is within its release wait");
+                                    "Fixed RID claim is waiting for the previous owner lease release delay.");
                     }
                     if (intent == ZLinkLocationWriteIntent.TAKEOVER
                             && current != null
