@@ -182,7 +182,7 @@ class ZLinkTelemetryOwnerTest {
     }
 
     @Test
-    void retiringOneHostRemovesOnlyItsPendingWithoutWaitingOrOverflow() throws Exception {
+    void retiringOneHostKeepsAdmittedRecordsAndRejectsLaterRecords() throws Exception {
         try (var provider = new Provider();
                 var hostA = ZLinkTelemetryOwner.openHost();
                 var hostB = ZLinkTelemetryOwner.openHost();
@@ -196,17 +196,19 @@ class ZLinkTelemetryOwnerTest {
             emit(a, 4);
             long overflow = ZLinkTelemetryOwner.state().overflow();
             hostA.close();
-            assertEquals(1, ZLinkTelemetryOwner.state().pending());
+            assertEquals(3, ZLinkTelemetryOwner.state().pending());
             assertTrue(ZLinkTelemetryOwner.state().executing());
             emit(a, 5);
             emit(tracer(hostC, options()), 6);
-            assertEquals(2, ZLinkTelemetryOwner.state().pending());
+            assertEquals(4, ZLinkTelemetryOwner.state().pending());
             assertEquals(overflow, ZLinkTelemetryOwner.state().overflow());
             provider.release.countDown();
             ZLinkTelemetryTestFence.awaitIdle();
-            assertEquals(3, provider.records.size());
-            assertTrue(provider.records.get(1).getMessage().contains("size=3"));
-            assertTrue(provider.records.get(2).getMessage().contains("size=6"));
+            assertEquals(5, provider.records.size());
+            assertTrue(provider.records.get(1).getMessage().contains("size=2"));
+            assertTrue(provider.records.get(2).getMessage().contains("size=3"));
+            assertTrue(provider.records.get(3).getMessage().contains("size=4"));
+            assertTrue(provider.records.get(4).getMessage().contains("size=6"));
         }
     }
 
@@ -243,13 +245,15 @@ class ZLinkTelemetryOwnerTest {
             try {
                 closed.get(5, TimeUnit.SECONDS);
                 assertTrue(ZLinkTelemetryOwner.state().executing());
-                assertEquals(0, ZLinkTelemetryOwner.state().pending());
+                int pendingAtClose = ZLinkTelemetryOwner.state().pending();
+                assertTrue(pendingAtClose > 0);
                 request.run();
-                assertEquals(0, ZLinkTelemetryOwner.state().pending());
+                assertEquals(pendingAtClose, ZLinkTelemetryOwner.state().pending());
             } finally {
                 provider.release.countDown();
                 closed.get(5, TimeUnit.SECONDS);
             }
+            ZLinkTelemetryTestFence.awaitIdle();
         } finally {
             runtime.close();
         }

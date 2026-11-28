@@ -66,8 +66,6 @@ public final class ZLinkTelemetryOwner {
     }
 
     private record Delivery(
-            Host host,
-            boolean stopDeadlineTerminal,
             ZLinkMessageFlowEvent event,
             Long size,
             Level level,
@@ -77,7 +75,6 @@ public final class ZLinkTelemetryOwner {
 
     static void submit(
             Host host,
-            boolean stopDeadlineTerminal,
             ZLinkMessageFlowEvent event,
             Long size,
             Level level,
@@ -92,12 +89,11 @@ public final class ZLinkTelemetryOwner {
                 owner = process;
             }
         }
-        owner.admit(host, stopDeadlineTerminal, event, size, level, observed, logger, failures);
+        owner.admit(host, event, size, level, observed, logger, failures);
     }
 
     private synchronized void admit(
             Host host,
-            boolean stopDeadlineTerminal,
             ZLinkMessageFlowEvent event,
             Long size,
             Level level,
@@ -110,16 +106,7 @@ public final class ZLinkTelemetryOwner {
             return;
         }
         boolean empty = pending.isEmpty();
-        pending.addLast(
-                new Delivery(
-                        host,
-                        stopDeadlineTerminal,
-                        event,
-                        size,
-                        level,
-                        observed,
-                        logger,
-                        failures));
+        pending.addLast(new Delivery(event, size, level, observed, logger, failures));
         if (empty && !executing) {
             wakes++;
             notifyAll();
@@ -127,10 +114,7 @@ public final class ZLinkTelemetryOwner {
     }
 
     private synchronized void retire(Host host) {
-        if (host.retired) return;
         host.retired = true;
-        // Host relocation §14 transfers admitted stop-deadline records to the process worker.
-        pending.removeIf(delivery -> delivery.host() == host && !delivery.stopDeadlineTerminal());
     }
 
     private void run() {

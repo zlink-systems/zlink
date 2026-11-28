@@ -162,7 +162,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             Goal goal,
             ZLinkSpotRetireControl.StageRequest request,
             ZLinkAuthorityUnsettledAtStopException failure) {
-        var trace = spots.dispatchErrors.flow().beginStopDeadlineTerminal();
+        var trace = spots.dispatchErrors.flow().beginDispatchError();
         if (trace == null) return;
         var fence = request.fence();
         trace.trace(
