@@ -2,6 +2,7 @@
 #define PERF_MULTI_CLIENT_HELPERS_HPP
 
 #include "perf_common.hpp"
+#include "perf_multi_measurement.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -34,6 +35,15 @@ class echo_reply_drain_t
         return true;
     }
 
+    template <typename TSubmit>
+    void service_paced_reply (const perf_multi_measurement::schedule_t *schedule,
+                              int receive_result,
+                              TSubmit submit_due)
+    {
+        if (schedule && receive_result >= 0 && _receive_burst.complete ())
+            submit_due ();
+    }
+
     template <typename TDispatch>
     bool drain (zlink::poller_t &poller,
                 size_t source_count,
@@ -60,6 +70,7 @@ class echo_reply_drain_t
 
   private:
     size_t _pending = 0;
+    perf_multi_measurement::message_burst_t _receive_burst;
 };
 
 inline std::string parse_endpoint_arg (int argc, char **argv)
