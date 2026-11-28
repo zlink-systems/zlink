@@ -353,6 +353,9 @@ class request_call_t
         return context;
     }
 
+    // Borrows the reply instead of copying it: every caller builds it from a reply it owns and
+    // consumes it with as<T>() before that reply goes out of scope (a temporary in the sync path,
+    // a local inside the async completion callback). Never store or return it.
     class erased_result_t
     {
       public:
