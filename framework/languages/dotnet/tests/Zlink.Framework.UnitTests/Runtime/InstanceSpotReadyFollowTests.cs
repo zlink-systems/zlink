@@ -3,6 +3,7 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Channels;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -10,6 +11,7 @@ public sealed class InstanceSpotReadyFollowTests
 {
     [Theory]
     [InlineData("follow")]
+    [InlineData("committed-staging")]
     [InlineData("follow-without-intent")]
     [InlineData("direct")]
     [InlineData("no-route")]
@@ -72,14 +74,76 @@ public sealed class InstanceSpotReadyFollowTests
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await previous.WaitForPeerAsync(target, deadline.Token);
         await caller.WaitForPeerAsync(scenario == "direct" ? target : previous, deadline.Token);
-        var relocated = await previousRuntime.Catalog.TryRelocateForRetireAsync(
-            new ZLinkRelocationTargetSelection(
-                ZLinkFrameworkRelocationMode.PlannedMaintenance,
-                target.Runtime.Registration.ApplicationVersion
-            ),
-            ZLinkSpotRelocationPhase.Aggregates,
-            deadline.Token
+        var holdPublication = scenario == "committed-staging";
+        var targetNode = target.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node;
+        var prepared = new TaskCompletionSource<ZLinkInstanceSpotActivation>(
+            TaskCreationOptions.RunContinuationsAsynchronously
         );
+        if (holdPublication)
+        {
+            target.State.OnInstanceConstructed = context =>
+                prepared.TrySetResult(Assert.IsType<ZLinkInstanceSpotActivation>(context));
+            previous.Store.HoldAfterPut = true;
+            previous.Store.HoldAfterAggregateCommitForOwner = targetNode.RoutingId;
+            previous.Store.HoldNextPutFor = spotId;
+        }
+
+        var relocation = previousRuntime
+            .Catalog.TryRelocateForRetireAsync(
+                new ZLinkRelocationTargetSelection(
+                    ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                    target.Runtime.Registration.ApplicationVersion
+                ),
+                ZLinkSpotRelocationPhase.Aggregates,
+                deadline.Token
+            )
+            .AsTask();
+        if (holdPublication)
+        {
+            try
+            {
+                await previous.Store.PutHeld.Task.WaitAsync(deadline.Token);
+                var staged = await prepared.Task.WaitAsync(deadline.Token);
+                Assert.True(staged.PendingApplicationCompletion.IsCompleted);
+                Assert.Equal(1UL, (await relocation.WaitAsync(deadline.Token)).CommittedUnitCount);
+
+                await SubmitReadyAsync(snapshot);
+                await WaitUntilAsync(
+                    () =>
+                        !staged.PendingApplicationCompletion.IsCompleted || FindDrops().Length != 0,
+                    deadline.Token
+                );
+                Assert.Empty(FindDrops());
+                Assert.False(staged.PendingApplicationCompletion.IsCompleted);
+                Assert.DoesNotContain(marker, previous.State.InstanceHandlerMarkers);
+                Assert.DoesNotContain(marker, target.State.InstanceHandlerMarkers);
+
+                var committed = await ReadCommittedRouteAsync();
+                var targetEndpoint = Assert.IsType<string>(
+                    Assert
+                        .IsType<ZLinkBackendSpotNodeWrapper>(targetNode)
+                        .NativeNode.Status()
+                        .LocalEndpoint
+                );
+                await SendFollowAsync(
+                    targetEndpoint,
+                    committed with
+                    {
+                        AuthorityOwnerGeneration = committed.AuthorityOwnerGeneration + 1,
+                    },
+                    hop: 1,
+                    "wrong-fence"
+                );
+                await WaitUntilAsync(() => FindDrops().Length != 0, deadline.Token);
+                Assert.Single(FindDrops());
+                Assert.DoesNotContain(marker, target.State.InstanceHandlerMarkers);
+            }
+            finally
+            {
+                previous.Store.ReleasePut.TrySetResult();
+            }
+        }
+        var relocated = await relocation;
         Assert.True(relocated.Completed, relocated.ToString());
         Assert.Equal(1UL, relocated.CommittedUnitCount);
         if (scenario == "expired")
@@ -94,88 +158,75 @@ public sealed class InstanceSpotReadyFollowTests
 
         if (scenario == "hop-limit")
         {
-            var callerNode = caller.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node;
-            await using var context = Systems.Zlink.Zlink.CreateContext();
-            using var forwarder = context.CreateDealerSocket();
-            using var completion = new TestCompletionPollerDriver(forwarder);
-            await AdmitForwarderAsync(
-                forwarder,
+            await SendFollowAsync(
                 Assert.IsType<string>(previousNode.Status().LocalEndpoint),
-                SpotCloseHost.MeshName,
-                deadline.Token
-            );
-            var follow = CreateFollow(
-                callerNode.RoutingId,
-                callerNode.MeshStatus().LifecycleGeneration,
                 snapshot,
-                8,
-                hasMetadata: false
+                hop: 8,
+                marker
             );
-            using var head = Message.From(
-                ServiceWireCodec.EncodeInstanceSpotFollow55Header(
-                    follow,
-                    ServiceWireCodec.DecodeContext.Empty
-                )
-            );
-            var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
-                ZLinkClientCallCodec.CreateEnvelope(
-                    TimeProvider.System,
-                    ZLinkMessageKind.Command,
-                    SpotCloseHost.MeshName,
-                    nameof(SpotCloseProbeSignal)
-                ),
-                new SpotCloseProbeSignal(marker),
-                caller.Runtime.Registration.Codecs
-            );
-            try
+            await WaitUntilAsync(() => FindDrops().Length != 0, deadline.Token);
+        }
+        else if (!holdPublication)
+        {
+            var route = scenario switch
             {
-                using var payload = Message.From(
-                    ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts)
-                );
-                await forwarder.Send().Messages([head, payload]).Async(deadline.Token).Admitted;
-                await WaitUntilAsync(() => FindDrops().Length != 0, deadline.Token);
-            }
-            finally
-            {
-                ZLinkMessageParts.DisposeAll(parts);
-            }
+                "direct" => await ReadCommittedRouteAsync(),
+                "generation-mismatch" => snapshot with { Generation = snapshot.Generation + 1 },
+                _ => snapshot,
+            };
+            await SubmitReadyAsync(route);
+        }
+
+        using var handlerDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        await WaitUntilAsync(
+            () =>
+                target.State.InstanceHandlerMarkers.Contains(marker)
+                || FindDrops().Length > (holdPublication ? 1 : 0),
+            handlerDeadline.Token
+        );
+        MessageFlowDeliveryTests.WaitForDelivery();
+        if (scenario is "direct" or "follow" or "follow-without-intent" or "committed-staging")
+        {
+            Assert.True(
+                target.State.InstanceHandlerMarkers.Contains(marker),
+                "The relocated Instance Spot did not receive the Ready send."
+            );
+            Assert.Single(target.State.InstanceHandlerMarkers, value => value == marker);
+            Assert.Equal(holdPublication ? 1 : 0, FindDrops().Length);
+            Assert.DoesNotContain("wrong-fence", target.State.InstanceHandlerMarkers);
         }
         else
         {
-            var route = snapshot;
-            if (scenario == "direct")
-            {
-                var committed = Assert
-                    .IsType<ZLinkAuthorityReadResult.Found>(
-                        await target
-                            .Runtime.Registration.Locations.ResolveStore()!
-                            .ReadAuthorityAsync(
-                                ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId)
-                            )
-                    )
-                    .Snapshot;
-                var targetNode = target.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node;
-                Assert.Equal(targetNode.RoutingId, committed.Allocation.Descriptor.Rid);
-                Assert.NotEqual(
-                    snapshot.AuthorityOwnerGeneration,
-                    committed.AuthorityOwnerGeneration
-                );
-                Assert.Equal(snapshot.Generation, committed.ObjectGeneration);
-                route = snapshot with
-                {
-                    NodeRid = committed.Allocation.Descriptor.Rid,
-                    NodeGeneration = committed.Allocation.DescriptorLifecycleGeneration,
-                    AuthorityOwnerGeneration = committed.AuthorityOwnerGeneration,
-                    OwnerLeaseGeneration = checked((ulong)committed.OwnerLeaseGeneration),
-                    OwnerId = committed.OwnerId,
-                    StoreVersion = committed.StoreVersion,
-                };
-            }
-            else if (scenario == "generation-mismatch")
-            {
-                route = snapshot with { Generation = snapshot.Generation + 1 };
-            }
+            Assert.Single(FindDrops());
+            Assert.DoesNotContain(marker, target.State.InstanceHandlerMarkers);
+        }
+        Assert.DoesNotContain(marker, previous.State.InstanceHandlerMarkers);
 
+        async Task<ZLinkSpotHandleSnapshot> ReadCommittedRouteAsync()
+        {
+            var committed = Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(
+                    await target
+                        .Runtime.Registration.Locations.ResolveStore()!
+                        .ReadAuthorityAsync(ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId))
+                )
+                .Snapshot;
+            Assert.Equal(targetNode.RoutingId, committed.Allocation.Descriptor.Rid);
+            Assert.NotEqual(snapshot.AuthorityOwnerGeneration, committed.AuthorityOwnerGeneration);
+            Assert.Equal(snapshot.Generation, committed.ObjectGeneration);
+            return snapshot with
+            {
+                NodeRid = committed.Allocation.Descriptor.Rid,
+                NodeGeneration = committed.Allocation.DescriptorLifecycleGeneration,
+                AuthorityOwnerGeneration = committed.AuthorityOwnerGeneration,
+                OwnerLeaseGeneration = checked((ulong)committed.OwnerLeaseGeneration),
+                OwnerId = committed.OwnerId,
+                StoreVersion = committed.StoreVersion,
+            };
+        }
+
+        async Task SubmitReadyAsync(ZLinkSpotHandleSnapshot route)
+        {
             var handle = new ZLinkResolvedSpotHandle(
                 route,
                 1,
@@ -192,27 +243,53 @@ public sealed class InstanceSpotReadyFollowTests
             ).Async();
         }
 
-        using var handlerDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-        await WaitUntilAsync(
-            () => target.State.InstanceHandlerMarkers.Contains(marker) || FindDrops().Length != 0,
-            handlerDeadline.Token
-        );
-        MessageFlowDeliveryTests.WaitForDelivery();
-        if (scenario is "direct" or "follow" or "follow-without-intent")
+        async Task SendFollowAsync(
+            string endpoint,
+            ZLinkSpotHandleSnapshot route,
+            byte hop,
+            string payloadMarker
+        )
         {
-            Assert.True(
-                target.State.InstanceHandlerMarkers.Contains(marker),
-                "The relocated Instance Spot did not receive the Ready send."
+            var callerNode = caller.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node;
+            await using var context = Systems.Zlink.Zlink.CreateContext();
+            using var forwarder = context.CreateDealerSocket();
+            using var completion = new TestCompletionPollerDriver(forwarder);
+            await AdmitForwarderAsync(forwarder, endpoint, SpotCloseHost.MeshName, deadline.Token);
+            var follow = CreateFollow(
+                callerNode.RoutingId,
+                callerNode.MeshStatus().LifecycleGeneration,
+                route,
+                hop,
+                hasMetadata: false
             );
-            Assert.Single(target.State.InstanceHandlerMarkers, value => value == marker);
-            Assert.Empty(FindDrops());
+            using var head = Message.From(
+                ServiceWireCodec.EncodeInstanceSpotFollow55Header(
+                    follow,
+                    ServiceWireCodec.DecodeContext.Empty
+                )
+            );
+            var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
+                ZLinkClientCallCodec.CreateEnvelope(
+                    TimeProvider.System,
+                    ZLinkMessageKind.Command,
+                    SpotCloseHost.MeshName,
+                    nameof(SpotCloseProbeSignal)
+                ),
+                new SpotCloseProbeSignal(payloadMarker),
+                caller.Runtime.Registration.Codecs
+            );
+            try
+            {
+                using var payload = Message.From(
+                    ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts)
+                );
+                await forwarder.Send().Messages([head, payload]).Async(deadline.Token).Admitted;
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+            }
         }
-        else
-        {
-            Assert.Single(FindDrops());
-            Assert.DoesNotContain(marker, target.State.InstanceHandlerMarkers);
-        }
-        Assert.DoesNotContain(marker, previous.State.InstanceHandlerMarkers);
 
         string[] FindDrops() =>
             listener
