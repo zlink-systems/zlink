@@ -2,6 +2,8 @@ package systems.zlink.framework.runtime.internal.service;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
+
 import jdk.jfr.Recording;
 import jdk.jfr.consumer.RecordingFile;
 
@@ -164,7 +166,7 @@ public final class ZLinkOneWayEnvelopeCleanupTest {
                                     .getCause());
                 }
             }
-            assertThrows(IllegalStateException.class, body::refCount);
+            assertConsumed(body);
         }
     }
 }

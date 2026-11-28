@@ -338,6 +338,7 @@
         <Compile Include="Runtime/StreamFrameWriteTests.cs"/>
         <Compile Include="Runtime/SessionJobQueueLoadTests.cs"/>
         <Compile Include="Runtime/StreamControlProgressTests.cs"/>
+        <Compile Include="Runtime/StreamDiagnosticDeliveryTests.cs"/>
         <Compile Include="../Common/StreamConnectionHarness.cs" Link="Common/StreamConnectionHarness.cs"/>
         <Compile Include="Runtime/TimerLifecycleTests.cs"/>
         <Compile Include="Runtime/ActivationReadyTests.cs"/>

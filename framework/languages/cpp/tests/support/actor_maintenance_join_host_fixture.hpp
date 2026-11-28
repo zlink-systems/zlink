@@ -22,6 +22,7 @@ struct host_t
 {
     fw::app_t app = fw::app_t::create ();
     std::thread thread;
+    int exit_code = -1;
     ~host_t ();
     void start ();
 };

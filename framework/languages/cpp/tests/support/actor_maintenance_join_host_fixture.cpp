@@ -88,7 +88,7 @@ void host_t::start ()
     thread = std::thread ([this] {
         char name[] = "maintenance-join";
         char *argv[]{name, nullptr};
-        app.run (1, argv);
+        exit_code = app.run (1, argv);
     });
 }
 

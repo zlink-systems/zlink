@@ -532,6 +532,13 @@ struct aggregate_participant_t
       authority_generation_transition_t::new_owner;
     std::vector<std::byte> authority_payload;
     std::vector<std::byte> membership_mutation;
+    // The coordinator's phase writes advance the authority version after sealing the inventory.
+    std::optional<std::string> prepared_store_version{};
+
+    const std::string &qualification_store_version () const
+    {
+        return prepared_store_version ? *prepared_store_version : expected_store_version;
+    }
 };
 struct aggregate_prepare_request_t
 {

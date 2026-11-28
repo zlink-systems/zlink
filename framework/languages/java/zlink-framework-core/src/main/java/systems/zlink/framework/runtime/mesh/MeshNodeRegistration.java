@@ -274,6 +274,18 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         return objectRoles.server;
     }
 
+    /**
+     * Registers a Framework-internal Instance Spot type on an Object server node; the Spot is not
+     * relocated. Registering the same type twice keeps the first registration.
+     */
+    public void registerInternalInstanceSpot(
+            String stableType, Class<? extends ZLinkInstanceSpot> spotType) {
+        if (objectRoles.server && !relocatableInstanceSpotFactories.containsKey(stableType)) {
+            objectRoles.addInstanceSpotFactory(
+                    stableType, spotType, factory -> factory.disableRelocation());
+        }
+    }
+
     public boolean requiresRelocationStore() {
         return !relocatableInstanceSpotFactories.isEmpty() || hasRelocatableFactories();
     }
