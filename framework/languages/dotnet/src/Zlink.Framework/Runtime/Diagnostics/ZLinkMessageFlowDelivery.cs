@@ -78,22 +78,8 @@ internal sealed class ZLinkMessageFlowDelivery
     internal long FailureCount(ZLinkTelemetryProviderRole role) =>
         Volatile.Read(ref _failures[(int)role]);
 
-    internal void Submit(
-        ZLinkTelemetryLease lease,
-        ILogger logger,
-        ZLinkMessageFlowEvent? flow,
-        ZLinkDispatchErrorSnapshot? error
-    )
+    internal void Submit(ZLinkTelemetryRecord record)
     {
-        var source = ZLinkTelemetry.ActivitySource;
-        var record = new ZLinkTelemetryRecord(
-            lease,
-            logger,
-            source.HasListeners() ? source : null,
-            Activity.Current?.Context ?? default,
-            flow,
-            error
-        );
         lock (_gate)
         {
             if (record.Lease.Retired)
@@ -165,54 +151,69 @@ internal sealed class ZLinkMessageFlowDelivery
     {
         try
         {
-            var level = record.Error is { } error
-                ? error.Reason == ZLinkDispatchErrorReason.HandlerException
-                    ? LogLevel.Error
-                    : LogLevel.Warning
-                : ZLinkTraceFormat.ResolveLogLevel(record.Flow!);
-            if (record.Logger.IsEnabled(level))
+            if (record is ZLinkDiagnosticLogRecord diagnostic)
             {
-                var fields = record.Error is { } failure
-                    ? ZLinkTraceFormat.StructuredFields(
-                        failure,
-                        failure.Details,
-                        failure.FlowId,
-                        failure.FlowOrigin
-                    )
-                    : ZLinkTraceFormat.StructuredFields(record.Flow!, record.Flow!.MessageSize);
-                record.Logger.Log(
-                    level,
-                    default,
-                    new ZLinkStructuredLogState(fields),
-                    null,
-                    static (state, _) => state.ToString()
-                );
+                if (diagnostic.Logger.IsEnabled(diagnostic.Level))
+                    diagnostic.Logger.Log(
+                        diagnostic.Level,
+                        diagnostic.Failure,
+                        diagnostic.Message,
+                        diagnostic.Arguments
+                    );
             }
+            else if (record is ZLinkMessageFlowRecord messageFlow)
+                WriteFlowLog(messageFlow);
         }
         catch (Exception error)
         {
             Failed(ZLinkTelemetryProviderRole.Logger, error);
         }
-        if (record.Source is null)
+        if (record is not ZLinkMessageFlowRecord { Source: not null } flow)
             return;
         try
         {
-            if (record.Error is { } failure)
+            if (flow.Error is { } failure)
                 ZLinkTelemetry.TraceDispatchError(
                     failure,
                     failure.Details,
                     failure.FlowId,
                     failure.FlowOrigin,
-                    record.Source,
-                    record.Parent
+                    flow.Source,
+                    flow.Parent
                 );
             else
-                ZLinkTelemetry.TraceMessageFlow(record.Flow!, record.Source, record.Parent);
+                ZLinkTelemetry.TraceMessageFlow(flow.Flow!, flow.Source, flow.Parent);
         }
         catch (Exception error)
         {
             Failed(ZLinkTelemetryProviderRole.Trace, error);
         }
+    }
+
+    private static void WriteFlowLog(ZLinkMessageFlowRecord record)
+    {
+        var level = record.Error is { } error
+            ? error.Reason == ZLinkDispatchErrorReason.HandlerException
+                ? LogLevel.Error
+                : LogLevel.Warning
+            : ZLinkTraceFormat.ResolveLogLevel(record.Flow!);
+        if (!record.Logger.IsEnabled(level))
+            return;
+        var fields = record.Error is { } failure
+            ? ZLinkTraceFormat.StructuredFields(
+                failure,
+                failure.Details,
+                failure.FlowId,
+                failure.FlowOrigin
+            )
+            : ZLinkTraceFormat.StructuredFields(record.Flow!, record.Flow!.MessageSize);
+        record.Logger.Log(
+            level,
+            default,
+            new ZLinkStructuredLogState(fields),
+            null,
+            static (state, _) => state.ToString()
+        );
     }
 
     private void Failed(ZLinkTelemetryProviderRole role, Exception error)
@@ -245,11 +246,22 @@ internal enum ZLinkTelemetryProviderRole
     Fallback,
 }
 
-internal sealed record ZLinkTelemetryRecord(
+internal abstract record ZLinkTelemetryRecord(ZLinkTelemetryLease Lease, ILogger Logger);
+
+internal sealed record ZLinkMessageFlowRecord(
     ZLinkTelemetryLease Lease,
     ILogger Logger,
     ActivitySource? Source,
     ActivityContext Parent,
-    ZLinkMessageFlowEvent? Flow = null,
-    ZLinkDispatchErrorSnapshot? Error = null
-);
+    ZLinkMessageFlowEvent? Flow,
+    ZLinkDispatchErrorSnapshot? Error
+) : ZLinkTelemetryRecord(Lease, Logger);
+
+internal sealed record ZLinkDiagnosticLogRecord(
+    ZLinkTelemetryLease Lease,
+    ILogger Logger,
+    LogLevel Level,
+    Exception? Failure,
+    string Message,
+    object?[] Arguments
+) : ZLinkTelemetryRecord(Lease, Logger);
