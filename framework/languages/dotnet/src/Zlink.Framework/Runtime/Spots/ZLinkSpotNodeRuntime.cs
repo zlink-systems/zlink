@@ -209,12 +209,17 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             )
         )
         {
+            var autoConnect = services.GetService<ZLinkLocationAutoConnectHost>();
             _canonicalRelocationTargetOwner = new ZLinkCanonicalRelocationTargetOwner(
                 node.RoutingId,
                 canonicalStartup.Descriptor.LifecycleGeneration,
                 runtime.DrainAdmission,
                 targetRuntime: services.GetRequiredService<ZLinkSpotRetireTargetRuntime>(),
                 standaloneActorRuntime: runtime.StandaloneActorRelocationRuntime,
+                targetOwnerAdmissionOpen: () =>
+                    autoConnect?.LocalSpotDescriptorState(spotChannelName)
+                        == ZLinkFrameworkRuntimeState.Serving
+                    && _locationLifecycle?.IsOwnerAdmissionOpen == true,
                 awaitTargetReady: async (envelope, cancellationToken) =>
                 {
                     foreach (

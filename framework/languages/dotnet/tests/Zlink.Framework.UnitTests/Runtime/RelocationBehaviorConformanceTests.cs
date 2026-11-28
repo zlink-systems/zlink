@@ -1244,6 +1244,8 @@ public sealed partial class RelocationBehaviorConformanceTests
         );
         Assert.Equal(ZLinkFrameworkRelocationOutcome.Relocated, relocated.Outcome);
 
+        await locationStore.AssertNoAggregateInventoryAsync();
+
         var shutdown = await lifecycle
             .ShutdownAsync(TimeSpan.FromSeconds(30))
             .AsTask()
@@ -1418,8 +1420,12 @@ public sealed partial class RelocationBehaviorConformanceTests
         }
     }
 
-    [Fact]
-    public async Task ActorJoin_cancelled_target_drain_rejects_new_prepare_and_preserves_active_slot()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActorJoin_preserves_one_active_stage_during_replacement_or_cancelled_drain(
+        bool replacePrepared
+    )
     {
         var trace = new RelocationBehaviorTrace();
         var transport = new CanonicalRelocationTransportProbe(trace, holdTargetReady: true);
@@ -1481,13 +1487,20 @@ public sealed partial class RelocationBehaviorConformanceTests
         trace.TargetNodeRid = target.LocalNodeRid;
         Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
 
-        var join = source
-            .Services.GetRequiredService<IZLinkActorClient>()
+        var client = source.Services.GetRequiredService<IZLinkActorClient>();
+        var join = client
             .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
             .AsTask();
         await trace.WaitAsync("relocationRequested");
+        var saved = replacePrepared
+            ? client
+                .RequestToActor(actorId, new BehaviorWork("saved"))
+                .Timeout(TimeSpan.FromSeconds(15))
+                .Async<BehaviorAck>()
+                .AsTask()
+            : null;
         trace.ReleaseJoinHandler.TrySetResult();
         _ = await join.WaitAsync(TimeSpan.FromSeconds(15));
         await trace.WaitAsync("targetAdmissionReplied");
@@ -1503,15 +1516,62 @@ public sealed partial class RelocationBehaviorConformanceTests
             var before = GetTargetAttemptState(target.Runtime);
             Assert.Equal(1, before.Count);
             Assert.Equal(1, before.Staged);
-            var rejectedDistinctAttempt = await Assert.ThrowsAsync<InvalidOperationException>(
+            if (replacePrepared)
+            {
+                var ready = await transport.PrepareNextTargetAttemptAsync(CancellationToken.None);
+                Assert.Equal(2UL, ready.TargetAttemptGeneration);
+                var authority = Assert
+                    .IsType<ZLinkAuthorityReadResult.Found>(
+                        await target
+                            .Runtime.Registration.Locations.ResolveStore()!
+                            .ReadAuthorityAsync(
+                                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId)
+                            )
+                    )
+                    .Snapshot;
+                Assert.Equal(2UL, authority.Relocation!.Target!.AttemptGeneration);
+                Assert.Equal(trace.SourceNodeRid, authority.Allocation.Descriptor.Rid);
+                Assert.Equal(1, GetTargetAttemptState(target.Runtime).Staged);
+                Assert.Equal(2, trace.Events.Count(value => value == "targetStateRestored"));
+                Assert.False(saved!.IsCompleted);
+                await transport.AbortRetriedTargetPrepareAsync();
+                Assert.Equal(1, GetTargetAttemptState(target.Runtime).Staged);
+
+                trace.ReleaseTargetLifecycle.TrySetResult();
+                trace.ReleaseSourceLeave.TrySetResult();
+                await transport.DeliverCapturedCutoverAsync(attemptIncrement: 1);
+                await trace.WaitAsync("targetLifecycleStarted");
+
+                var committed = Assert
+                    .IsType<ZLinkAuthorityReadResult.Found>(
+                        await target
+                            .Runtime.Registration.Locations.ResolveStore()!
+                            .ReadAuthorityAsync(
+                                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId)
+                            )
+                    )
+                    .Snapshot;
+                Assert.Equal(target.LocalNodeRid, committed.Allocation.Descriptor.Rid);
+                await trace.WaitAsync("publicJoinCompleted");
+                Assert.Equal("saved", (await saved.WaitAsync(TimeSpan.FromSeconds(5))).Marker);
+                var handled = await target
+                    .Services.GetRequiredService<IZLinkActorClient>()
+                    .RequestToActor(actorId, new BehaviorWork("direct"))
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Async<BehaviorAck>();
+                Assert.Equal("direct", handled.Marker);
+                Assert.Equal(new[] { "saved", "direct" }, trace.DeliveredMarkers);
+                return;
+            }
+
+            var rejectedDistinctAttempt = await Assert.ThrowsAsync<ZLinkFrameworkException>(
                 async () =>
-                    await transport.PrepareNextTargetAttemptAsync(CancellationToken.None)
+                    await transport.PrepareNextTargetAttemptAsync(
+                        CancellationToken.None,
+                        attemptIncrement: 2
+                    )
             );
-            Assert.Contains(
-                "already has an active local instance",
-                rejectedDistinctAttempt.Message,
-                StringComparison.Ordinal
-            );
+            Assert.Equal(ZLinkFrameworkErrorKind.AlreadyExists, rejectedDistinctAttempt.Kind);
             Assert.Equal(before.Count, GetTargetAttemptState(target.Runtime).Count);
             transport.ReleaseCutoverSend.TrySetResult();
             await transport.CutoverSendSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
@@ -3574,6 +3634,18 @@ internal sealed class RecordingLocationStore(
 {
     private readonly ZLinkProviderLocationRepository _reader = new(inner);
 
+    private const string InventoryPrefix = "zlink:v11:aggregate-inventory:";
+    private readonly ConcurrentQueue<ZLinkStoreKey> _inventoryWrites = new();
+
+    internal async Task AssertNoAggregateInventoryAsync()
+    {
+        var inventory = Assert.IsType<ZLinkStoreScanResult.Page>(
+            await ScanAsync(new ZLinkStoreScanRequest(InventoryPrefix, null, 1))
+        );
+        Assert.Empty(inventory.Value.Items);
+        Assert.Empty(_inventoryWrites);
+    }
+
     internal Guid? HeldSourceAbort { get; set; }
     internal TaskCompletionSource SourceAbortWriteStarted { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -3671,6 +3743,14 @@ internal sealed class RecordingLocationStore(
             }
         }
         var result = await inner.WriteAsync(request, cancellationToken);
+        if (result is ZLinkStoreWriteResult.Applied)
+        {
+            foreach (var put in request.Mutations.OfType<ZLinkStoreMutation.Put>())
+            {
+                if (put.Key.Value.StartsWith(InventoryPrefix, StringComparison.Ordinal))
+                    _inventoryWrites.Enqueue(put.Key);
+            }
+        }
         if (result is ZLinkStoreWriteResult.Applied && trace.ActorId is { } actorId)
         {
             var read = await _reader.ReadAuthorityAsync(
@@ -4511,7 +4591,8 @@ internal sealed class CanonicalRelocationTransportProbe
         );
 
     internal ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareNextTargetAttemptAsync(
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ulong attemptIncrement = 1
     ) =>
         (
             _target
@@ -4522,7 +4603,9 @@ internal sealed class CanonicalRelocationTransportProbe
                 ?? throw new InvalidOperationException("No canonical prepare was captured.")
             ) with
             {
-                TargetAttemptGeneration = checked(_prepare.TargetAttemptGeneration + 1),
+                TargetAttemptGeneration = checked(
+                    _prepare.TargetAttemptGeneration + attemptIncrement
+                ),
             },
             ZLinkRelocationTransferPayload.DecodeEnvelope(
                 (
@@ -4537,12 +4620,20 @@ internal sealed class CanonicalRelocationTransportProbe
             cancellationToken
         );
 
-    internal ValueTask AbortRetriedTargetPrepareAsync() =>
+    internal ValueTask AbortRetriedTargetPrepareAsync(ulong attemptIncrement = 0) =>
         (
             _target
             ?? throw new InvalidOperationException("No canonical relocation target was captured.")
         ).AbortPreparedAsync(
-            _prepare ?? throw new InvalidOperationException("No canonical prepare was captured."),
+            (
+                _prepare
+                ?? throw new InvalidOperationException("No canonical prepare was captured.")
+            ) with
+            {
+                TargetAttemptGeneration = checked(
+                    _prepare.TargetAttemptGeneration + attemptIncrement
+                ),
+            },
             _prepareSourceNodeRid
         );
 
@@ -4669,12 +4760,22 @@ internal sealed class CanonicalRelocationTransportProbe
             cancellationToken
         ) ?? throw new InvalidOperationException("No canonical cutover transport was captured.");
 
-    internal ValueTask DeliverCapturedCutoverAsync() =>
-        (_target ?? throw new InvalidOperationException("No target was captured.")).CutoverAsync(
-            _cutover ?? throw new InvalidOperationException("No cutover was captured."),
-            _cutover.Coordinator.NodeRid,
+    internal ValueTask DeliverCapturedCutoverAsync(ulong attemptIncrement = 0)
+    {
+        var cutover = _cutover ?? throw new InvalidOperationException("No cutover was captured.");
+        return (
+            _target ?? throw new InvalidOperationException("No target was captured.")
+        ).CutoverAsync(
+            cutover with
+            {
+                TargetAttemptGeneration = checked(
+                    cutover.TargetAttemptGeneration + attemptIncrement
+                ),
+            },
+            cutover.Coordinator.NodeRid,
             CancellationToken.None
         );
+    }
 
     internal void RecordSourceLeaveSubmission()
     {

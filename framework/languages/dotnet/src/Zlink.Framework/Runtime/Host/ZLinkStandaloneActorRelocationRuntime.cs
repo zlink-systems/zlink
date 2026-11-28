@@ -2059,6 +2059,22 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             prepare.Coordinator.ExpectedAuthorityStoreVersion
         );
 
+        if (
+            current.Snapshot.Relocation?.Target is { } previous
+            && previous.AttemptGeneration != prepare.TargetAttemptGeneration
+        )
+        {
+            await DiscardSupersededTargetAsync(
+                    new(
+                        prepare.RelocationId.High,
+                        prepare.RelocationId.Low,
+                        previous.AttemptGeneration
+                    ),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        }
+
         var node = runtime.GetSpotNodeRuntime(prepare.Target.NodeRid);
         var targetActivation = remoteJoinRecovery is null
             ? ResolveTargetMembership(node, targetAuthority)
@@ -2156,6 +2172,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         remoteJoinRecovery!.TargetSpotId,
                         actorState,
                         remoteJoinRequest,
+                        current.Snapshot.Relocation?.Phase
+                            == ServiceWireCodec.RelocationPhase.Prepared,
                         cancellationToken
                     )
                     .ConfigureAwait(false);
@@ -2659,6 +2677,37 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         return steady == targetAuthority;
     }
 
+    private async ValueTask DiscardSupersededTargetAsync(
+        AttemptKey key,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!TryAcquireTargetAttempt(key, out var lease))
+            return;
+        using var attemptLease = lease;
+        var terminal = await lease
+            .Slot.RunAsync(() =>
+            {
+                if (lease.Slot.Abort is { } abort)
+                    return abort.Terminal;
+                if (lease.Slot.Stage is not { } stage)
+                    return null;
+                if (
+                    stage.AuthorityPublished
+                    || stage.TryBeginSettledCleanup(() => lease.Slot.TryRemoveStage(stage))
+                        is not { } previousPhase
+                )
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.AlreadyExists,
+                        "The previous Actor target attempt has already submitted cutover."
+                    );
+                return RegisterTargetAbortLocked(key, lease.Slot, stage, previousPhase).Terminal;
+            })
+            .ConfigureAwait(false);
+        if (terminal is not null)
+            await terminal.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     internal async ValueTask AbortTargetAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
         RoutingId authenticatedSourceNodeRid
@@ -2843,8 +2892,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 && stage.RemoteJoinRecovery is { } remoteJoinRecovery
             )
             {
-                if (!stage.CreatedTransferredActor)
-                    DetachTargetMembership(stage);
                 await runtime
                     .RollbackCanonicalRoutedActorJoinPreparationAsync(
                         remoteJoinRecovery.TargetSpotId,

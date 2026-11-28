@@ -2258,15 +2258,8 @@ internal sealed class ZLinkSpotNodeCatalog(
             return new CloseAuthority(CloseAuthorityState.Kept);
         var snapshot = found.Snapshot;
         ThrowIfOtherIncarnation(spotId, activation.ObjectGeneration, snapshot.ObjectGeneration);
-        if (
-            snapshot.Relocation is { Target: { } target } publication
-            && ZLinkAuthorityRelocation.MatchesCommittedTarget(
-                snapshot,
-                publication.RelocationId,
-                target.AttemptGeneration
-            )
-        )
-            throw CloseMoving($"User Spot '{spotId}' authority is still settling relocation.");
+        if (snapshot.Relocation is { Phase: not ServiceWireCodec.RelocationPhase.Aborted })
+            throw CloseMoving($"Spot '{spotId}' authority is still relocating.");
 
         var userDecoded = ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
             snapshot.Payload.Span,
@@ -2274,16 +2267,10 @@ internal sealed class ZLinkSpotNodeCatalog(
         );
         if (
             activation.PlacementKind == ZLinkPlacementObjectKind.UserSpot
-            && (
-                snapshot.Relocation is { Phase: not ServiceWireCodec.RelocationPhase.Aborted }
-                || snapshot.Relocation is null
-                    && !userDecoded
-                    && ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                        snapshot,
-                        out var canonical
-                    )
-                    && canonical.Phase < (byte)ServiceWireCodec.RelocationPhase.Aborted
-            )
+            && snapshot.Relocation is null
+            && !userDecoded
+            && ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(snapshot, out var canonical)
+            && canonical.Phase < (byte)ServiceWireCodec.RelocationPhase.Aborted
         )
             throw CloseMoving($"User Spot '{spotId}' authority is moving.");
         var instanceDecoded = ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(

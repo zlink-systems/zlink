@@ -644,6 +644,18 @@ internal sealed class ZLinkLocationAutoConnectHost
         _localLoops[(type, meshName, role)] = loop;
     }
 
+    internal ZLinkFrameworkRuntimeState? LocalSpotDescriptorState(string meshName)
+    {
+        var key = (
+            ZLinkLocationAutoConnectType.SpotMesh,
+            ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
+            ZLinkLocationRole.Spot
+        );
+        return _localReconcilers.TryGetValue(key, out var reconciler)
+            ? reconciler.LocalDescriptorState
+            : null;
+    }
+
     internal ValueTask ReconcilePeerAsync(
         string meshName,
         RoutingId peer,

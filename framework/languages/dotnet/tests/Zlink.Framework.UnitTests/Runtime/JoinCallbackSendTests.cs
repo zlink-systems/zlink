@@ -366,6 +366,7 @@ public sealed class JoinCallbackSendTests
         Assert.True(ownershipUpdate.Task.IsCompleted);
         Assert.Null(await ownershipUpdate.Task);
         Assert.Null(await completionObserved.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        await locationStore.AssertNoAggregateInventoryAsync();
     }
 
     [Fact]
