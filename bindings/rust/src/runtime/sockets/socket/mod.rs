@@ -37,6 +37,7 @@ use crate::runtime::errors::native_errors::{
 use crate::runtime::handles::ctx::{context_handle, duration_to_millis};
 use crate::runtime::native::ffi;
 
+mod connection_attempts;
 mod socket_inner_runtime;
 mod socket_parts_runtime;
 pub(crate) use socket_parts_runtime::*;

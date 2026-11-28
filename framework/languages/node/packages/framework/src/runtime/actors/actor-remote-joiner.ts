@@ -31,6 +31,7 @@ export interface ZLinkActorNativeJoinCoordinatorOptions extends Pick<
     force?: boolean
   ) => Promise<void>;
   readonly postCommitErrorReporter?: (error: unknown) => void;
+  readonly onAcceptedJoinCompletionFailure?: (actor: ZLinkActor, error: unknown) => void;
   readonly sourceTransfer?: ZLinkActorSourceTransfer;
   readonly actorJoinRelocation?: ZLinkActorJoinRelocation;
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
@@ -42,12 +43,14 @@ export interface ZLinkActorNativeJoinCoordinatorOptions extends Pick<
 /** Selects local native join or remote two-phase transfer for each destination. */
 export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinator {
   private readonly localJoin: ZLinkLocalNativeActorJoin;
+  readonly onAcceptedJoinCompletionFailure: ZLinkActorJoinCoordinator['onAcceptedJoinCompletionFailure'];
 
   messageFlow(): import('../diagnostics/message-flow').ZLinkMessageFlowTracer | undefined {
     return this.options.messageFlow?.();
   }
 
   constructor(private readonly options: ZLinkActorNativeJoinCoordinatorOptions) {
+    this.onAcceptedJoinCompletionFailure = options.onAcceptedJoinCompletionFailure;
     this.localJoin = new ZLinkLocalNativeActorJoin({
       locationLifecycle: options.locationLifecycle,
       invalidateSpotRouteIfMatches: (used) =>

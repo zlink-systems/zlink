@@ -152,12 +152,13 @@ import {
   ReadyOwnerKind,
   type ReceiveRecord
 } from '../foundation/service-runtime-contracts';
-import type {
-  ServiceRelocationRequest,
-  ServiceRelocationRequestAdmission,
-  ServiceSpotMessageFollowSeal,
-  ServiceSpotTargetAdmission,
-  ServiceStatefulMailboxData
+import {
+  instanceRouteFromAuthority,
+  type ServiceRelocationRequest,
+  type ServiceRelocationRequestAdmission,
+  type ServiceSpotMessageFollowSeal,
+  type ServiceSpotTargetAdmission,
+  type ServiceStatefulMailboxData
 } from '../foundation/service-stateful-runtime';
 import {
   M6bServiceWireCommand,
@@ -5184,7 +5185,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const key =
       request.kind === 'actor'
         ? encodeAuthorityKey('actor', request.target.actor.actorId)
-        : encodeAuthorityKey('user_spot', request.target.spot.spotId);
+        : encodeAuthorityKey(
+            request.kind === 'instanceSpot' ? 'instance_spot' : 'user_spot',
+            request.target.spot.spotId
+          );
     const generation =
       request.kind === 'actor' ? request.target.actor.generation : request.target.spot.generation;
     const nodeRid =
@@ -5253,9 +5257,36 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             this.options.actorTransfer.captureTargetRequest(meshName, confirm, ...args)
         };
       }
-      if (hidden.activation !== undefined) {
-        return { kind: 'spot', activation: hidden.activation, confirm };
-      }
+      const activation = hidden.activation;
+      if (activation === undefined) continue;
+      if (request.kind === 'spot') return { kind: 'spot', activation, confirm };
+
+      const targetSpotId = request.target.spot.spotId;
+      const { expected } = participant;
+      const plan = reservation.prepared.plan;
+      return {
+        kind: 'instanceSpot',
+        activation,
+        confirm,
+        route: instanceRouteFromAuthority(targetSpotId, {
+          allocation: {
+            ...expected.allocation,
+            descriptor: plan.targetDescriptor,
+            descriptorLifecycleGeneration: plan.targetDescriptorLifecycleGeneration
+          },
+          objectGeneration: expected.objectGeneration,
+          authorityOwnerGeneration: fence.authorityOwnerGeneration,
+          ownerId: plan.targetOwner.ownerId,
+          ownerLeaseGeneration: plan.targetOwner.leaseGeneration,
+          // This route stays in the queued record. Publication supplies the committed StoreVersion.
+          storeVersion: expected.storeVersion
+        }),
+        target: {
+          targetSpotId,
+          stableType: expected.allocation.stableType,
+          objectGeneration: expected.objectGeneration
+        }
+      };
     }
     return undefined;
   }
@@ -5869,16 +5900,10 @@ function publishRelocatedSpotRoutes(
   };
   node?.rememberSpotRoute?.(route);
   if (authority.allocation.objectKind === 'instance_spot') {
-    node?.registerInstanceIntent?.(authority.allocation.stableType, {
-      targetSpotId: spotId,
-      objectGeneration: authority.objectGeneration,
-      targetNodeRid: route.targetNodeRid,
-      targetNodeGeneration: route.targetNodeGeneration,
-      ownerId: authority.ownerId,
-      authorityOwnerGeneration: route.authorityOwnerGeneration,
-      leaseGeneration: route.ownerLeaseGeneration,
-      storeVersion: route.storeVersion
-    });
+    node?.registerInstanceIntent?.(
+      authority.allocation.stableType,
+      instanceRouteFromAuthority(spotId, authority)
+    );
   }
 }
 
@@ -6293,13 +6318,17 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     hidden.replayCompletion = Promise.all(
       hidden.replayPackets.map(async (record, index) => {
         let terminal: Promise<void> | undefined;
-        const replay = decodeRelocatedInstanceSpotRecord(record, (...result) => {
-          if (terminal !== undefined || hidden.onReplayResult === undefined) return false;
-          terminal = hidden.onReplayResult(record, BigInt(index + 1), result);
-          void terminal.catch(() => undefined);
-          return true;
-        });
-        await manager.dispatchMeshInstance(this.meshName, owner, replay, undefined, admission);
+        const replay = decodeRelocatedInstanceSpotRecord(
+          record,
+          (...result) => {
+            if (terminal !== undefined || hidden.onReplayResult === undefined) return false;
+            terminal = hidden.onReplayResult(record, BigInt(index + 1), result);
+            void terminal.catch(() => undefined);
+            return true;
+          },
+          admission
+        );
+        await manager.dispatchMeshInstance(this.meshName, owner, replay);
         await terminal;
       })
     ).then(() => undefined);

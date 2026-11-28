@@ -20,10 +20,10 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
     private readonly Func<ZLinkRelocationEnvelope, CancellationToken, ValueTask> _awaitTargetReady =
         awaitTargetReady ?? (static (_, _) => ValueTask.CompletedTask);
 
-    public Func<Task<bool>>? ConfirmSpotRequest(
-        SpotRelocationRequest request,
+    public Func<Task<bool>>? ConfirmSpotIngress(
+        SpotRelocationIngress request,
         CancellationToken cancellationToken
-    ) => targetRuntime?.ConfirmSpotRequest(localNodeRid, request, cancellationToken);
+    ) => targetRuntime?.ConfirmSpotIngress(localNodeRid, request, cancellationToken);
 
     public async ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,

@@ -564,6 +564,7 @@ class mesh_node_runtime_t
                                            std::optional<observed_spot_authority_t> observed);
     task_t<actor_join_reply_t>
     admit_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
+    task_t<void> await_actor_join_capture (const remote_actor_join_state_t &state);
     task_t<actor_join_reply_t>
     seal_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
     task_t<actor_join_reply_t>

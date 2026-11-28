@@ -209,10 +209,14 @@ if sub.subscribe(&mut msg, RecvFlags::NONE)? { /* ... */ }
 | | `pub_options() -> PubSocketOptions<'_>` | 타입별 option facade |
 | `SubSocket` / `XSubSocket` | `subscribe(&self, out: &mut TopicMessage, flags: RecvFlags) -> Result<bool, RecvError>` | `out`을 다음 매칭 publish로 채움 |
 | | `set_subscription(&self, filter: &str)` / `unset_subscription(&self, filter: &str)` | topic filter를 추가/제거; 구독은 누적된다 |
-| | `subscription_at(&self, index: usize) -> Result<Option<(String, bool)>, ConfigError>` | 명명된 struct/record가 아니라 `(filter, is_pattern)` tuple — 해당 index의 filter |
+| | `subscription_at(&self, index: usize) -> Result<Option<(String, bool)>, ConfigError>` | 해당 index의 `Ok(Some((filter, is_pattern)))`. Core가 `ENOENT`를 반환하면 `Ok(None)` |
 | | `common_options()` | 공유 option facade |
 | | `sub_options() -> SubSocketOptions<'_>` | 타입별 option facade |
 | `XPubSocket` | `receive_subscription_event(&self, out: &mut SubscriptionEvent, flags: RecvFlags) -> Result<bool, RecvError>` | `PubSocket` 형태 위에 이걸 더함, 자신만의 `impl` block(`PubSocket` 타입의 확장이 아님); `out`을 다음 subscribe/unsubscribe로 채움 |
+
+바인딩은 자체 버퍼를 넘겨 `zlink_subscription_at`를 호출한다. 빈 filter를 포함해 성공하면
+조회를 끝낸다. Core가 `ENOBUFS`를 반환하면 Core가 알려 준 길이로 한 번 더 호출한다.
+그 밖의 Core 실패는 `Err(ConfigError)`로 반환한다.
 
 **`PubSocket`도 `XPubSocket`도 `set_routing_id`/`routing_id`를 선언하지
 않는다**(이 binding의 두 타입 모두에 routing-id 표면이 전혀 없다).

@@ -98,6 +98,16 @@ macro_rules! impl_socket_connections {
                 self.inner.disconnect(addr)
             }
 
+            /// Returns one row per outbound connection registration. A
+            /// successful snapshot clears [`crate::POLLCONNECT`] readiness
+            /// unless a later change raced with it. Call it only from the
+            /// socket's single connection observer.
+            pub fn connection_attempts_snapshot(
+                &self,
+            ) -> Result<Vec<crate::ConnectionAttempt>, ConfigError> {
+                self.inner.connection_attempts_snapshot()
+            }
+
             /// Disconnects the peer identified by `peer_rid` rather than by
             /// address.
             pub fn disconnect_rid(

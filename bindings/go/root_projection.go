@@ -38,6 +38,7 @@ type (
 	ReplyToken        = native.ReplyToken
 	Received          = native.Received
 	TopicMessage      = native.TopicMessage
+	Subscription      = contracts.Subscription
 	SubscriptionEvent = native.SubscriptionEvent
 	StreamPacket      = native.StreamPacket
 

@@ -182,8 +182,8 @@ Send와 request의 `Submit(context.Context)`는 Core `DONTWAIT`로 한 번 제�
 `*ConfigError`로 전달한다.
 
 `SubSocket`과 `XSubSocket`은 `SetSubscription(filter string) error`,
-`UnsetSubscription(filter string) error`, `SubscriptionAt(index int) (string, bool, error)`를 제공한다.
-조회는 filter와 pattern 여부를 반환한다.
+`UnsetSubscription(filter string) error`, `SubscriptionAt(index int) (Subscription, bool, error)`를 제공한다.
+조회는 filter와 pattern 여부를 `Subscription{Filter string; Pattern bool}`로 반환하고, 해당 인덱스가 없으면 `bool`이 `false`다. 조회 규칙은 [공통 Subscription 조회](../README.ko.md#subscription-조회)를 따른다.
 `XPubSocket.ReceiveSubscriptionEvent(out *SubscriptionEvent, flags RecvFlags) (bool, error)`는 caller가
 제공한 결과를 채운다.
 

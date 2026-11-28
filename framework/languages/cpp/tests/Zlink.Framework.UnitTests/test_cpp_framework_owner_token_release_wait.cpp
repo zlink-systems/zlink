@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include "../support/discarded_authority_fixture.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
 
 namespace
 {
