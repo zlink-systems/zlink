@@ -743,9 +743,6 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     // records behind Close while started continuations retain their turn.
     internal async ValueTask BeginCloseBoundaryAsync(CancellationToken cancellationToken)
     {
-        // A later lifecycle record may join the same incarnation's Close transaction.
-        if (Volatile.Read(ref _relocationBarrier) is { Kind: ZLinkExecutionSealKind.Close })
-            return;
         var barrier = await TryBeginRelocationBarrierAsync(
                 ZLinkExecutionSealKind.Close,
                 allowActorClaims: false
@@ -803,7 +800,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     internal void AbortCloseBoundary()
     {
-        // Closing authority is irreversible; a joining record cannot reopen it.
+        // Closing authority is irreversible.
         if (_activation is { HasCommittedClose: true })
             return;
         if (Volatile.Read(ref _relocationBarrier) is { Kind: ZLinkExecutionSealKind.Close } barrier)

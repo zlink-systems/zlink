@@ -625,6 +625,16 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
     }
 
     interface RelocationStagingIngressHandler {
+        default boolean handleInstanceSpotFollow(
+                Supplier<CompletionStage<Optional<ZLinkInternalMeshNode.PeerAuthorityFence>>>
+                        sourceAuthority,
+                ZLinkServiceM6BWireCodec.InstanceSpotFollow follow,
+                byte[] metadata,
+                byte[] payload,
+                Consumer<Throwable> failure) {
+            return false;
+        }
+
         boolean handleSpot(
                 ZLinkInternalMeshNode.PeerAuthorityFence source,
                 ZLinkServiceM6BWireCodec.SpotMessage header,
