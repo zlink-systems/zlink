@@ -41,10 +41,16 @@ final class ZLinkActorJoinPublicationTest {
     private static final Duration WAIT = Duration.ofSeconds(10);
     private static volatile Scenario scenario;
 
-    @ParameterizedTest(name = "{0}, accepted requests: {1}")
-    @CsvSource({"remote, 0", "remote, 1", "local, 0", "local, 1"})
-    void publishesJoinBeforeRunningAcceptedRequests(String placement, int acceptedRequests)
-            throws Exception {
+    @ParameterizedTest(name = "{0}, accepted requests: {1}, normalize before reply: {2}")
+    @CsvSource({
+        "remote, 0, false",
+        "remote, 1, false",
+        "remote, 1, true",
+        "local, 0, false",
+        "local, 1, false"
+    })
+    void publishesJoinBeforeRunningAcceptedRequests(
+            String placement, int acceptedRequests, boolean normalizeBeforeReply) throws Exception {
         boolean remote = placement.equals("remote");
         var observations = new Scenario();
         scenario = observations;
@@ -110,42 +116,57 @@ final class ZLinkActorJoinPublicationTest {
                 }
                 observations.moveRelease.complete(null);
 
+                if (remote) {
+                    await(
+                            CompletableFuture.anyOf(
+                                    observations.store.normalizing, observations.callback));
+                    if (acceptedRequests == 0) {
+                        observations.store.normalizationRelease.complete(null);
+                    } else {
+                        assertFalse(
+                                observations.store.normalizing.isDone(),
+                                "authority normalization must follow the Join callback");
+                    }
+                }
+
                 var callback = await(observations.callback);
                 assertCallback(callback, expectedOwner);
-                if (remote) {
+                if (remote && acceptedRequests == 1) {
                     assertPublicationPending(callback.authority());
                 } else {
-                    assertTrue(callback.authority().steadyReady());
+                    assertTrue(
+                            callback.authority().steadyReady(),
+                            "authority must be steady when the Join callback runs");
                 }
                 assertFalse(
                         observations.handlerEntered.isDone(),
                         "the accepted request must wait for the Join callback");
-                assertFalse(
-                        observations.store.normalizing.isDone(),
-                        "authority normalization must follow the Join callback");
                 observations.callbackRelease.complete(null);
 
                 if (request != null) {
                     await(observations.handlerEntered);
                     assertFalse(request.toCompletableFuture().isDone());
+                    if (remote) {
+                        await(observations.store.normalizing);
+                        assertPublicationPending(await(observations.authority()));
+                    }
+                    if (normalizeBeforeReply) {
+                        observations.store.normalizationRelease.complete(null);
+                        await(observations.store.normalized);
+                        assertTrue(await(observations.authority()).steadyReady());
+                        assertFalse(request.toCompletableFuture().isDone());
+                    }
+                    observations.handlerRelease.complete(null);
+                    assertEquals(71, await(request));
                 }
+
                 if (remote) {
-                    await(observations.store.normalizing);
-                    assertPublicationPending(await(observations.authority()));
                     observations.store.normalizationRelease.complete(null);
                     await(observations.store.normalized);
                 } else {
                     assertFalse(observations.store.normalizing.isDone());
                 }
                 assertTrue(await(observations.authority()).steadyReady());
-
-                if (request != null) {
-                    assertFalse(
-                            request.toCompletableFuture().isDone(),
-                            "authority must be steady while the accepted request is still running");
-                    observations.handlerRelease.complete(null);
-                    assertEquals(71, await(request));
-                }
             }
         }
     }

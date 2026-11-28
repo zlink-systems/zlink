@@ -1530,30 +1530,28 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                         .handle((ignored, failure) -> failure)
                                                         .thenCompose(
                                                                 failure -> {
+                                                                    Supplier<CompletionStage<Void>>
+                                                                            finishPublication =
+                                                                                    () ->
+                                                                                            finishDirectJoinPublication(
+                                                                                                    request,
+                                                                                                    target,
+                                                                                                    generations,
+                                                                                                    failure);
                                                                     if (failure != null) {
-                                                                        return CompletableFuture
-                                                                                .completedFuture(
-                                                                                        failure);
+                                                                        return finishPublication
+                                                                                .get();
                                                                     }
                                                                     actorJoin.submitSourceLeave(
                                                                             request,
                                                                             target
                                                                                     .previousMembership(),
                                                                             targetOwnerGeneration);
-                                                                    return CompletableFuture
-                                                                            .completedFuture(
-                                                                                    failure);
-                                                                })
-                                                        .thenCompose(
-                                                                failure ->
-                                                                        openAndNormalize(
-                                                                                request,
-                                                                                () ->
-                                                                                        finishDirectJoinPublication(
-                                                                                                request,
-                                                                                                target,
-                                                                                                generations,
-                                                                                                failure)));
+                                                                    return openAndNormalize(
+                                                                            request,
+                                                                            completions,
+                                                                            finishPublication);
+                                                                });
                                             });
                         });
     }
@@ -1648,12 +1646,19 @@ final class ZLinkUserSpotRetireTargetEndpoint
     private CompletionStage<Void> openAndNormalize(
             ZLinkSpotRetireControl.StageRequest request,
             Supplier<CompletionStage<Void>> openDispatch) {
-        return openDispatch
-                .get()
-                .thenCompose(
-                        ignored ->
-                                ZLinkSerialExecutionQueue.yieldCurrent(
-                                        normalizer.normalize(request)));
+        return openAndNormalize(request, null, openDispatch);
+    }
+
+    private CompletionStage<Void> openAndNormalize(
+            ZLinkSpotRetireControl.StageRequest request,
+            ZLinkTargetRelocationReplies directJoinReplies,
+            Supplier<CompletionStage<Void>> openDispatch) {
+        Supplier<CompletionStage<Void>> normalize =
+                () -> ZLinkSerialExecutionQueue.yieldCurrent(normalizer.normalize(request));
+        if (directJoinReplies != null && directJoinReplies.acceptedRows().isEmpty()) {
+            return normalize.get().thenCompose(ignored -> openDispatch.get());
+        }
+        return openDispatch.get().thenCompose(ignored -> normalize.get());
     }
 
     private void releasePublishedTarget(

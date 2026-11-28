@@ -953,6 +953,9 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 assertEquals(1, targetCommits.get(), "postcommit failure must preserve authority");
                 assertEquals(1, EVENTS.stream().filter("target.completion"::equals).count());
                 assertFalse(EVENTS.contains("target.open"), "failure must keep dispatch sealed");
+                assertFalse(
+                        EVENTS.contains("target.normalize"),
+                        "failure must keep the committed relocation record");
                 assertFalse(EVENTS.stream().anyMatch(value -> value.startsWith("replay:")));
                 assertFalse(EVENTS.contains("command44"));
                 return;
@@ -1069,6 +1072,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertEquals(
                     1, targetCommits.get(), "only the target canonical owner may commit authority");
             link.targetCompletion.get(4, TimeUnit.SECONDS);
+            assertBefore("target.normalize", "target.accepted");
             if (scenario.leaveMode() == LeaveMode.PENDING) {
                 assertInstanceOf(
                         ZLinkActorJoinCompletion.Accepted.class, COMPLETION.get().getNow(null));
@@ -1106,7 +1110,6 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertBefore("target.accepted", "client.push.submitted");
             assertBefore("target.accepted", "target.open");
             assertBefore("target.open", "replay:B1");
-            assertBefore("target.open", "target.normalize");
             assertBefore("prefix.admitted", "target.joined");
             assertBefore("prefix.admitted", "target.open");
             assertBefore("prefix.admitted", "command44");
