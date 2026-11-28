@@ -66,7 +66,7 @@ def test_raw_hot_path_keeps_gil_release_and_whole_message_calls():
     assert "zlink_recv (" in native_text
     assert "zlink_router_recv (" in native_text
     assert "ZLINK_RECV_BUFFER_TOO_SMALL" in native_text
-    assert "_recv_owner_via_native_bridge" in socket_text
+    assert "return _native_extension.recv_into(" in socket_text
     completion_text = (
         SRC / "_runtime" / "messaging" / "routed_async.py"
     ).read_text(encoding="utf-8")

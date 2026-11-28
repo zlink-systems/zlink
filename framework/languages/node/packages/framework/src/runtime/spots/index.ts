@@ -2031,9 +2031,9 @@ export class DefaultZLinkSpotManager {
     meshName: string,
     owner: ReadyRecord,
     record: ReceiveRecord,
-    admit?: ZLinkMeshDispatchAdmission,
-    relocationAdmission?: import('../foundation/service-stateful-runtime').ServiceSpotTargetAdmission
+    admit?: ZLinkMeshDispatchAdmission
   ): Promise<void> {
+    const relocationAdmission = record.spotTargetAdmission;
     const spotId = owner.spotId as unknown as RoutingId | null;
     if (spotId === null) {
       throw new ZLinkConfigurationException(

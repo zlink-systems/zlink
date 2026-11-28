@@ -43,10 +43,6 @@ def _send_stop_token(sock):
     raise RuntimeError("pair stop token backpressure retry exhausted")
 
 
-def _public_one_way_metrics(sender, receiver, *, msg_size, duration_s, run_id):
-    return None
-
-
 def main(argv=None):
     args = parse_single_args(argv or sys.argv[1:], pattern="pair")
     payload = new_payload(args.msg_size)
@@ -84,49 +80,41 @@ def main(argv=None):
                     )
 
                 active_end = time.perf_counter() + args.duration
-                metrics = _public_one_way_metrics(
-                    client,
+                sender_errors = []
+
+                def run_sender():
+                    try:
+                        send_loop(client, active_end)
+                    except BaseException as exc:  # pragma: no cover - surfaced on main thread
+                        sender_errors.append(exc)
+
+                sender = threading.Thread(
+                    target=run_sender, daemon=True
+                )
+                sender.start()
+                # C perf_single_one_way.hpp run_active_phase receiver.
+                received = run_one_way_receiver_public_recv(
                     server,
                     msg_size=args.msg_size,
-                    duration_s=args.duration,
                     run_id=run_id,
+                    active_end=active_end,
+                    received=received,
+                    latency_sampler=latency_sampler,
                 )
-                if metrics is None:
-                    sender_errors = []
 
-                    def run_sender():
-                        try:
-                            send_loop(client, active_end)
-                        except BaseException as exc:  # pragma: no cover - surfaced on main thread
-                            sender_errors.append(exc)
-
-                    sender = threading.Thread(
-                        target=run_sender, daemon=True
+                sender.join()
+                if sender_errors:
+                    raise sender_errors[0]
+                if received == 0:
+                    raise RuntimeError(
+                        "pair benchmark did not receive any active message"
                     )
-                    sender.start()
-                    # C perf_single_one_way.hpp run_active_phase receiver.
-                    received = run_one_way_receiver_public_recv(
-                        server,
-                        msg_size=args.msg_size,
-                        run_id=run_id,
-                        active_end=active_end,
-                        received=received,
-                        latency_sampler=latency_sampler,
-                    )
-
-                    sender.join()
-                    if sender_errors:
-                        raise sender_errors[0]
-                    if received == 0:
-                        raise RuntimeError(
-                            "pair benchmark did not receive any active message"
-                        )
-                    metrics = result_metrics(
-                        count=received,
-                        msg_size=args.msg_size,
-                        elapsed_s=args.duration,
-                        latency_sampler=latency_sampler,
-                    )
+                metrics = result_metrics(
+                    count=received,
+                    msg_size=args.msg_size,
+                    elapsed_s=args.duration,
+                    latency_sampler=latency_sampler,
+                )
                 print_result_lines("PAIR", args.transport, args.msg_size, metrics)
 
 
