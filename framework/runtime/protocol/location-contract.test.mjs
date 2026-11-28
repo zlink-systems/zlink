@@ -168,6 +168,41 @@ test("aggregate storage keys use lowercase UUIDs and unpadded decimal components
     decoded.entries.some(({ index }) => index === input.participantIndex)));
 });
 
+test("standalone Actor commit records the target payload and a single-entry digest", () => {
+  const { input, provenance, expected } = storageGolden.standaloneActorCommit;
+  assert.match(input.relocationId, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
+  assert.match(input.actorId, /^[a-z0-9-]+$/);
+  assert.notEqual(input.target.approvedUserSpot.id, input.source.entrySpot.id);
+  for (const spot of [input.source.entrySpot, input.target.approvedUserSpot]) {
+    assert.match(spot.id, /^[a-z0-9-]+$/);
+    assert.match(spot.generation, /^[1-9][0-9]*$/);
+  }
+  assert.match(provenance.command, /exportStandaloneActorCommitGolden/);
+  const { targetAuthorityPayloadHex, digestSha256 } = expected;
+  assert.match(targetAuthorityPayloadHex, /^5a4c4155(?:[0-9a-f]{2})+$/);
+  assert.match(digestSha256, /^[0-9a-f]{64}$/);
+  const authorityPayload = Buffer.from(targetAuthorityPayloadHex, "hex");
+  const idBytes = Buffer.from(input.actorId);
+  const page = {
+    level: 0, index: 0, startIndex: 0, entryCount: 1, children: [],
+    entries: [{
+      index: 0,
+      authorityKey: `zla1:a:${idBytes.length}:${input.actorId}`,
+      expectedStoreVersion: input.expectedStoreVersion,
+      ownerTransition: "newOwner",
+      authorityPayloadSha256: sha256(authorityPayload),
+      membershipMutationSha256: sha256(Buffer.from("[]")),
+    }],
+  };
+  assert(validators.page(page), JSON.stringify(validators.page.errors));
+  const rootBody = {
+    totalCount: 1, topLevel: 0,
+    topPages: [{ level: 0, index: 0, startIndex: 0, entryCount: 1, sha256: sha256(jcsBytes(page)) }],
+  };
+  assert.equal(digestSha256, sha256(jcsBytes(rootBody)));
+  assert(validators.root({ ...rootBody, digestSha256 }), JSON.stringify(validators.root.errors));
+});
+
 test("aggregate storage generator reproduces the accepted and rejected fixture bytes", () => {
   assert(storageGolden.rejected, "aggregate storage fixture must include rejection vectors");
   assert.deepEqual(storageGolden.rejected.map(({ name }) => name), [

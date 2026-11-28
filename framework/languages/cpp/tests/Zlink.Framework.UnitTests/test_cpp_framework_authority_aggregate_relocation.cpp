@@ -13,6 +13,7 @@
 #include <charconv>
 #include <filesystem>
 #include <fstream>
+#include <zlink/framework/detail/base64.hpp>
 
 namespace
 {
@@ -26,13 +27,18 @@ nlohmann::ordered_json golden_records ()
     return nlohmann::ordered_json::parse (fixture);
 }
 
-TEST (AuthorityAggregateRelocation, ProviderSealMatchesAggregateStorageGolden)
+nlohmann::json aggregate_storage_golden ()
 {
-    const auto fixture_path =
+    const auto path =
       std::filesystem::path (ZLINK_AUTHORITY_AGGREGATE_RELOCATION_GOLDEN_PATH).parent_path ()
       / "aggregate-storage-v1.json";
-    std::ifstream fixture (fixture_path);
-    const auto golden = nlohmann::json::parse (fixture);
+    std::ifstream fixture (path);
+    return nlohmann::json::parse (fixture);
+}
+
+TEST (AuthorityAggregateRelocation, ProviderSealMatchesAggregateStorageGolden)
+{
+    const auto golden = aggregate_storage_golden ();
     const auto &storage_keys = golden.at ("storageKeys");
     const auto key_case = storage_keys.at ("caseName").get<std::string> ();
     for (const auto &item : golden.at ("cases")) {
@@ -113,6 +119,207 @@ TEST (AuthorityAggregateRelocation, ProviderSealMatchesAggregateStorageGolden)
             EXPECT_EQ (aggregate->size (), participants.size ());
         }
     }
+}
+
+// Enable after #4789. Source capture still hashes the previous Spot membership.
+TEST (AuthorityAggregateRelocation, DISABLED_StandaloneActorCommitMatchesGolden)
+{
+    const auto golden = aggregate_storage_golden ();
+    const auto &vector = golden.at ("standaloneActorCommit");
+    const auto &input = vector.at ("input");
+    const auto &expected = vector.at ("expected");
+    const auto &source = input.at ("source");
+    const auto &target = input.at ("target");
+    const auto &entry = source.at ("entrySpot");
+    const auto &approved = target.at ("approvedUserSpot");
+    const auto text = [] (const auto &row, const char *key) {
+        return row.at (key).template get<std::string> ();
+    };
+    const auto number = [&] (const auto &row, const char *key) {
+        return static_cast<std::uint64_t> (std::stoull (text (row, key)));
+    };
+    const auto rid = [&] (const auto &row) {
+        return zlink::routing_id_t::from_hex (text (row, "routingIdHex"));
+    };
+    const auto placement = [&] (const auto &row) {
+        return object_creation_target_t{text (row, "meshName"),
+                                        node_rid_t::from_string (rid (row).to_string ()),
+                                        number (row, "nodeGeneration"),
+                                        {text (row, "ownerId"), static_cast<std::int64_t> (number (
+                                                                  row, "ownerLeaseGeneration"))}};
+    };
+
+    const auto from = placement (source);
+    const auto to = placement (target);
+    const auto actor_id = text (input, "actorId");
+    const auto stable_type = text (input, "stableType");
+    const auto spot_id = text (approved, "id");
+    const auto object_generation = number (input, "objectGeneration");
+    const auto owner_generation = number (input, "sourceAuthorityOwnerGeneration");
+    const auto original_version = text (input, "expectedStoreVersion");
+    auto id = text (input, "relocationId");
+    std::erase (id, '-');
+    const zlink::framework::runtime::protocol::relocation_id_t relocation{
+      std::stoull (id.substr (0, 16), nullptr, 16), std::stoull (id.substr (16), nullptr, 16)};
+    const object_ref_t actor{object_kind_t::actor, actor_id,       object_generation,
+                             owner_generation,     from.mesh_name, rid (source).to_string ()};
+    const auto key = actor_authority_key (actor_id);
+    const actor_authority_payload_t source_actor{
+      .stable_type = stable_type,
+      .actor_id = actor_id,
+      .current_spot_id = text (entry, "id"),
+      .current_spot_generation = number (entry, "generation"),
+      .current_spot_kind = actor_authority_spot_kind_t::entry,
+      .owner_id = from.owner.owner_id,
+      .owner_lease_generation = static_cast<std::uint64_t> (from.owner.lease_generation),
+      .mesh_name = from.mesh_name,
+      .node_rid = from.node_rid,
+      .node_generation = from.node_lifecycle_generation};
+
+    in_memory_location_store_t provider;
+    provider_location_repository_t repository (provider);
+    public_authority_store_adapter_t adapter (repository);
+    const nlohmann::json actor_row{
+      {"recordVersion", 1},
+      {"payload",
+       zlink::framework::detail::base64_encode (encode_actor_authority_payload (source_actor))},
+      {"objectGeneration", std::to_string (object_generation)},
+      {"authorityOwnerGeneration", std::to_string (owner_generation)},
+      {"ownerId", from.owner.owner_id},
+      {"ownerLeaseGeneration", std::to_string (from.owner.lease_generation)},
+      {"allocation",
+       {{"state", "active"},
+        {"objectKind", "actor"},
+        {"stableType", stable_type},
+        {"descriptor", {{"meshName", from.mesh_name}, {"routingIdHex", rid (source).to_hex ()}}},
+        {"descriptorLifecycleGeneration", std::to_string (from.node_lifecycle_generation)},
+        {"capacity", {{"actors", 1}, {"spots", 0}, {"spotType", nullptr}}}}},
+      {"pendingCreation", nullptr}};
+    // The first provider write assigns the original StoreVersion in the golden.
+    const store_key_t row_key{std::string ("authority\0actor\0", 16) + actor_id};
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+      provider.write ({{}, {store_put_t{row_key, bytes (actor_row.dump ()), {}}}})
+        .result ()
+        .value ()));
+    const auto original = repository.read_authority (key).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<authority_snapshot_t> (original));
+    ASSERT_EQ (std::get<authority_snapshot_t> (original).store_version, original_version);
+    for (const auto &owner : {from.owner, to.owner}) {
+        const auto claimed = repository.claim_owner_lease (owner.owner_id, 30s).result ().value ();
+        ASSERT_TRUE (std::holds_alternative<owner_lease_claimed_t> (claimed));
+        ASSERT_EQ (std::get<owner_lease_claimed_t> (claimed).token.lease_generation,
+                   owner.lease_generation);
+    }
+    mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = to.mesh_name;
+    descriptor.rid = rid (target);
+    descriptor.lifecycle_generation = to.node_lifecycle_generation;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = to.owner.owner_id;
+    descriptor.lease_generation = to.owner.lease_generation;
+    descriptor.object_role = object_role_t::server;
+    descriptor.state = framework_runtime_state_t::serving;
+    descriptor.capacity.actors.limit = 2;
+    descriptor.capacity.spots.limit = 1;
+    descriptor.capacity.spot_types = {{placement_object_kind_t::user_spot, "Game.Spot", {0, 0, 1}}};
+    descriptor.object_capabilities = {
+      {placement_object_kind_t::actor, stable_type, maintenance_policy_kind_t::recreate, false, 0},
+      {placement_object_kind_t::user_spot, "Game.Spot", maintenance_policy_kind_t::snapshot, true,
+       1}};
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    auto source_descriptor = descriptor;
+    source_descriptor.mesh_name = from.mesh_name;
+    source_descriptor.rid = rid (source);
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+      provider
+        .write ({{},
+                 {store_put_t{capacity_key (source_descriptor), bytes ("1"), {}},
+                  store_put_t{generation_key ("actor", actor_id, true),
+                              bytes (std::to_string (owner_generation + 1)),
+                              {}}}})
+        .result ()
+        .value ()));
+
+    object_reserve_request_t request;
+    request.key = {placement_object_kind_t::user_spot, spot_id};
+    request.intent.stable_type = "Game.Spot";
+    request.target = to;
+    request.capacity_bundle = {
+      0, 1, spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "Game.Spot", 1}};
+    const auto reserved = repository.reserve (request).result ().value ();
+    const auto *reservation = std::get_if<object_reserved_t> (&reserved);
+    ASSERT_NE (reservation, nullptr);
+    const auto spot_payload = encode_user_spot_authority_payload (
+      {.state = user_spot_authority_state_t::ready,
+       .stable_type = "Game.Spot",
+       .spot_id = spot_id,
+       .owner_id = to.owner.owner_id,
+       .owner_lease_generation = static_cast<std::uint64_t> (to.owner.lease_generation),
+       .mesh_name = to.mesh_name,
+       .node_rid = to.node_rid,
+       .node_generation = to.node_lifecycle_generation});
+    const auto spot_commit =
+      repository.commit ({request.key, reservation->fence, spot_payload}).result ().value ();
+    const auto *spot = std::get_if<object_committed_t> (&spot_commit);
+    ASSERT_NE (spot, nullptr);
+    const auto spot_generation = number (approved, "generation");
+    ASSERT_EQ (spot->ready.object_generation, spot_generation);
+
+    const auto wire_rid = [&] (const auto &row) {
+        const auto data = rid (row).to_string ();
+        return std::vector<std::uint8_t> (data.begin (), data.end ());
+    };
+    const zlink::framework::runtime::protocol::relocation_prepare_t prepare{
+      .relocation = relocation,
+      .target_attempt_generation = 1,
+      .coordinator = {from.owner.owner_id, static_cast<std::uint64_t> (from.owner.lease_generation),
+                      wire_rid (source), from.node_lifecycle_generation, original_version},
+      .target = {wire_rid (target), to.node_lifecycle_generation, to.owner.owner_id,
+                 static_cast<std::uint64_t> (to.owner.lease_generation)},
+      .source_node_routing_id = wire_rid (source),
+      .source_node_generation = from.node_lifecycle_generation,
+      .application_version = 1};
+    const auto fence = relocation_authority_fence_t::from_prepare (actor, prepare);
+    const auto preparing = adapter
+                             .begin_source_capture ({actor}, fence, rid (target).to_string (),
+                                                    to.node_lifecycle_generation, 1)
+                             .result ()
+                             .value ();
+    ASSERT_TRUE (preparing);
+    ASSERT_TRUE (adapter.capture_source (actor, *preparing).result ().value ());
+    ASSERT_TRUE (adapter.record_target_prepared (actor, prepare).result ().value ());
+
+    auto placed = actor;
+    placed.mesh_name = to.mesh_name;
+    placed.node_id = rid (target).to_string ();
+    auto approved_actor = source_actor;
+    approved_actor.current_spot_id = spot_id;
+    approved_actor.current_spot_generation = spot_generation;
+    approved_actor.current_spot_kind = actor_authority_spot_kind_t::user;
+    approved_actor.owner_id = to.owner.owner_id;
+    approved_actor.owner_lease_generation = static_cast<std::uint64_t> (to.owner.lease_generation);
+    approved_actor.mesh_name = to.mesh_name;
+    approved_actor.node_rid = to.node_rid;
+    approved_actor.node_generation = to.node_lifecycle_generation;
+    const auto published = adapter.publish (actor, placed, to.owner, to, "golden-direct", 0, {},
+                                            encode_actor_authority_payload (approved_actor),
+                                            original_version, relocation, from.owner, &prepare);
+    ASSERT_EQ (published.status, authority_publish_status_t::published);
+    const auto read = repository.read_authority (key).result ().value ();
+    const auto *committed = std::get_if<authority_snapshot_t> (&read);
+    ASSERT_NE (committed, nullptr);
+    EXPECT_EQ (committed->payload,
+               zlink::framework::tests::from_hex (text (expected, "targetAuthorityPayloadHex")));
+    ASSERT_TRUE (committed->aggregate && committed->aggregate->relocation);
+    EXPECT_EQ (committed->aggregate->relocation->phase, "committed");
+    EXPECT_GT (committed->authority_owner_generation, owner_generation);
+    EXPECT_EQ (committed->aggregate->encoded.at ("relocation").at ("sourceInventorySha256"),
+               expected.at ("digestSha256"));
 }
 
 TEST (AuthorityAggregateRelocation, SharedRecordsRoundTripAndMalformedRecordsFailClosed)

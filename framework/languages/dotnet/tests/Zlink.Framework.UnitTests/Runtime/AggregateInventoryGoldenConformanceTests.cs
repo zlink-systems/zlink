@@ -1,11 +1,68 @@
 using System.Text.Json;
+using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.LocationProvider;
+using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class AggregateInventoryGoldenConformanceTests
 {
+    [Fact]
+    public void StandaloneActorCommitMatchesGolden()
+    {
+        using var fixture = LoadFixture();
+        var vector = fixture.RootElement.GetProperty("standaloneActorCommit");
+        var input = vector.GetProperty("input");
+        var source = input.GetProperty("source");
+        var target = input.GetProperty("target");
+        var entry = source.GetProperty("entrySpot");
+        var approved = target.GetProperty("approvedUserSpot");
+        var actorId = input.GetProperty("actorId").GetString()!;
+        var sourcePayload = new ZLinkActorAuthorityPayload(
+            ZLinkActorAuthorityState.Ready,
+            input.GetProperty("stableType").GetString()!,
+            actorId,
+            entry.GetProperty("id").GetString()!,
+            ulong.Parse(entry.GetProperty("generation").GetString()!),
+            ZLinkSpotKind.Entry,
+            source.GetProperty("ownerId").GetString()!,
+            ulong.Parse(source.GetProperty("ownerLeaseGeneration").GetString()!),
+            source.GetProperty("meshName").GetString()!,
+            RoutingId.FromHex(source.GetProperty("routingIdHex").GetString()!),
+            ulong.Parse(source.GetProperty("nodeGeneration").GetString()!)
+        );
+        var destination = new ZLinkStandaloneActorRelocationDestination(
+            approved.GetProperty("id").GetString()!,
+            ulong.Parse(approved.GetProperty("generation").GetString()!),
+            ZLinkSpotKind.User,
+            RoutingId.FromHex(target.GetProperty("routingIdHex").GetString()!),
+            ulong.Parse(target.GetProperty("nodeGeneration").GetString()!),
+            target.GetProperty("meshName").GetString()!,
+            new ZLinkLocationOwnerToken(
+                target.GetProperty("ownerId").GetString()!,
+                long.Parse(target.GetProperty("ownerLeaseGeneration").GetString()!)
+            )
+        );
+        var payload = ZLinkActorAuthorityPayloadCodec.Encode(
+            ZLinkStandaloneActorRelocationRuntime.PlanTargetAuthority(sourcePayload, destination)
+        );
+        var digest = ZLinkDirectRelocationInventory.Digest(
+            ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId),
+            input.GetProperty("expectedStoreVersion").GetString()!,
+            payload
+        );
+        var expected = vector.GetProperty("expected");
+        Assert.Equal(
+            (
+                expected.GetProperty("targetAuthorityPayloadHex").GetString(),
+                expected.GetProperty("digestSha256").GetString()
+            ),
+            (Convert.ToHexString(payload).ToLowerInvariant(), digest)
+        );
+    }
+
     [Fact]
     public void StorageKeysMatchGolden()
     {

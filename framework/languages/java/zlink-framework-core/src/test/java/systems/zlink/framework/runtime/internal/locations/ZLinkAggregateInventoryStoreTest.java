@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -22,8 +23,12 @@ import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
+import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
+import systems.zlink.framework.spots.ZLinkSpotKind;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -142,6 +147,75 @@ final class ZLinkAggregateInventoryStoreTest {
                                 .toCompletableFuture()
                                 .join());
         assertEquals(fence, prepared.fence());
+    }
+
+    @Test
+    void standaloneActorCommitMatchesGolden() {
+        var vector = GOLDEN.get("standaloneActorCommit");
+        assertEquals(vector.get("expected"), standaloneActorCommit(vector.get("input")));
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "ZLINK_STANDALONE_ACTOR_GOLDEN_OUTPUT", matches = ".+")
+    void exportStandaloneActorCommitGolden() throws java.io.IOException {
+        Files.writeString(
+                Path.of(System.getenv("ZLINK_STANDALONE_ACTOR_GOLDEN_OUTPUT")),
+                standaloneActorCommit(GOLDEN.get("standaloneActorCommit").get("input"))
+                                .toPrettyString()
+                        + "\n");
+    }
+
+    private static JsonNode standaloneActorCommit(JsonNode input) {
+        var source = input.get("source");
+        var target = input.get("target");
+        var entry = source.get("entrySpot");
+        var approved = target.get("approvedUserSpot");
+        String actorId = input.get("actorId").asText();
+        var transition = ZLinkAuthorityGenerationTransition.NEW_OWNER;
+        byte[] sourcePayload =
+                new ZLinkActorAuthorityPayloadCodec()
+                        .encode(
+                                ZLinkActorAuthorityPayloadCodec.State.READY,
+                                input.get("stableType").asText(),
+                                actorId,
+                                entry.get("id").asText(),
+                                entry.get("generation").asLong(),
+                                ZLinkSpotKind.ENTRY.value(),
+                                source.get("ownerId").asText(),
+                                source.get("ownerLeaseGeneration").asLong(),
+                                source.get("meshName").asText(),
+                                RoutingId.from(HEX.parseHex(source.get("routingIdHex").asText())),
+                                source.get("nodeGeneration").asLong());
+        byte[] projected =
+                ZLinkAggregateRelocationCoordinator.projectAuthorityPayload(
+                        sourcePayload,
+                        new ZLinkMeshNodeDescriptorKey(
+                                target.get("meshName").asText(),
+                                RoutingId.from(HEX.parseHex(target.get("routingIdHex").asText()))),
+                        target.get("nodeGeneration").asLong(),
+                        new ZLinkLocationOwnerToken(
+                                target.get("ownerId").asText(),
+                                target.get("ownerLeaseGeneration").asLong()),
+                        transition,
+                        new ZLinkAggregateCommitIntent.ActorMembership(
+                                approved.get("id").asText(),
+                                approved.get("generation").asLong(),
+                                ZLinkSpotKind.USER.value()));
+        var participant =
+                new ZLinkAggregateParticipant(
+                        ZLinkAuthorityKeyCodec.actor(actorId),
+                        input.get("objectGeneration").asLong(),
+                        input.get("sourceAuthorityOwnerGeneration").asLong(),
+                        input.get("expectedStoreVersion").asText(),
+                        transition,
+                        projected,
+                        "[]".getBytes(StandardCharsets.UTF_8));
+        return new ObjectMapper()
+                .createObjectNode()
+                .put("targetAuthorityPayloadHex", HEX.formatHex(projected))
+                .put(
+                        "digestSha256",
+                        HEX.formatHex(ZLinkAggregateInventoryStore.digest(List.of(participant))));
     }
 
     @Test

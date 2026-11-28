@@ -114,6 +114,71 @@ for (const vector of [...golden.cases, golden.directJoin]) {
   });
 }
 
+test('§8.3 standalone Actor commit matches golden', () => {
+  const {
+    encodeActorAuthorityIdentity
+  } = require('../../packages/framework/dist/runtime/actors/actor-authority-publication');
+  const {
+    relocationAuthorityPayloadForTarget
+  } = require('../../packages/framework/dist/runtime/locations/relocation-authority-payload');
+  const {
+    encodeAuthorityKey
+  } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
+  const { decodeRoutingId } = require('../../packages/framework/dist/runtime/routing-id');
+  const { ZLinkSpotKind } = require('../../packages/framework/dist/contracts/Spots/SpotKind');
+  const { input, expected } = golden.standaloneActorCommit;
+  const { source, target } = input;
+  const objectGeneration = BigInt(input.objectGeneration);
+  const sourcePayload = encodeActorAuthorityIdentity({
+    actorType: input.stableType,
+    actor: {
+      actorId: input.actorId,
+      objectGeneration,
+      meshName: source.meshName,
+      nodeRid: decodeRoutingId('', source.routingIdHex)
+    },
+    meshName: source.meshName,
+    ownerNodeGeneration: BigInt(source.nodeGeneration),
+    owner: { ownerId: source.ownerId, leaseGeneration: BigInt(source.ownerLeaseGeneration) },
+    spotId: source.entrySpot.id,
+    spotGeneration: BigInt(source.entrySpot.generation),
+    spotKind: ZLinkSpotKind.Entry
+  });
+  const payload = relocationAuthorityPayloadForTarget(
+    sourcePayload,
+    {
+      actorSpotId: target.approvedUserSpot.id,
+      actorSpotGeneration: BigInt(target.approvedUserSpot.generation),
+      actorSpotKind: ZLinkSpotKind.User
+    },
+    {
+      owner: { ownerId: target.ownerId, leaseGeneration: BigInt(target.ownerLeaseGeneration) },
+      meshName: target.meshName,
+      nodeRid: decodeRoutingId('', target.routingIdHex),
+      nodeGeneration: BigInt(target.nodeGeneration),
+      objectGeneration
+    }
+  );
+  const inventory = new ZLinkAggregateInventoryStore(new ZLinkInMemoryProviderLocationStore());
+  const { digest } = inventory.plan({
+    aggregateId: { value: input.relocationId },
+    aggregateGeneration: 1n,
+    participants: [
+      {
+        authorityKey: encodeAuthorityKey('actor', input.actorId),
+        expectedStoreVersion: { value: input.expectedStoreVersion },
+        ownerTransition: 'newOwner',
+        authorityPayload: payload,
+        membershipMutation: Buffer.from('[]')
+      }
+    ]
+  });
+  assert.deepEqual(
+    { targetAuthorityPayloadHex: Buffer.from(payload).toString('hex'), digestSha256: digest },
+    expected
+  );
+});
+
 test('§8.3 storage keys match golden', async () => {
   const { caseName, input, expected } = golden.storageKeys;
   const hex = input.aggregateId.replaceAll('-', '');
