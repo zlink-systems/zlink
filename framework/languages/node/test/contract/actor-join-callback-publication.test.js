@@ -248,6 +248,12 @@ for (const { remote, failureTarget } of [
           assert.equal((await setupJoined.promise).status, 'accepted');
 
           const target = remote ? await start(targetRid) : source;
+          const relocate = remote
+            ? t.mock.method(
+                source.get(nest.ZLINK_FRAMEWORK_RUNTIME).serviceRelocation,
+                'relocateActorJoin'
+              )
+            : undefined;
           if (remote) {
             for (const app of [source, target]) {
               for await (const snapshot of app
@@ -357,6 +363,17 @@ for (const { remote, failureTarget } of [
               { enteredBeforeClear, phaseAtCallback: authority.relocation?.phase },
               { enteredBeforeClear: false, phaseAtCallback: undefined },
               'Join completion must observe steady authority after the finishing CAS'
+            );
+          }
+          if (relocate !== undefined) {
+            assert.equal(relocate.mock.callCount(), 1);
+            // defer() returns void. Observe its ID at the source relocation boundary.
+            const { completionOperationId } = relocate.mock.calls[0].arguments[0];
+            assert.ok(completionOperationId);
+            assert.deepEqual(
+              completion.operationId,
+              completionOperationId,
+              'target Accepted must carry the original Deferred Join operation ID'
             );
           }
         } finally {

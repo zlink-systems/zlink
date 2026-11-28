@@ -16,8 +16,6 @@ export interface ZLinkActorJoinRelocation {
     readonly completionOperationId?: ZLinkActorJoinOperationId;
     readonly canonicalRecovery?: {
       readonly handoffId: string;
-      /** Core command-28 request identity retained by the target admission. */
-      readonly admissionOperationId: ZLinkActorJoinOperationId;
       readonly requestContentType: string;
       readonly request: Buffer;
       readonly replyContentType?: string;
