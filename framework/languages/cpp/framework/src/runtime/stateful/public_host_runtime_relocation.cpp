@@ -1124,7 +1124,8 @@ bool public_host_runtime_t::submit_relocation_target_authority (
         if (adopt_store_fences ())
             return true;
 
-        if (attempt.sources.size () == 1) {
+        if (attempt.sources.size () == 1
+            && attempt.sources.front ().kind != stateful::object_kind_t::user_spot) {
             const object_creation_target_t target_placement{
               attempt.targets.front ().mesh_name,
               node_rid_t::from_string (attempt.targets.front ().node_id),
@@ -2174,90 +2175,17 @@ void public_host_runtime_t::complete_relocation_assembly (
                        pending.prepare.source_node_routing_id.end ());
         principal_identity.stable_type = pending.prepare.object.stable_type;
 
-        /* Participant identity is deliberately absent from the stream. The
-     * canonical ordered inventory is reconstructed from Location Store
-     * authority keys: the principal row plus, for a User Spot aggregate,
-     * every Actor row whose authority payload projects membership of that
-     * exact Spot. */
-        std::vector<stateful::relocation_participant_identity_t> inventory;
-        std::optional<std::vector<stateful::relocation_participant_identity_t>> rows;
-        try {
-            rows = _relocation_authority ? _relocation_authority->list_participant_identities ()
-                                         : std::nullopt;
+        auto inventory =
+          _relocation_authority
+            ? _relocation_authority->read_target_inventory (principal_identity, pending.prepare)
+            : std::nullopt;
+        if (!inventory) {
+            trace_mesh_host ("relocation-assembly-failed", "stage=sealed-inventory");
+            reply_failure ();
+            return;
         }
-        catch (...) {
-            rows = std::nullopt;
-        }
-        if (envelope->application_states.size () == 1) {
-            /* Even a single-participant unit takes its stable type (which the
-         * wire object deliberately omits for Actors and User Spots) from
-         * the principal's authority row when the store can serve it. */
-            if (rows) {
-                for (const auto &row : *rows) {
-                    if (row.owner.kind != principal_kind
-                        || row.owner.key != principal_identity.owner.key)
-                        continue;
-                    if (!row.stable_type.empty ())
-                        principal_identity.stable_type = row.stable_type;
-                    if (!row.owner.mesh_name.empty ())
-                        principal_identity.owner.mesh_name = row.owner.mesh_name;
-                    if (!row.owner.node_id.empty ())
-                        principal_identity.owner.node_id = row.owner.node_id;
-                    break;
-                }
-            }
-            inventory.push_back (principal_identity);
-        } else {
-            if (!rows) {
-                // Inventory enumeration unavailable — a staging failure, not a
-                // verified payload integrity failure.
-                reply_failure (protocol::framework_error_code::requestFailed);
-                return;
-            }
-            for (auto &row : *rows) {
-                if (row.owner.kind == principal_kind
-                    && row.owner.key == principal_identity.owner.key) {
-                    if (row.owner.object_generation != principal_identity.owner.object_generation
-                        || row.owner.authority_owner_generation
-                             != principal_identity.owner.authority_owner_generation) {
-                        trace_mesh_host ("relocation-assembly-failed", "stage=principal-row-fence");
-                        reply_failure ();
-                        return;
-                    }
-                    auto principal_row = principal_identity;
-                    if (!row.stable_type.empty ())
-                        principal_row.stable_type = row.stable_type;
-                    if (!row.owner.mesh_name.empty ())
-                        principal_row.owner.mesh_name = row.owner.mesh_name;
-                    if (!row.owner.node_id.empty ())
-                        principal_row.owner.node_id = row.owner.node_id;
-                    inventory.push_back (std::move (principal_row));
-                } else if ((principal_kind == stateful::object_kind_t::user_spot
-                            || principal_kind == stateful::object_kind_t::instance_spot)
-                           && row.owner.kind == stateful::object_kind_t::actor
-                           && row.spot_membership
-                           && row.spot_membership->first == principal_identity.owner.key
-                           && row.spot_membership->second
-                                == principal_identity.owner.object_generation) {
-                    if (row.owner.mesh_name.empty ())
-                        row.owner.mesh_name = principal_identity.owner.mesh_name;
-                    if (row.owner.node_id.empty ())
-                        row.owner.node_id = principal_identity.owner.node_id;
-                    inventory.push_back (std::move (row));
-                }
-            }
-            if (inventory.size () != envelope->application_states.size ()) {
-                trace_mesh_host (
-                  "relocation-assembly-failed",
-                  "stage=inventory-count derived=" + std::to_string (inventory.size ())
-                    + " declared=" + std::to_string (envelope->application_states.size ()));
-                reply_failure ();
-                return;
-            }
-        }
-
         auto materialized =
-          stateful::maintenance_runtime_t::materialize_envelope (*envelope, std::move (inventory));
+          stateful::maintenance_runtime_t::materialize_envelope (*envelope, std::move (*inventory));
         if (!materialized) {
             trace_mesh_host ("relocation-assembly-failed", "stage=materialize");
             reply_failure ();

@@ -190,12 +190,13 @@ class mesh_node_runtime_t
                                 std::chrono::steady_clock::time_point restore_deadline);
     task_t<result_t<bool>> destroy_application_actor (actor_ref_t actor,
                                                       std::string expected_store_version = {});
-    task_t<runtime::stateful::aggregate_relocation_result_t>
-    relocate_application_unit (std::vector<runtime::stateful::object_ref_t> sources,
-                               std::vector<std::string> stable_types,
-                               const mesh_node_descriptor_t &target,
-                               const std::vector<authority_snapshot_t> &authorities,
-                               std::chrono::steady_clock::time_point restore_deadline);
+    task_t<runtime::stateful::aggregate_relocation_result_t> relocate_application_unit (
+      std::vector<runtime::stateful::object_ref_t> sources,
+      std::vector<std::string> stable_types,
+      const std::function<task_t<std::optional<mesh_node_descriptor_t>> ()> &select_target,
+      std::uint64_t application_version,
+      const std::vector<authority_snapshot_t> &authorities,
+      std::chrono::steady_clock::time_point restore_deadline);
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
     /** Session-Actor binding §4: this host's descriptor owner token, absent

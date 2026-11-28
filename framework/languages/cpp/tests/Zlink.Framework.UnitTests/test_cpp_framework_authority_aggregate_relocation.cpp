@@ -147,8 +147,7 @@ TEST (AuthorityAggregateRelocation, DISABLED_SpotWideSourceSealMatchesGolden)
       .relocation = relocation,
       .source_node_routing_id = {rid.begin (), rid.end ()},
       .source_node_generation = node_generation};
-    ASSERT_TRUE (
-      adapter.begin_source_capture (participants, fence, "candidate", 4, 1).result ().value ());
+    ASSERT_TRUE (adapter.begin_source_capture (participants, fence, 1).result ().value ());
 
     const auto prefix = "zlink:v11:aggregate-inventory:" + relocation_id + ":1:";
     const auto page = provider.read ({prefix + "page:0:0"}).result ().value ();
@@ -434,11 +433,7 @@ TEST (AuthorityAggregateRelocation, DISABLED_StandaloneActorCommitMatchesGolden)
       .source_node_generation = from.node_lifecycle_generation,
       .application_version = 1};
     const auto fence = relocation_authority_fence_t::from_prepare (actor, prepare);
-    const auto preparing = adapter
-                             .begin_source_capture ({actor}, fence, rid (target).to_string (),
-                                                    to.node_lifecycle_generation, 1)
-                             .result ()
-                             .value ();
+    const auto preparing = adapter.begin_source_capture ({actor}, fence, 1).result ().value ();
     ASSERT_TRUE (preparing);
     ASSERT_TRUE (adapter.capture_source (actor, *preparing).result ().value ());
     ASSERT_TRUE (adapter.record_target_prepared (actor, prepare).result ().value ());

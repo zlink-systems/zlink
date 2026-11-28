@@ -220,12 +220,9 @@ class join_settlement_authority_t final : public fw::runtime::stateful::authorit
     fw::task_t<std::optional<std::string>>
     begin_source_capture (const std::vector<object> &participants,
                           const fence &value,
-                          const std::string &target_node_id,
-                          std::uint64_t target_node_generation,
                           std::uint64_t application_version) override
     {
-        return _inner.begin_source_capture (participants, value, target_node_id,
-                                            target_node_generation, application_version);
+        return _inner.begin_source_capture (participants, value, application_version);
     }
     fw::task_t<bool> capture_source (const object &primary,
                                      const std::string &preparing_version) override
@@ -250,9 +247,11 @@ class join_settlement_authority_t final : public fw::runtime::stateful::authorit
         return _inner.owner_lease_live (owner);
     }
     std::optional<std::vector<fw::runtime::stateful::relocation_participant_identity_t>>
-    list_participant_identities () override
+    read_target_inventory (
+      const fw::runtime::stateful::relocation_participant_identity_t &principal,
+      const fw::runtime::protocol::relocation_prepare_t &prepare) override
     {
-        return _inner.list_participant_identities ();
+        return _inner.read_target_inventory (principal, prepare);
     }
     published publish (const object &source,
                        const object &target,

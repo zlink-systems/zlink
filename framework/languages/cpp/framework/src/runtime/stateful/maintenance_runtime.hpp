@@ -240,14 +240,11 @@ class authority_relocation_port_t
     {
         return std::nullopt;
     }
-    /* Enumerates every live authority row (the repository scans the
-     * "authority\0…" preimage prefix). The target reconstructs the
-     * canonical ordered participant inventory of an inbound relocation
-     * from this listing. std::nullopt means enumeration is unavailable. */
     virtual std::optional<std::vector<relocation_participant_identity_t>>
-    list_participant_identities ()
+    read_target_inventory (const relocation_participant_identity_t &principal,
+                           const protocol::relocation_prepare_t &)
     {
-        return std::nullopt;
+        return std::vector{principal};
     }
     virtual authority_publish_result_t
     publish (const object_ref_t &source,
@@ -264,12 +261,8 @@ class authority_relocation_port_t
              protocol::relocation_id_t relocation = {},
              location_owner_token_t source_owner = {},
              const protocol::relocation_prepare_t *prepare = nullptr) = 0;
-    virtual task_t<std::optional<std::string>>
-    begin_source_capture (const std::vector<object_ref_t> &,
-                          const relocation_authority_fence_t &fence,
-                          const std::string &,
-                          std::uint64_t,
-                          std::uint64_t)
+    virtual task_t<std::optional<std::string>> begin_source_capture (
+      const std::vector<object_ref_t> &, const relocation_authority_fence_t &fence, std::uint64_t)
     {
         co_return std::optional{fence.expected_store_version};
     }
@@ -591,7 +584,8 @@ class maintenance_runtime_t
       const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire =
         std::nullopt,
       std::stop_token cancellation = {},
-      std::uint64_t advertised_receive_chunk_limit_bytes = 0);
+      std::uint64_t advertised_receive_chunk_limit_bytes = 0,
+      std::optional<std::string> preparing_version = std::nullopt);
 
     void attach_relocation_wire (raw_relocation_replay_coordinator_t &wire,
                                  std::function<raw_stateful_dispatch_t *()> dispatch = {}) noexcept;
@@ -687,7 +681,8 @@ class maintenance_runtime_t
     task_t<relocation_result_t>
     relocate_source_cleanup (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_capture (std::shared_ptr<relocation_terminal_state_t> state,
-                                   const std::vector<object_ref_t> &participants);
+                                   const std::vector<object_ref_t> &participants,
+                                   std::optional<std::string> preparing_version = std::nullopt);
     task_t<bool> capture_relocation_session_bindings (
       eligible_relocation_unit_t::canonical_wire_context_t &context);
     task_t<bool> relocate_encode (std::shared_ptr<relocation_terminal_state_t> state,

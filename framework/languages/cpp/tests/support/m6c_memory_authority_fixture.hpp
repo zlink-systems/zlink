@@ -44,8 +44,9 @@ class memory_authority_store_t final : public authority_relocation_port_t
     std::optional<authority_relocation_reference_t> read (object_kind_t kind,
                                                           const std::string &key) override;
 
-    std::optional<std::vector<relocation_participant_identity_t>>
-    list_participant_identities () override;
+    std::optional<std::vector<relocation_participant_identity_t>> read_target_inventory (
+      const relocation_participant_identity_t &,
+      const zlink::framework::runtime::protocol::relocation_prepare_t &) override;
 
     relocation_authority_t observe_relocation (const relocation_authority_fence_t &fence) override;
 

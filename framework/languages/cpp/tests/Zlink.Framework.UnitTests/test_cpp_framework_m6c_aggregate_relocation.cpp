@@ -562,7 +562,10 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
     std::thread relocation_thread ([&] {
         result = await_task (source.relocate_application_unit (
           {*spot, joined_actor}, {"production.aggregate.spot", "production.aggregate.actor"},
-          target_descriptor,
+          [&] () -> framework::task_t<std::optional<framework::mesh_node_descriptor_t>> {
+              co_return target_descriptor;
+          },
+          static_cast<std::uint64_t> (target_descriptor.application_version),
           {make_authority (*spot, framework::placement_object_kind_t::user_spot,
                            "production.aggregate.spot", "aggregate-spot-v1"),
            make_authority (joined_actor, framework::placement_object_kind_t::actor,

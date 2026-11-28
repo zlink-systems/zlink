@@ -1501,7 +1501,8 @@ task_t<runtime::stateful::aggregate_relocation_result_t>
 mesh_node_runtime_t::relocate_application_unit (
   std::vector<runtime::stateful::object_ref_t> sources,
   std::vector<std::string> stable_types,
-  const mesh_node_descriptor_t &target,
+  const std::function<task_t<std::optional<mesh_node_descriptor_t>> ()> &select_target,
+  std::uint64_t application_version,
   const std::vector<authority_snapshot_t> &authorities,
   std::chrono::steady_clock::time_point restore_deadline)
 {
@@ -1513,8 +1514,7 @@ mesh_node_runtime_t::relocate_application_unit (
           {}};
     };
     if (!_node || sources.empty () || sources.size () != stable_types.size ()
-        || sources.size () != authorities.size () || target.lifecycle_generation == 0
-        || target.owner_id.empty () || target.lease_generation <= 0)
+        || sources.size () != authorities.size () || !_relocation_authority)
         co_return blocked ();
     auto *maintenance = _node->maintenance ();
     const auto status = _node->status ();
@@ -1579,6 +1579,37 @@ mesh_node_runtime_t::relocate_application_unit (
       static_cast<std::uint64_t> (coordinator_authority.owner.lease_generation),
       status.routing_id ().to_bytes (), status.lifecycle_generation (),
       coordinator_authority.store_version};
+    const auto &source = input[principal_index].source;
+    if (source.kind != object_kind_t::user_spot)
+        co_return blocked ();
+    const relocation_authority_fence_t source_capture{
+      .kind = source.kind,
+      .key = source.key,
+      .expected_store_version = coordinator.expected_authority_store_version,
+      .source_owner = coordinator_authority.owner,
+      .relocation = relocation,
+      .source_node_routing_id = coordinator.node_routing_id,
+      .source_node_generation = coordinator.node_generation};
+    const auto preparing = co_await _relocation_authority->begin_source_capture (
+      sources, source_capture, application_version);
+    if (!preparing)
+        co_return blocked ();
+    std::optional<mesh_node_descriptor_t> selected;
+    try {
+        selected = co_await select_target ();
+    }
+    catch (...) {
+        (void) _relocation_authority->cancel_source_capture (source_capture);
+        throw;
+    }
+    if (!selected || selected->lifecycle_generation == 0 || selected->owner_id.empty ()
+        || selected->lease_generation <= 0) {
+        if (!_relocation_authority->cancel_source_capture (source_capture))
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "SpotWide source seal could not be released");
+        co_return blocked ();
+    }
+    const auto &target = *selected;
     std::vector<std::pair<object_ref_t, authority_snapshot_t>> session_participants;
     session_participants.reserve (input.size ());
     for (const auto &participant : input)
@@ -1688,29 +1719,11 @@ mesh_node_runtime_t::relocate_application_unit (
     for (std::size_t index = 0; index != digest.size (); ++index)
         digest[index] = std::to_integer<std::uint8_t> (public_digest[index]);
     const auto receive_chunk_limit_bytes = negotiated_receive_chunk_limit_bytes (sources);
-    if (sources.size () == 1) {
-        auto result = co_await maintenance->relocate (
-          sources.front (), target.rid.to_string (), {target.owner_id, target.lease_generation},
-          256u * 1024u * 1024u, digest, wire, {}, receive_chunk_limit_bytes);
-        if (*session_checkpoint_attempted && !session_seal->completed) {
-            result.terminal = session_seal->recovery_required
-                                ? relocation_terminal_t::recovery_required
-                                : relocation_terminal_t::blocked;
-            result.reason = runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
-        }
-        if (result.terminal == relocation_terminal_t::blocked) {
-            if (!co_await abort_bound_sessions (session_seal->checkpoints)) {
-                result.terminal = relocation_terminal_t::recovery_required;
-                result.reason =
-                  runtime::stateful::relocation_reason_t::bound_session_fence_incomplete;
-            }
-        }
-        co_return runtime::stateful::aggregate_relocation_result_t{
-          result.terminal, result.reason, {}, result.replay_records, result.target_handoff};
-    }
     auto result = co_await maintenance->relocate_aggregate (
       sources, target.rid.to_string (), {target.owner_id, target.lease_generation},
-      256u * 1024u * 1024u, digest, wire, {}, receive_chunk_limit_bytes);
+      256u * 1024u * 1024u, digest, wire, {}, receive_chunk_limit_bytes, preparing);
+    if (result.reason == runtime::stateful::relocation_reason_t::permit_unavailable)
+        (void) _relocation_authority->cancel_source_capture (source_capture);
     if (*session_checkpoint_attempted && !session_seal->completed) {
         result.terminal = session_seal->recovery_required ? relocation_terminal_t::recovery_required
                                                           : relocation_terminal_t::blocked;

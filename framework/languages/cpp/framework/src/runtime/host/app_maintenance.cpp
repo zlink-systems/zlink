@@ -747,37 +747,35 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
             const auto units = co_await spot_runtime->relocation_units ();
 
             for (const auto &unit : units.spots) {
-                const auto target = co_await wait_for_relocation_target (
-                  peers->get (), state.delays, node_mesh, deadline_at, topology_poll_interval,
-                  shutdown_requested,
-                  [&] (const mesh_node_descriptor_t &peer) {
-                      if (local_rid && peer.rid.to_hex () == local_rid->to_hex ())
-                          return false;
-                      std::vector<std::string> actor_types;
-                      actor_types.reserve (unit.actors.size ());
-                      for (const auto &actor : unit.actors)
-                          actor_types.emplace_back (
-                            ::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
-                      // The actual target selection applies the same frozen
-                      // candidate narrowing the preflight applies
-                      // (supports_relocation_source): a serving Object Server on
-                      // the effective version, excluded from source's non-empty
-                      // maintenance wave, with relocation-policy/adapter
-                      // compatibility, positive placement weight, and
-                      // population/reservation capacity; and, like the preflight,
-                      // the candidate's RID/generation must be an admitted Core
-                      // peer.
-                      return relocation_unit_target_eligible (
-                               source_descriptor, peer,
-                               terminal.effective_target_application_version, unit.spot_type,
-                               actor_types)
-                             && node->has_admitted_peer (peer.rid, peer.lifecycle_generation);
-                  },
-                  terminal.reason);
-                if (!target) {
-                    complete (terminal);
-                    co_return;
-                }
+                const auto select_target = [&] () -> task_t<std::optional<mesh_node_descriptor_t>> {
+                    co_return co_await wait_for_relocation_target (
+                      peers->get (), state.delays, node_mesh, deadline_at, topology_poll_interval,
+                      shutdown_requested,
+                      [&] (const mesh_node_descriptor_t &peer) {
+                          if (local_rid && peer.rid.to_hex () == local_rid->to_hex ())
+                              return false;
+                          std::vector<std::string> actor_types;
+                          actor_types.reserve (unit.actors.size ());
+                          for (const auto &actor : unit.actors)
+                              actor_types.emplace_back (
+                                ::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
+                          // The actual target selection applies the same frozen
+                          // candidate narrowing the preflight applies
+                          // (supports_relocation_source): a serving Object Server on
+                          // the effective version, excluded from source's non-empty
+                          // maintenance wave, with relocation-policy/adapter
+                          // compatibility, positive placement weight, and
+                          // population/reservation capacity; and, like the preflight,
+                          // the candidate's RID/generation must be an admitted Core
+                          // peer.
+                          return relocation_unit_target_eligible (
+                                   source_descriptor, peer,
+                                   terminal.effective_target_application_version, unit.spot_type,
+                                   actor_types)
+                                 && node->has_admitted_peer (peer.rid, peer.lifecycle_generation);
+                      },
+                      terminal.reason);
+                };
 
                 std::vector<runtime::stateful::object_ref_t> sources;
                 std::vector<std::string> stable_types;
@@ -826,13 +824,16 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 }
 
                 const auto moved = co_await node->relocate_application_unit (
-                  sources, std::move (stable_types), *target, authorities, deadline_at);
+                  sources, std::move (stable_types), select_target,
+                  static_cast<std::uint64_t> (terminal.effective_target_application_version),
+                  authorities, deadline_at);
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
                     authority_split =
                       committed_units != 0
                       || moved.reason == runtime::stateful::relocation_reason_t::owner_lease_expired
                       || moved.reason == runtime::stateful::relocation_reason_t::authority_missing;
-                    terminal.reason = relocation_reason_t::relocation_failed;
+                    if (terminal.reason == relocation_reason_t::none)
+                        terminal.reason = relocation_reason_t::relocation_failed;
                     complete (terminal);
                     co_return;
                 }

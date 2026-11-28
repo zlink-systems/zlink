@@ -391,11 +391,8 @@ TEST (SpotWideHostRelocation, TargetRejectsChangedCoordinatorFenceBeforeAggregat
         auto fence =
           stateful::relocation_authority_fence_t::from_prepare (participants.front (), prepare);
         stateful::public_authority_store_adapter_t authority (repository);
-        const auto preparing = authority
-                                 .begin_source_capture (participants, fence, target_rid,
-                                                        destination->lifecycle_generation, 1)
-                                 .result ()
-                                 .value ();
+        const auto preparing =
+          authority.begin_source_capture (participants, fence, 1).result ().value ();
         ASSERT_TRUE (preparing);
         ASSERT_TRUE (
           authority.capture_source (participants.front (), *preparing).result ().value ());
@@ -583,15 +580,15 @@ TEST (SpotWideHostRelocation, GetOrCreateReturnsExistingRelocationTarget)
     ASSERT_NE (current, nullptr);
     ASSERT_EQ (current->allocation.state, fw::placement_allocation_state_t::active);
     ASSERT_EQ (current->allocation.target.node_rid.value (), target_rid);
-    const auto relocation =
-      fw::runtime::stateful::authority_relocation_payload_codec_t::decode (*current);
-    ASSERT_TRUE (relocation);
-    const auto ready =
-      fw::runtime::decode_direct_user_spot_authority_payload (relocation->application_payload);
+    const auto ready = fw::runtime::decode_direct_user_spot_authority_payload (current->payload);
     ASSERT_TRUE (ready);
     ASSERT_EQ (ready->state, fw::runtime::user_spot_authority_state_t::ready);
-    ASSERT_EQ (ready->node_rid.value (), source_rid);
-    ASSERT_NE (ready->node_rid.value (), current->allocation.target.node_rid.value ());
+    EXPECT_EQ (ready->node_rid.value (), target_rid);
+    EXPECT_EQ (ready->mesh_name, current->allocation.target.mesh_name);
+    EXPECT_EQ (ready->node_generation, current->allocation.target.node_lifecycle_generation);
+    EXPECT_EQ (ready->owner_id, current->owner.owner_id);
+    EXPECT_EQ (ready->owner_lease_generation,
+               static_cast<std::uint64_t> (current->owner.lease_generation));
     const auto calls_after_relocation = factory_calls.load ();
     ASSERT_EQ (calls_after_relocation, 2u);
     auto target_services = target.app.advanced ().services ().build_provider ();

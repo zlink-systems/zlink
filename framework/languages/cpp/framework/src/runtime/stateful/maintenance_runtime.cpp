@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
+#include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/execution/task_result.hpp"
@@ -25,18 +26,33 @@ namespace zlink::framework::runtime::stateful
 namespace
 {
 
-bool participant_order_less (const object_ref_t &, const object_ref_t &) noexcept;
-
-std::vector<const frozen_object_state_t *>
-canonical_participants (const std::vector<frozen_object_state_t> &participants)
+std::string participant_authority_key (const object_ref_t &participant)
 {
-    std::vector<const frozen_object_state_t *> ordered;
-    ordered.reserve (participants.size ());
+    return (participant.kind == object_kind_t::actor ? actor_authority_key (participant.key)
+                                                     : spot_authority_key (participant.key))
+      .value;
+}
+
+bool same_participant_authority (const object_ref_t &left, const object_ref_t &right)
+{
+    return (left.kind == object_kind_t::actor) == (right.kind == object_kind_t::actor)
+           && left.key == right.key;
+}
+
+template <typename Participant>
+std::vector<const Participant *>
+canonical_participants (const std::vector<Participant> &participants)
+{
+    std::vector<std::pair<std::string, const Participant *>> keyed;
+    keyed.reserve (participants.size ());
     for (const auto &participant : participants)
-        ordered.push_back (&participant);
-    std::sort (ordered.begin (), ordered.end (), [] (const auto left, const auto right) {
-        return participant_order_less (left->owner, right->owner);
-    });
+        keyed.emplace_back (participant_authority_key (participant.owner), &participant);
+    std::ranges::sort (keyed, {}, [] (const auto &entry) -> const auto & { return entry.first; });
+
+    std::vector<const Participant *> ordered;
+    ordered.reserve (keyed.size ());
+    for (const auto &entry : keyed)
+        ordered.push_back (entry.second);
     return ordered;
 }
 
@@ -1076,21 +1092,21 @@ task_t<bool> maintenance_runtime_t::capture_relocation_session_bindings (
 
 task_t<bool>
 maintenance_runtime_t::relocate_capture (std::shared_ptr<relocation_terminal_state_t> state,
-                                         const std::vector<object_ref_t> &participants)
+                                         const std::vector<object_ref_t> &participants,
+                                         std::optional<std::string> preparing_version)
 {
     const auto seal_sessions = [this, state] {
         return capture_relocation_session_bindings (state->context);
     };
-    std::optional<std::string> preparing_version;
     const auto begin_capture = [] (maintenance_runtime_t &runtime,
                                    relocation_terminal_state_t &source_state,
                                    const std::vector<object_ref_t> &sealed,
                                    std::optional<std::string> &version) -> task_t<bool> {
         source_state.sealed_at = std::chrono::steady_clock::now ();
         source_state.pending_unit_token = runtime.begin_pending_relocation_unit ();
-        version = co_await runtime._authority->begin_source_capture (
-          sealed, source_fence (source_state), source_state.target_node_id,
-          source_state.context.target_node_generation, source_state.context.application_version);
+        if (!version)
+            version = co_await runtime._authority->begin_source_capture (
+              sealed, source_fence (source_state), source_state.context.application_version);
         co_return version.has_value ();
     };
     state->seal_attempt = co_await _objects.try_seal_relocation_aggregate (
@@ -1101,8 +1117,11 @@ maintenance_runtime_t::relocate_capture (std::shared_ptr<relocation_terminal_sta
         const bool preparing_attempted = state->seal_attempt.seal.token != 0;
         if (preparing_attempted)
             (void) co_await abort_relocation_before_cutover (state, participants);
-        else
+        else {
+            if (preparing_version)
+                (void) _authority->cancel_source_capture (source_fence (*state));
             state->metric->complete (std::nullopt);
+        }
         if (preparing_attempted && !preparing_version) {
             state->result.emplace (
               finish ({relocation_terminal_t::store_failed, relocation_reason_t::store_write_failed,
@@ -1364,9 +1383,10 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
   inventory_digest_t inventory_digest,
   const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire,
   std::stop_token cancellation,
-  std::uint64_t advertised_receive_chunk_limit_bytes)
+  std::uint64_t advertised_receive_chunk_limit_bytes,
+  std::optional<std::string> preparing_version)
 {
-    if (sources.size () < 2 || !canonical_wire || !_aggregate_authority) {
+    if (sources.empty () || !canonical_wire || !_aggregate_authority) {
         co_return aggregate_relocation_result_t{
           relocation_terminal_t::blocked, relocation_reason_t::restore_failed, {}};
     }
@@ -1390,7 +1410,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
                                protocol::relocationChunkBytes);
     state->effective_chunk_limit = apply_advertised_receive_chunk_limit (
       state->effective_chunk_limit, state->advertised_receive_chunk_limit_bytes);
-    if (!co_await relocate_capture (state, sources))
+    if (!co_await relocate_capture (state, sources, std::move (preparing_version)))
         co_return aggregate_relocation_result_t{state->result->terminal, state->result->reason, {}};
     const auto &seal = state->seal_attempt.seal;
     state->budget_reserved = std::min (state->effective_chunk_limit, effective_in_flight_budget ());
@@ -1534,24 +1554,6 @@ std::uint32_t maintenance_runtime_t::crc32c (const std::vector<std::uint8_t> &pa
 namespace
 {
 
-std::string_view participant_sort_word (object_kind_t kind) noexcept
-{
-    return kind == object_kind_t::actor ? "actor" : "spot";
-}
-
-/* Canonical participant inventory order (28 §4.2): UTF-8 authority-key
- * bytes. The cross-language authority-key preimage is
- * "authority\0{actor|spot}\0{Id}", so the order is the kind word first and
- * the raw object-id bytes second. */
-bool participant_order_less (const object_ref_t &left, const object_ref_t &right) noexcept
-{
-    const auto left_word = participant_sort_word (left.kind);
-    const auto right_word = participant_sort_word (right.kind);
-    if (left_word != right_word)
-        return left_word < right_word;
-    return left.key < right.key;
-}
-
 bool all_digits (std::string_view value) noexcept
 {
     if (value.empty () || value.size () > 20)
@@ -1577,18 +1579,20 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
   std::uint64_t application_version,
   const std::vector<relocation_session_binding_t> &session_bindings)
 {
-    if (participants.empty () || (relocation.high == 0 && relocation.low == 0))
+    if (participants.empty () || (relocation.high == 0 && relocation.low == 0)
+        || std::ranges::any_of (
+          participants, [] (const auto &participant) { return participant.owner.key.empty (); }))
         return {};
     const auto ordered = canonical_participants (participants);
     for (std::size_t index = 0; index != ordered.size (); ++index) {
         const auto &frozen = *ordered[index];
-        if (frozen.owner.key.empty () || frozen.stable_type.empty ()
-            || frozen.owner.object_generation == 0 || frozen.owner.authority_owner_generation == 0
+        if (frozen.stable_type.empty () || frozen.owner.object_generation == 0
+            || frozen.owner.authority_owner_generation == 0
             || frozen.application_state.size () > max_application_state_bytes
             || frozen.pending_application.size () > max_pending_records
             || frozen.timers.size () > max_logical_timers)
             return {};
-        if (index != 0 && !participant_order_less (ordered[index - 1]->owner, frozen.owner))
+        if (index != 0 && same_participant_authority (ordered[index - 1]->owner, frozen.owner))
             return {};
     }
     const auto principal = std::find_if (
@@ -1742,18 +1746,14 @@ std::optional<std::vector<frozen_object_state_t>> maintenance_runtime_t::materia
 try {
     if (inventory.empty () || inventory.size () != envelope.application_states.size ())
         return std::nullopt;
-    std::sort (inventory.begin (), inventory.end (),
-               [] (const relocation_participant_identity_t &left,
-                   const relocation_participant_identity_t &right) {
-                   return participant_order_less (left.owner, right.owner);
-               });
+    const auto ordered = canonical_participants (inventory);
     for (std::size_t index = 0; index != inventory.size (); ++index) {
-        const auto &identity = inventory[index];
+        const auto &identity = *ordered[index];
         if (identity.owner.key.empty () || identity.stable_type.empty ()
             || identity.owner.object_generation == 0
             || identity.owner.authority_owner_generation == 0)
             return std::nullopt;
-        if (index != 0 && !participant_order_less (inventory[index - 1].owner, identity.owner))
+        if (index != 0 && same_participant_authority (ordered[index - 1]->owner, identity.owner))
             return std::nullopt;
         /* participantId is deliberately absent from the stream: it is this
          * sorted inventory's zero-based index plus one. */
@@ -1765,7 +1765,7 @@ try {
     std::vector<frozen_object_state_t> participants;
     participants.reserve (inventory.size ());
     for (std::size_t index = 0; index != inventory.size (); ++index) {
-        const auto &identity = inventory[index];
+        const auto &identity = *ordered[index];
         const auto &state = envelope.application_states[index];
         participants.push_back (frozen_object_state_t{.owner = identity.owner,
                                                       .stable_type = identity.stable_type,

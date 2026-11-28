@@ -391,8 +391,7 @@ TEST (ZLinkFrameworkInMemoryLocationStore, SpotWideSourceCaptureSealsInventoryAt
 
     // §8.3 (#5656): a SpotWide capture seals its source inventory at (relocationId, 1).
     public_authority_store_adapter_t relocation (store);
-    ASSERT_TRUE (
-      relocation.begin_source_capture (participants, fence, "node-b", 1, 1).result ().value ());
+    ASSERT_TRUE (relocation.begin_source_capture (participants, fence, 1).result ().value ());
     aggregate_fence_t sealed{{}, aggregate_inventory::sealed_inventory_generation, {}};
     for (std::size_t index = 0; index != 8; ++index) {
         sealed.aggregate_id.value[index] =

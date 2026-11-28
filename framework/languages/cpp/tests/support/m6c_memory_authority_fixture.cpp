@@ -88,11 +88,13 @@ memory_authority_store_t::read (object_kind_t kind, const std::string &key)
 }
 
 std::optional<std::vector<relocation_participant_identity_t>>
-memory_authority_store_t::list_participant_identities ()
+memory_authority_store_t::read_target_inventory (
+  const relocation_participant_identity_t &principal,
+  const zlink::framework::runtime::protocol::relocation_prepare_t &)
 {
     std::lock_guard lock (mutex);
     if (participant_identities.empty ())
-        return std::nullopt;
+        return std::vector{principal};
     return participant_identities;
 }
 

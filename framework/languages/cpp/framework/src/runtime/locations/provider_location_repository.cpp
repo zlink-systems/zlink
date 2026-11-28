@@ -2259,6 +2259,34 @@ provider_location_repository_t::read_inventory (const aggregate_fence_t &fence,
     }
 }
 
+namespace
+{
+std::vector<std::byte> project_aggregate_target (const authority_snapshot_t &snapshot,
+                                                 const object_creation_target_t &target,
+                                                 const std::vector<std::byte> &sealed_payload)
+{
+    const auto set_route = [&] (auto &payload) {
+        payload.owner_id = target.owner.owner_id;
+        payload.owner_lease_generation = static_cast<std::uint64_t> (target.owner.lease_generation);
+        payload.mesh_name = target.mesh_name;
+        payload.node_rid = target.node_rid;
+        payload.node_generation = target.node_lifecycle_generation;
+    };
+    if (snapshot.allocation.object_kind == placement_object_kind_t::actor) {
+        if (auto payload = decode_direct_actor_authority_payload (sealed_payload)) {
+            set_route (*payload);
+            return encode_actor_authority_payload (*payload);
+        }
+    } else if (snapshot.allocation.object_kind == placement_object_kind_t::user_spot) {
+        if (auto payload = decode_direct_user_spot_authority_payload (sealed_payload)) {
+            set_route (*payload);
+            return encode_user_spot_authority_payload (*payload);
+        }
+    }
+    return sealed_payload;
+}
+} // namespace
+
 task_t<provider_location_repository_t::resolved_authority_t>
 provider_location_repository_t::resolve_authority_async (const store_key_t &key,
                                                          const store_found_t &row)
@@ -2309,15 +2337,17 @@ provider_location_repository_t::resolve_authority_async (const store_key_t &key,
             != authority_aggregate_codec::text (aggregate,
                                                 location_record_fields::authorityPayloadSha256))
             authority_aggregate_codec::invalid_record ();
-        snapshot.payload = stored->value.bytes;
         const auto &transition =
           authority_aggregate_codec::text (aggregate, location_record_fields::ownerTransition);
         if (transition == "newOwner") {
+            snapshot.payload = project_aggregate_target (snapshot, target, stored->value.bytes);
             snapshot.owner = target.owner;
             snapshot.allocation.target = target;
             snapshot.authority_owner_generation = authority_aggregate_codec::number (
               aggregate, location_record_fields::targetAuthorityOwnerGeneration);
-        } else if (transition != "preserve") {
+        } else if (transition == "preserve") {
+            snapshot.payload = stored->value.bytes;
+        } else {
             authority_aggregate_codec::invalid_record ();
         }
         snapshot.aggregate = authority_aggregate_codec::without_capture (snapshot.aggregate);
