@@ -9,7 +9,13 @@ import sys
 from collections import defaultdict
 from datetime import datetime
 
-from perf_metrics import resolve_multi_latency_duration
+# Go and Rust load this renderer by file path, so its own directory is not on
+# sys.path; resolve the sibling perf_metrics module from here.
+_PERF_DIR = os.path.dirname(os.path.abspath(__file__))
+if _PERF_DIR not in sys.path:
+    sys.path.insert(0, _PERF_DIR)
+
+from perf_metrics import resolve_multi_latency_duration  # noqa: E402
 
 
 METRIC_ORDER = {

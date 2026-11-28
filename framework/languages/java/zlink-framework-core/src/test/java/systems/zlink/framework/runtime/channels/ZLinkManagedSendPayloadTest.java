@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.channels;
 
+import static systems.zlink.contracts.messaging.MessageTesting.assertConsumed;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
@@ -80,7 +81,7 @@ public final class ZLinkManagedSendPayloadTest {
                     var owned = fixture.parts;
                     var nativePart = owned.getLast();
                     fixture.close();
-                    assertThrows(IllegalStateException.class, nativePart::refCount);
+                    assertConsumed(nativePart);
                     assertThrows(
                             IllegalStateException.class,
                             () -> ZLinkFrameworkMultipartView.buffer(owned, 1));
@@ -127,7 +128,7 @@ public final class ZLinkManagedSendPayloadTest {
             } finally {
                 ZLinkFrameworkMultipartView.closeAll(parts);
             }
-            assertThrows(IllegalStateException.class, nativeBody::refCount);
+            assertConsumed(nativeBody);
             assertThrows(
                     IllegalStateException.class,
                     () -> ZLinkFrameworkMultipartView.buffer(source, 0));

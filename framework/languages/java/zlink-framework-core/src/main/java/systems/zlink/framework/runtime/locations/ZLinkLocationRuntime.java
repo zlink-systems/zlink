@@ -2773,7 +2773,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
         long deadline = ownerAdmissionDeadlineNanos;
         String message;
         if (!started) {
-            message = "Location runtime is stopped.";
+            message = "The location runtime is stopping or stopped.";
         } else if (deadline == 0L) {
             message = "The owner lease admission is not open yet.";
         } else if (monotonicNow.getAsLong() - deadline >= 0L) {
