@@ -145,6 +145,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, blocker)
             );
 
+        var sourceNode = runtime.GetSpotNodeRuntime(sourceRef.Value.NodeRid);
         var relocationId = Guid.NewGuid();
         var handoffId = relocationId.ToString("N");
         //  Drain이 끄는 per-actor relocation도 remote-join 경로와 같은 terminal
@@ -243,7 +244,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             // journal is built. Accepted records keep the source owner values
             // recorded at acceptance; relocation does not read them again
             // (Location runtime §9.3).
-            var sourceNode = runtime.GetSpotNodeRuntime(sourceRef.Value.NodeRid);
             //  Spec 30 §11: the SafeToShutdown obligation starts at
             //  seal, not at cutover — waiting until cutover
             //  would let a shutdown query race the seal-to-cutover
@@ -526,7 +526,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         finally
         {
             relocationMetric.CompleteSource(null);
-            runtime.CompleteSessionRelocation(actor.Context.MeshName, relocationId);
+            ZLinkFrameworkRuntime.CompleteSessionRelocation(sourceNode.Node, relocationId);
         }
     }
 
@@ -2158,22 +2158,31 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         }
         catch
         {
-            if (remoteJoinRequest is not null && preparedTransfer)
-                await runtime
-                    .AbortCanonicalRoutedActorJoinTargetAsync(
-                        remoteJoinRecovery!.TargetSpotId,
-                        actorState,
-                        remoteJoinRequest,
-                        created
-                    )
-                    .ConfigureAwait(false);
-            if (attached && actorState.Actor is { } attachedActor)
-                targetActivation!.AbortStagedRelocatedPerActorMember(attachedActor, actorState);
-            if (remoteJoinRequest is null && created)
-                await actorSessions
-                    .RollbackTransferredActorAsync(targetAuthority.ActorId, CancellationToken.None)
-                    .ConfigureAwait(false);
-            admission.Release();
+            try
+            {
+                if (remoteJoinRequest is not null && preparedTransfer)
+                    await runtime
+                        .AbortCanonicalRoutedActorJoinTargetAsync(
+                            remoteJoinRecovery!.TargetSpotId,
+                            actorState,
+                            remoteJoinRequest,
+                            created
+                        )
+                        .ConfigureAwait(false);
+                if (attached && actorState.Actor is { } attachedActor)
+                    targetActivation!.AbortStagedRelocatedPerActorMember(attachedActor, actorState);
+                if (remoteJoinRequest is null && created)
+                    await actorSessions
+                        .RollbackTransferredActorAsync(
+                            targetAuthority.ActorId,
+                            CancellationToken.None
+                        )
+                        .ConfigureAwait(false);
+            }
+            finally
+            {
+                admission.Release();
+            }
             throw;
         }
     }
@@ -2803,52 +2812,54 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         CancellationToken cancellationToken
     )
     {
-        var completed = false;
+        var stage = abort.Stage;
         try
         {
-            var stage = abort.Stage;
-            if (
-                stage.RemoteJoinRequest is { } remoteJoinRequest
-                && stage.RemoteJoinRecovery is { } remoteJoinRecovery
-            )
+            try
             {
-                if (!stage.CreatedTransferredActor)
+                if (
+                    stage.RemoteJoinRequest is { } remoteJoinRequest
+                    && stage.RemoteJoinRecovery is { } remoteJoinRecovery
+                )
+                {
+                    if (!stage.CreatedTransferredActor)
+                        DetachTargetMembership(stage);
+                    await runtime
+                        .RollbackCanonicalRoutedActorJoinPreparationAsync(
+                            remoteJoinRecovery.TargetSpotId,
+                            stage.ActorState,
+                            remoteJoinRequest,
+                            stage.CreatedTransferredActor,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                }
+                else
+                {
                     DetachTargetMembership(stage);
-                await runtime
-                    .RollbackCanonicalRoutedActorJoinPreparationAsync(
-                        remoteJoinRecovery.TargetSpotId,
-                        stage.ActorState,
-                        remoteJoinRequest,
-                        stage.CreatedTransferredActor,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
+                    stage.ActorState.AbortRelocationSessionRoute(
+                        stage.Envelope.AggregateId.ToString("N")
+                    );
+                    await actorSessions
+                        .RollbackTransferredActorAsync(stage.ActorState.ActorId, cancellationToken)
+                        .ConfigureAwait(false);
+                }
             }
-            else
+            finally
             {
-                DetachTargetMembership(stage);
-                stage.ActorState.AbortRelocationSessionRoute(
-                    stage.Envelope.AggregateId.ToString("N")
-                );
-                await actorSessions
-                    .RollbackTransferredActorAsync(stage.ActorState.ActorId, cancellationToken)
-                    .ConfigureAwait(false);
+                stage.Admission.Release();
             }
-            stage.Admission.Release();
             abort.Complete();
-            completed = true;
         }
-        finally
+        catch
         {
-            if (!completed)
-            {
-                if (TryAcquireTargetAttempt(key, out var lease))
-                    using (lease)
-                    {
-                        lease.Slot.TryRemoveAbort(abort);
-                        CloseTargetAttemptIfEmpty(key, lease.Slot);
-                    }
-            }
+            if (TryAcquireTargetAttempt(key, out var lease))
+                using (lease)
+                {
+                    lease.Slot.TryRemoveAbort(abort);
+                    CloseTargetAttemptIfEmpty(key, lease.Slot);
+                }
+            throw;
         }
     }
 

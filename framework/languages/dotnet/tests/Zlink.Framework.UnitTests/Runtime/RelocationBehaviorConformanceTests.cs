@@ -2465,6 +2465,10 @@ public sealed partial class RelocationBehaviorConformanceTests
             //  it in flight.
             await transport.AbortRetriedTargetPrepareAsync();
             await transport.TargetRollbackDestroyStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            var admission = target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .ActivationAdmission;
+            Assert.Equal(1, admission.Active);
 
             // Host relocation §14 requires discovery callbacks to terminate before
             // transport teardown completes, including after the drain deadline.
@@ -2480,6 +2484,7 @@ public sealed partial class RelocationBehaviorConformanceTests
             Assert.False(target.Runtime.IsStarted);
             Assert.True(targetDiscovery.ReadExited.Task.IsCompleted);
             Assert.False(transport.TargetRollbackDestroyCompleted.Task.IsCompleted);
+            Assert.Equal(0, admission.Active);
         }
         finally
         {
@@ -4242,8 +4247,11 @@ internal sealed class BehaviorTargetSpot(IZLinkSpotContext context, RelocationBe
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask OnLeaveActorAsync(BehaviorActor actor, CancellationToken cancellationToken) =>
-        ValueTask.CompletedTask;
+    public ValueTask OnLeaveActorAsync(BehaviorActor actor, CancellationToken cancellationToken)
+    {
+        trace.Record("targetMembershipLeaveCallback");
+        return ValueTask.CompletedTask;
+    }
 }
 
 internal sealed class BeginBehaviorJoinHandler(RelocationBehaviorTrace trace)
@@ -4399,6 +4407,7 @@ internal sealed class CanonicalRelocationTransportProbe
     internal TaskCompletionSource RetriedTargetRollbackDestroyCompleted { get; } = Signal();
     internal TaskCompletionSource SessionRouteStarted { get; } = Signal();
     internal TaskCompletionSource SessionRouteCompleted { get; } = Signal();
+    internal Action<RoutingId, Guid>? OnSessionRelocationCompleted { get; set; }
     internal long ReadyReplyTimestamp;
     internal ZLinkRemoteSessionPushRelay? RemoteSessionPush;
     internal ZLinkServiceWireCodec.SessionRelocationRouteRecord? SessionRoute;
@@ -5059,6 +5068,14 @@ internal class ProbedBackendSpotNode : DispatchProxy
                 (ZLinkBackendActorRef)args[0]!,
                 (TimeSpan)args[1]!,
                 (CancellationToken)args[2]!
+            );
+        if (
+            targetMethod.Name
+            == nameof(IZLinkBackendSessionRelocationBarrier.CompleteSessionRelocation)
+        )
+            _probe.OnSessionRelocationCompleted?.Invoke(
+                ((IZLinkBackendSpotNode)_target).RoutingId,
+                (Guid)args[0]!
             );
 
         try

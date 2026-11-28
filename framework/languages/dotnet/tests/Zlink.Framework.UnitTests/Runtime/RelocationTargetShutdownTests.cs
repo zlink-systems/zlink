@@ -298,7 +298,30 @@ public sealed partial class RelocationBehaviorConformanceTests
                     target.Runtime.StandaloneActorRelocationRuntime.SnapshotPendingAttemptNames()
                 );
                 if (order == 0)
+                {
                     await probe.DeliverCapturedCutoverAsync();
+                    var sourceRid = source.LocalNodeRid;
+                    var sourceState = await source.Runtime.EnsureStartedStateAsync(
+                        CancellationToken.None
+                    );
+                    var sessionTerminal = new TaskCompletionSource<Guid>(
+                        TaskCreationOptions.RunContinuationsAsynchronously
+                    );
+                    probe.OnSessionRelocationCompleted = (rid, relocationId) =>
+                    {
+                        if (rid == sourceRid)
+                            sessionTerminal.TrySetResult(relocationId);
+                    };
+                    using var releaseCutover = sourceState.ForceStopTokenSource.Token.Register(() =>
+                        probe.ReleaseCutoverSend.TrySetResult()
+                    );
+                    await source.Runtime.ForceStopAsync(CancellationToken.None);
+                    _ = await relocate.WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.Equal(
+                        probe.RelocationId,
+                        await sessionTerminal.Task.WaitAsync(TimeSpan.FromSeconds(5))
+                    );
+                }
                 Assert.Equal(0, settlement.TargetCasCount);
             }
             else

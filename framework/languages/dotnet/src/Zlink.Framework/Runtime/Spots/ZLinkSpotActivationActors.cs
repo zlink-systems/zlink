@@ -473,22 +473,6 @@ internal abstract partial class ZLinkSpotActivation
         return NotifyActorLeftAfterJoinCommitCoreAsync(actor, cancellationToken);
     }
 
-    internal ValueTask NotifyActorLeftAfterManagedJoinSpotAsync(
-        IZLinkActor actor,
-        CancellationToken cancellationToken
-    )
-    {
-        ArgumentNullException.ThrowIfNull(actor);
-        return ReferenceEquals(ZLinkSpotAmbientContext.CurrentOrDefault, this)
-            ? NotifyActorLeftAfterJoinCommitCoreAsync(actor, cancellationToken)
-            : ExecuteSerializedAsync(
-                static (activation, state, ct) =>
-                    activation.NotifyActorLeftAfterJoinCommitCoreAsync(state, ct),
-                actor,
-                cancellationToken
-            );
-    }
-
     internal ValueTask NotifyActorLeftAfterCommittedMembershipAsync(
         IZLinkActor actor,
         CancellationToken cancellationToken

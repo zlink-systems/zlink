@@ -169,7 +169,8 @@ internal sealed class ZLinkSpotRetireScheduler(
     IZLinkLocationRepository authorityStore,
     IZLinkRelocationRepository relocationStore,
     IZLinkSpotRetireTarget target,
-    ZLinkFrameworkRuntime runtime
+    ZLinkFrameworkRuntime runtime,
+    IZLinkBackendSpotNode sourceNode
 )
 {
     private const int MaxConcurrentParticipantIo = 8;
@@ -1093,7 +1094,7 @@ internal sealed class ZLinkSpotRetireScheduler(
         }
         finally
         {
-            runtime.CompleteSessionRelocation(activation.MeshName, aggregateId);
+            ZLinkFrameworkRuntime.CompleteSessionRelocation(sourceNode, aggregateId);
         }
     }
 

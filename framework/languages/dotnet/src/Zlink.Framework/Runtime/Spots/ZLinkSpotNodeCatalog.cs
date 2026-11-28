@@ -66,7 +66,8 @@ internal sealed class ZLinkSpotNodeCatalog(
     private readonly ZLinkSpotRetireScheduler? _retireScheduler = CreateRetireScheduler(
         services,
         runtime,
-        frameworkRegistration
+        frameworkRegistration,
+        node
     );
 
     private readonly Dictionary<ZLinkSpotId, string> _instanceSpotTypes = [];
@@ -410,7 +411,8 @@ internal sealed class ZLinkSpotNodeCatalog(
     private static ZLinkSpotRetireScheduler? CreateRetireScheduler(
         IServiceProvider services,
         ZLinkFrameworkRuntime runtime,
-        ZLinkFrameworkRegistration registration
+        ZLinkFrameworkRegistration registration,
+        IZLinkBackendSpotNode node
     )
     {
         var location = registration.Locations.ResolveStore();
@@ -418,7 +420,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         var target = services.GetService<IZLinkSpotRetireTarget>();
         return location is null || relocation is null || target is null
             ? null
-            : new ZLinkSpotRetireScheduler(location, relocation, target, runtime);
+            : new ZLinkSpotRetireScheduler(location, relocation, target, runtime, node);
     }
 
     internal async ValueTask RequestStopAsync()
